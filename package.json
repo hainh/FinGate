@@ -1,0 +1,43 @@
+{
+  "name": "fingate",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.10 <25",
+    "pnpm": ">=12"
+  },
+  "packageManager": "pnpm@12.4.2",
+  "scripts": {
+    "dev": "pnpm -F @fingate/shared build && concurrently -n shared,api,web -c gray,blue,green \"pnpm -F @fingate/shared dev\" \"pnpm -F @fingate/api dev\" \"pnpm -F @fingate/web dev\"",
+    "infra:up": "docker compose -f deploy/compose.yml up -d",
+    "infra:down": "docker compose -f deploy/compose.yml down",
+    "build": "pnpm -r build",
+    "start": "node apps/api/dist/server.js",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "e2e": "playwright test",
+    "db:migrate": "node db/migrate.js",
+    "db:indexes": "node db/apply-indexes.js",
+    "db:seed": "node db/seed.js",
+    "db:rebuild-balances": "node db/rebuild-balances.js",
+    "db:rebuild-audit": "node db/rebuild-audit.js",
+    "db:archive": "node db/archive.js",
+    "check:tie": "node db/check-tie.js",
+    "mail:test": "node scripts/mail-test.js",
+    "api:types": "openapi-typescript http://localhost:8080/api/v1/openapi.json -o packages/shared/src/api-types/index.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
+    "concurrently": "10.0.5",
+    "eslint": "10.10.0",
+    "globals": "17.12.0",
+    "openapi-typescript": "7.13.0",
+    "prettier": "3.9.6",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.70.0",
+    "vitest": "5.0.1"
+  }
+}

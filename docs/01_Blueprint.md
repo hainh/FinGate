@@ -36,17 +36,21 @@ Xây dựng hệ thống web nội bộ phục vụ:
 
 # II. CƠ CẤU TỔ CHỨC VÀ PHÂN QUYỀN
 
-Hệ thống có thể tổ chức theo:
+Hình thức quản lý: **1 Tập đoàn → nhiều công ty con**. Mỗi công ty con có **bộ nhân sự riêng** (xem thêm mục XXIX – Quản lý nhân sự & tài khoản).
 
 ### Cấp 1 – Tập đoàn/Hệ thống
+
+**Chủ tịch HĐQT**
+
+↓
 
 **Giám đốc/Tổng Giám đốc**
 
 ↓
 
-### Cấp 2 – Công ty
+### Cấp 2 – Công ty con
 
-Mỗi công ty có:
+Mỗi công ty có bộ nhân sự riêng:
 
 * Nhân viên kế toán
 * Chuyên viên kế toán
@@ -125,7 +129,7 @@ Có quyền:
 
 ## 5. Giám đốc/Tổng Giám đốc
 
-Có quyền cao nhất:
+Có quyền cao nhất trong phạm vi điều hành:
 
 * Xem toàn bộ công ty
 * Xem toàn bộ khoản thu/chi
@@ -137,6 +141,24 @@ Có quyền cao nhất:
 * Xem vay ngân hàng
 * Xem báo cáo tài chính quản trị
 * Xem lịch sử phê duyệt.
+* Mời nhân sự của **chính công ty mình** (chỉ mời — không xóa/ngừng tài khoản; xem mục XXIX)
+
+---
+
+## 6. Chủ tịch HĐQT
+
+Cấp phê duyệt cao nhất, áp dụng cho các hồ sơ vượt ngưỡng của Approval Matrix (mặc định: khoản > 5 tỷ, cấu hình được):
+
+* Duyệt cuối các hồ sơ thuộc ngưỡng phải qua HĐQT
+* Xem tổng hợp toàn hệ thống (mọi công ty)
+* Xem vay ngân hàng, đảo hạn, dòng tiền tập đoàn
+* Xem báo cáo tài chính quản trị
+* Xem lịch sử phê duyệt
+* Nhận thông báo khi có hồ sơ thuộc ngưỡng HĐQT được đẩy lên
+* **Quản lý nhân sự toàn hệ thống**: thêm/xóa tài khoản nhân sự của các công ty con bằng email (xem mục XXIX)
+* **Cấu hình tài khoản ngân hàng của Tập đoàn** (nhiều tài khoản — xem mục VIII); mọi phiếu thu/chi dùng nguồn tiền tập đoàn phải chỉ rõ tài khoản tập đoàn nào phụ trách
+
+Chủ tịch HĐQT **không nhập liệu/tạo phiếu**, chỉ phê duyệt và giám sát.
 
 ---
 
@@ -175,6 +197,14 @@ Quy trình mặc định:
 ↓
 
 **Đính kèm chứng từ ngân hàng**
+
+## Cơ chế hiển thị và duyệt vượt cấp (fast-track)
+
+* Ngay khi phiếu được gửi đi (khác trạng thái Nháp), **tất cả các cấp trong quy trình đều nhìn thấy phiếu** và có quyền duyệt ngay, không bắt buộc chờ cấp dưới xử lý xong.
+* Khi một cấp hoàn tất duyệt, hệ thống **tự động thông báo cho cấp cao hơn kế tiếp** (notification trên web, có thể mở rộng email/mobile theo mục XVIII).
+* Trạng thái hồ sơ luôn phản ánh **cấp thấp nhất chưa duyệt** ("đang nằm ở bàn của ai"); nếu có cấp cao hơn đã duyệt trước, hiển thị thêm nhãn "Đã duyệt trước bởi {cấp}".
+* Hồ sơ được coi là **Đã duyệt** khi cấp cao nhất theo Approval Matrix đã duyệt; các cấp trung gian chưa xử lý được đánh dấu **bỏ qua** trong lịch sử phê duyệt (không xóa, audit log lưu đầy đủ ai duyệt lúc nào).
+* Mọi hành động duyệt đều ghi audit log theo mục XIX.
 
 ---
 
@@ -220,6 +250,7 @@ Khi tạo một khoản chi phải có tối thiểu:
 * Số hóa đơn
 * Mã công nợ
 * Nguồn tiền sử dụng
+* Tài khoản tập đoàn phụ trách (bắt buộc nếu giao dịch dùng nguồn tiền/qua tài khoản Tập đoàn — xem mục VIII)
 * Ghi chú.
 
 ### Chứng từ
@@ -329,6 +360,16 @@ Hệ thống phải cho phép nhập/cập nhật:
 * Tiền bị phong tỏa
 * Tiền khả dụng.
 
+## Tài khoản ngân hàng của Tập đoàn
+
+Ngoài tài khoản của từng công ty con, Tập đoàn có **nhiều tài khoản ngân hàng riêng**:
+
+* **Chỉ Chủ tịch HĐQT** được cấu hình (thêm/sửa/khóa) tài khoản tập đoàn: ngân hàng, số TK, tên TK, hạn mức (nếu có), người phụ trách, trạng thái hoạt động.
+* **Mỗi phiếu thu/chi phải chỉ rõ tài khoản tập đoàn nào sẽ phụ trách** (trường "Tài khoản tập đoàn phụ trách") khi giao dịch dùng nguồn tiền tập đoàn hoặc thực hiện qua tập đoàn.
+* Tài khoản tập đoàn theo dõi số dư như tài khoản công ty: đầu ngày, tiền vào, tiền ra, cuối ngày, phong tỏa, khả dụng — tổng hợp vào Dashboard cấp Tập đoàn.
+* Khóa tài khoản tập đoàn → cảnh báo các phiếu đang chờ xử lý có tham chiếu; không cho chọn cho phiếu mới.
+* Mọi thao tác cấu hình ghi audit log (mục XIX).
+
 ---
 
 # IX. MODULE VAY NGÂN HÀNG
@@ -365,15 +406,17 @@ Ví dụ:
 | VCB       | HĐ02      | 15 tỷ | 15/09        |        15 tỷ | Đã chuẩn bị |
 | MB        | HĐ03      | 30 tỷ | 30/09        |        30 tỷ | Chưa xử lý  |
 
-Hệ thống tự động cảnh báo:
+Hệ thống tự động cảnh báo (4 mức cảnh báo, màu theo Design System §3.3, luôn kèm **số ngày cụ thể**):
 
-### 🔴 Đáo hạn hôm nay
+### 🔴 Đáo hạn hôm nay (danger)
 
-### 🟠 Đáo hạn trong 3 ngày
+### 🔴 Đáo hạn trong 3 ngày tới (danger)
 
-### 🟡 Đáo hạn trong 7 ngày
+### 🟠 Đáo hạn trong 4–7 ngày (warning)
 
-### 🔵 Đáo hạn trong 30 ngày
+### 🟡 Đáo hạn trong 8–30 ngày (attention)
+
+Trên 30 ngày: mức bình thường, chỉ hiển thị số ngày còn lại.
 
 ---
 
@@ -408,6 +451,8 @@ Thông tin:
 ↓
 
 **Giám đốc duyệt**
+
+(Hồ sơ đảo hạn vượt ngưỡng Approval Matrix — mặc định > 5 tỷ — phải qua thêm **Chủ tịch HĐQT** sau Giám đốc.)
 
 ↓
 
@@ -474,7 +519,9 @@ Trong đó:
 
 Ngay trên Dashboard phải có:
 
-> 🔴 **12 khoản đang chờ tôi duyệt**
+> 🔴 **12 khoản chi đang chờ tôi duyệt — tổng 8,5 tỷ**
+>
+> 🟠 **1 phương án đảo hạn đang chờ duyệt — 20 tỷ** (tính riêng, không gộp vào tổng chi)
 
 Ví dụ:
 
@@ -482,7 +529,7 @@ Ví dụ:
 | ------- | -------------- | ------: | --------- | --------- |
 | A       | Thanh toán NCC |    2 tỷ | Nguyễn A  | GĐ        |
 | B       | Lương          |  1,5 tỷ | Nguyễn B  | GĐ        |
-| C       | Đảo hạn        |   20 tỷ | Nguyễn C  | GĐ        |
+| C       | Đảo hạn        |   20 tỷ | Nguyễn C  | GĐ + HĐQT |
 
 Bấm vào từng khoản → xem toàn bộ hồ sơ → **Duyệt / Từ chối / Yêu cầu bổ sung**.
 
@@ -639,15 +686,21 @@ Ví dụ:
 | Giá trị khoản chi | Quy trình                               |
 | ----------------- | --------------------------------------- |
 | < 50 triệu        | KT → KTT → PGĐ                          |
-| 50–500 triệu      | KT → KTT → PGĐ → GĐ                     |
-| > 500 triệu       | KT → KTT → PGĐ → GĐ                     |
-| > 5 tỷ            | KT → KTT → PGĐ → GĐ + cảnh báo đặc biệt |
+| 50 triệu – 5 tỷ   | KT → KTT → PGĐ → GĐ                     |
+| > 5 tỷ            | KT → KTT → PGĐ → GĐ → **Chủ tịch HĐQT** + cảnh báo đặc biệt |
 
 Các ngưỡng này phải **cấu hình được trên hệ thống**, không hard-code.
+
+Lưu ý:
+
+* `KT` trong matrix bao gồm 2 bước luôn luôn có ở mọi quy trình: **Nhân viên kế toán lập → Chuyên viên kế toán kiểm tra**; matrix chỉ định nghĩa từ cấp duyệt trở lên.
+* Theo cơ chế fast-track (mục IV), mọi cấp trong quy trình đều thấy phiếu và có thể duyệt ngay từ đầu; thứ tự trên chỉ xác định **cấp cao nhất bắt buộc** để hồ sơ được coi là đã duyệt.
 
 ---
 
 # XXI. QUẢN LÝ NHIỀU CÔNG TY
+
+Mỗi công ty con có **bộ nhân sự riêng**; tài khoản thuộc công ty nào chỉ thấy dữ liệu công ty đó (trừ cấp Tập đoàn).
 
 Giám đốc có thể chọn:
 
@@ -757,6 +810,10 @@ DASHBOARD
 ├── BÁO CÁO
 │
 └── QUẢN TRỊ
+    ├── Công ty (danh sách công ty con)
+    ├── Tài khoản tập đoàn (chỉ Chủ tịch HĐQT)
+    ├── Nhân sự & Tài khoản
+    └── Approval Matrix (ngưỡng duyệt)
 ```
 
 ---
@@ -771,7 +828,7 @@ Giám đốc không cần mở laptop.
 
 Có notification:
 
-> 🔔 Công ty A có khoản chi 2.500.000.000 VNĐ đang chờ ông duyệt.
+> 🔔 Công ty A có khoản chi 2.500.000.000 ₫ đang chờ ông duyệt.
 
 Bấm notification:
 
@@ -827,7 +884,7 @@ Do đây là dữ liệu tài chính, yêu cầu Dev:
 
 Tôi đề nghị anh yêu cầu Dev thiết kế hệ thống theo nguyên tắc:
 
-> **Mỗi khoản chi phải trả lời được 6 câu hỏi trước khi Giám đốc bấm Duyệt.**
+> **Mỗi khoản chi phải trả lời được 7 câu hỏi trước khi Giám đốc bấm Duyệt.**
 
 ### 1. Chi cho ai?
 
@@ -840,8 +897,6 @@ Tôi đề nghị anh yêu cầu Dev thiết kế hệ thống theo nguyên tắ
 ### 5. Tiền lấy từ tài khoản nào?
 
 ### 6. Sau khi chi thì công ty còn bao nhiêu tiền?
-
-Và thêm câu thứ 7:
 
 ### 7. Khoản này có nằm trong kế hoạch/ngân sách hay không?
 
@@ -871,3 +926,85 @@ Nếu là màn hình của **Tổng Giám đốc**
 ```
 
 **Điểm quan trọng nhất:** Giám đốc không nên phải vào 5–7 màn hình để tìm thông tin. Dashboard phải cho thấy ngay **tiền – thu – chi – khoản cần duyệt – khoản vay – đảo hạn – cảnh báo dòng tiền**.
+
+---
+
+# XXIX. QUẢN LÝ NHÂN SỰ & TÀI KHOẢN (TẬP ĐOÀN → NHIỀU CÔNG TY CON)
+
+## 1. Mô hình
+
+* **1 Tập đoàn → nhiều công ty con**; mỗi công ty con có bộ nhân sự riêng.
+* Mỗi nhân sự thuộc về **một công ty** tại một thời điểm, gắn với **một chức danh/vai trò** (theo mục III).
+* **Chủ tịch HĐQT** có quyền thêm/xóa tài khoản nhân sự của **mọi công ty con** bằng email.
+* **Giám đốc công ty con** được phân quyền **mời nhân sự của chính công ty mình** (chỉ mời; xóa/ngừng hoạt động tài khoản vẫn thuộc Chủ tịch HĐQT).
+
+## 2. Thêm nhân sự bằng email (không cần tạo tài khoản ngay)
+
+Người có quyền mời nhập:
+
+* Email
+* Công ty con sẽ trực thuộc (với Giám đốc công ty con: trường này **cố định vào công ty mình**, không chọn được công ty khác)
+* Chức danh/vai trò
+
+Hệ thống:
+
+* Lưu nhân sự ở trạng thái **Chờ kích hoạt** — chưa cần tạo tài khoản ngay.
+* Gửi **email mời** kèm link kích hoạt (link có thời hạn, mặc định 7 ngày, cấu hình được; cho phép gửi lại).
+* Mọi thao tác thêm/mời/gửi lại đều ghi audit log (mục XIX).
+
+## 3. Tự động add vào công ty khi tạo tài khoản
+
+* Nhân sự mở email mời → tạo tài khoản (mật khẩu + thiết lập 2FA theo mục XXVI).
+* Tài khoản được **tự động gắn vào đúng công ty con** với đúng chức danh đã chỉ định — không cần thao tác gán thủ công.
+* Trạng thái chuyển **Chờ kích hoạt → Đang hoạt động**; hệ thống thông báo cho người mời.
+* Email đã tồn tại trong hệ thống → báo lỗi trùng, không tạo bản ghi thứ hai.
+
+## 4. Xóa / điều chỉnh nhân sự
+
+* Xóa tài khoản = **Ngừng hoạt động** (khóa đăng nhập, thu hồi quyền ngay lập tức) — **không xóa vật lý**, bảo toàn audit log theo mục XIX.
+* Hồ sơ/phiếu do nhân sự đã ngừng tạo vẫn giữ nguyên, hiển thị tên người lập kèm nhãn `(đã ngừng hoạt động)`.
+* Chuyển nhân sự công ty A → công ty B: quyền ở công ty A chấm dứt từ thời điểm hiệu lực; lịch sử ở công ty A bảo toàn; thao tác ghi audit log.
+* Nhân sự đang là **cấp duyệt hiện tại** của hồ sơ chờ xử lý → khi ngừng hoạt động/chuyển đi, hệ thống cảnh báo và yêu cầu **chỉ định người thay thế** để hồ sơ không bị treo.
+
+## 5. Trạng thái tài khoản nhân sự
+
+* **Chờ kích hoạt** — đã được mời, chưa tạo tài khoản
+* **Đang hoạt động** — đăng nhập được, đầy đủ quyền theo vai trò
+* **Ngừng hoạt động** — đã khóa, không đăng nhập được, dữ liệu/audit giữ nguyên
+
+---
+
+# XXX. DỮ LIỆU PHIẾU VÀ HỒ SƠ
+
+## 1. Trường dữ liệu bắt buộc
+
+| Nhóm | Trường dữ liệu |
+| ----- | ----- |
+| Nhận diện | Công ty; mã phiếu tự sinh; loại phiếu; ngày tạo; người lập; phòng ban |
+| Nghiệp vụ | Danh mục; nội dung; đối tượng nộp/nhận; mã số thuế; hợp đồng; dự án; khoản vay liên quan |
+| Số tiền | Số tiền; loại tiền; tỷ giá nếu có; thuế; số thực thu/thực chi |
+| Nguồn và đích tiền | Quỹ tiền mặt hoặc tài khoản ngân hàng; **tài khoản tập đoàn phụ trách** (bắt buộc nếu giao dịch dùng nguồn tiền/qua tài khoản Tập đoàn — mục VIII); tài khoản nguồn; tài khoản nhận; công ty/đối tác nhận |
+| Kế hoạch | Ngày dự kiến thu/chi; mức độ ưu tiên; ngân sách; kỳ thanh toán |
+| Kiểm soát | Ý kiến KTT; ý kiến PGĐ; ý kiến GĐ; ý kiến Chủ tịch HĐQT (nếu thuộc ngưỡng HĐQT); lý do vượt cấp (duyệt trước theo fast-track — mục IV); lịch sử trạng thái |
+| Thực hiện | Ngày giao dịch thực tế; số tham chiếu ngân hàng; người thực hiện; chứng từ sau thanh toán |
+
+Quy tắc:
+
+* Mã phiếu **tự sinh**, không trùng, không sửa được sau khi gửi; định dạng hiển thị theo Design System (font mono cho mã).
+* Trường thuộc nhóm Kiểm soát **không nhập liệu trực tiếp** — hệ thống tự ghi từ quy trình phê duyệt và audit log (mục XIX).
+* Phiếu thiếu trường bắt buộc theo loại phiếu → không cho gửi, báo lỗi inline nêu rõ thiếu trường nào (cảnh báo "Hồ sơ thiếu chứng từ" — mục XVIII).
+
+## 2. Bộ hồ sơ đính kèm
+
+* Phiếu thu hoặc phiếu chi có số và phiên bản.
+* Đề nghị thanh toán, hợp đồng, phụ lục, hóa đơn và đơn đặt hàng nếu có.
+* Biên bản nghiệm thu, xác nhận khối lượng, bảng đối chiếu công nợ hoặc chứng từ bàn giao.
+* Ủy nhiệm chi, giấy báo Có/Báo Nợ, phiếu quỹ hoặc bằng chứng thực hiện giao dịch.
+* Khế ước, lịch trả nợ, thông báo giải ngân và hồ sơ tài sản bảo đảm đối với khoản vay.
+* Biên bản hoặc hợp đồng đối với công nợ nội bộ và khoản cổ đông vay quỹ.
+
+Quy tắc:
+
+* Chứng từ bắt buộc theo **loại phiếu** (cấu hình được, không hard-code); thiếu → trạng thái cảnh báo trên hồ sơ và trong exception list.
+* File sau khi có cấp duyệt tham chiếu → **chỉ thêm, không xóa** (audit — Design System §7.9); mỗi file lưu **phiên bản**.
+* Định dạng cho phép: PDF, Excel, Word, JPG/PNG (mục V).

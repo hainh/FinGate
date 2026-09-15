@@ -1,0 +1,35 @@
+services:
+  mongo:
+    image: mongo:8.0
+    container_name: fingate-mongo
+    command: ['--replSet', 'rs0', '--bind_ip_all']
+    ports:
+      - '27017:27017'
+    volumes:
+      - ./data/mongo:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # One-shot: initiate the single-node replica set so `?replicaSet=rs0` works
+  # (Profile O parity — the app itself never uses multi-document transactions).
+  mongo-init:
+    image: mongo:8.0
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: 'no'
+    entrypoint:
+      - mongosh
+      - --host
+      - mongo:27017
+      - --quiet
+      - --eval
+      - |
+        try { rs.status() }
+        catch (e) {
+          rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }] })
+        }

@@ -1,0 +1,26 @@
+name: tasks
+
+on:
+  schedule:
+    - cron: '30 23 * * *'   # 06:30 VN — newsletter + daily checks
+    - cron: '*/15 * * * *'  # SLA scan + alerts-evaluate
+    - cron: '5 17 * * *'    # 00:05 VN — recurring materialize
+    - cron: '40 18 * * 0'   # Sun 01:40 VN — maintenance
+  workflow_dispatch:
+
+jobs:
+  task:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        name: [newsletter, sla-scan, alerts, recurring, maintenance]
+    steps:
+      - name: POST /api/v1/tasks/${{ matrix.name }}
+        run: |
+          curl -fsS -X POST "${{ vars.PUBLIC_URL }}/api/v1/tasks/${{ matrix.name }}" \
+            -H "x-task-token: ${{ secrets.TASK_TOKEN }}"
+
+  keep-warm:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -fsS "${{ vars.PUBLIC_URL }}/healthz" || true

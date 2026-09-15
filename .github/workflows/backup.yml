@@ -1,0 +1,28 @@
+name: backup
+
+on:
+  schedule:
+    - cron: '20 19 * * *'   # 02:20 VN nightly
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mongodb-database-tools
+        run: |
+          curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | sudo gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor
+          echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/8.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
+          sudo apt-get update && sudo apt-get install -y mongodb-database-tools
+      - name: Dump
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+        run: mongodump --uri="$MONGODB_URI" --gzip --archive=fingate-$(date +%F).gz
+      - name: Upload to R2 (private backup bucket)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: aws s3 cp fingate-$(date +%F).gz "s3://${{ vars.R2_BACKUP_BUCKET }}/" --endpoint-url "$ENDPOINT"

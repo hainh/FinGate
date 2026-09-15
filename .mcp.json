@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@1.9.0"],
+      "searchKeywords": {
+        "take_snapshot": ["dom", "accessibility"],
+        "performance_start_trace": ["profile", "slow", "perf"],
+        "list_network_requests": ["api", "xhr", "fetch"]
+      }
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@0.0.81"]
+    },
+    "mongodb": {
+      "command": "npx",
+      "args": ["-y", "mongodb-mcp-server@2.1.1", "--readOnly"],
+      "env": {
+        "MDB_MCP_CONNECTION_STRING": "mongodb://localhost:27017/fingate?replicaSet=rs0"
+      }
+    },
+    "node-inspector": {
+      "command": "npx",
+      "args": ["-y", "node-inspector-mcp@1.0.0"]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.vite/
+playwright-report/
+test-results/
+blob-report/
+data/
+*.log
+.DS_Store
+
+# pi MCP adapter: per-project enable/disable toggles (local preference, share .mcp.json instead)
+.pi/mcp.json

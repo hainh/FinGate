@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: fingate
+    runtime: node
+    plan: free
+    region: singapore
+    rootDir: .
+    buildCommand: pnpm install --frozen-lockfile && pnpm -r build
+    preDeployCommand: pnpm db:migrate && pnpm db:indexes
+    startCommand: node apps/api/dist/server.js
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TZ
+        value: UTC
+      - key: MONGODB_URI
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: FIELD_KEY
+        sync: false
+      - key: TASK_TOKEN
+        sync: false
+      - key: STORAGE_DRIVER
+        value: s3
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        value: fingate-docs
+      - key: SMTP_URL
+        sync: false
+      - key: MAIL_FROM
+        value: fingate@company.com
+      - key: PUBLIC_URL
+        value: https://fingate.company.com

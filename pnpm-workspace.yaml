@@ -1,0 +1,20 @@
+packages:
+  - apps/*
+  - packages/*
+
+# pnpm >=10 blocks postinstall scripts by default.
+# esbuild: needed by the build toolchain.
+# mongodb-memory-server: downloads a ~100MB Mongo binary; approve (true) when the
+# API integration tests (§15) land, keep false until then.
+allowBuilds:
+  esbuild: true
+  mongodb-memory-server: false
+
+minimumReleaseAgeExclude:
+  - '@aws-sdk/client-s3@3.1132.0'
+  - '@aws-sdk/s3-request-presigner@3.1132.0'
+  - '@vitest/mocker@5.0.1'
+  - '@vitest/spy@5.0.1'
+  - mongoose@9.10.1
+  - nodemailer@10.0.10
+  - vitest@5.0.1
