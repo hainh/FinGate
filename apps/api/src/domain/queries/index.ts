@@ -1,0 +1,941 @@
+/**
+ * Tầng đọc (architecture §8.3) — "tính khi đọc, cache khi cần".
+ *
+ *An toàn đa công ty: mọi câu query đi qua `withScope` / `scopedAggregate`
+ * (lib/mongo.ts) — scope `$match` được ép vào ĐẦU pipeline, không đường nào đọc chéo
+ * công ty (§7.5, §19.5-3).
+ *
+ * Projection ở mọi danh sách: không trả `purpose`, `history[]`, `attachments[]` (§8.7).
+ */
+
+import {
+  DOC_KIND_LABEL,
+  ROLE_LABEL,
+  addDays,
+  daysUntil,
+  formatMoney,
+  maturity,
+  maturityLabel,
+  money,
+  statusLabel,
+  today,
+  type DocKind,
+  type Role,
+} from '@fingate/shared';
+import { Models } from '../../db/models.ts';
+import { cacheThrough } from '../../lib/cache.ts';
+import { scopedAggregate, scopedCount, withScope, type Scope } from '../../lib/mongo.ts';
+import { waitingDays } from '../calendar/index.ts';
+import type { ScopeLike } from '../types.ts';
+
+/** Tiền trên wire: minor là STRING (arch §6). */
+export interface WireAmount {
+  minor: string;
+  currency: string;
+  decimals: number;
+}
+
+export const DECISION_STATUSES = [
+  'pending.kt',
+  'pending.cv',
+  'pending.ktt',
+  'pending.pgd',
+  'pending.gd',
+  'pending.chairman',
+] as const;
+
+export const OPEN_STATUSES = [...DECISION_STATUSES, 'draft', 'changes_requested', 'approved', 'processing'];
+
+export function wire(minor: bigint, currency = 'VND', decimals = 0): WireAmount {
+  return { minor: minor.toString(), currency, decimals };
+}
+
+export function wireOf(m: unknown): WireAmount | null {
+  if (!m || typeof m !== 'object') return null;
+  const rec = m as Record<string, unknown>;
+  if (rec.minor === undefined || rec.minor === null) return null;
+  return wire(asBigInt(rec.minor), String(rec.currency ?? 'VND'), Number(rec.decimals ?? 0));
+}
+
+export function asBigInt(v: unknown): bigint {
+  if (typeof v === 'bigint') return v;
+  if (typeof v === 'number' && Number.isFinite(v)) return BigInt(Math.trunc(v));
+  const s = String(v ?? '0');
+  return /^-?\d+$/.test(s) ? BigInt(s) : 0n;
+}
+
+export function compact(minor: bigint, currency = 'VND'): string {
+  return formatMoney(money(minor, currency), { mode: 'compact' });
+}
+
+export function scopeOf(scope: ScopeLike): Scope {
+  return { companyIds: scope.companyIds };
+}
+
+export function maskAccount(number: string): string {
+  const clean = String(number ?? '').replace(/\s/g, '');
+  return clean.length <= 4 ? `•••• ${clean}` : `•••• ${clean.slice(-4)}`;
+}
+
+/* ================================================================== *
+ * 1. Hàng chờ — APPR-01 / CHI-01 / THU-01 / DASH-01 (dùng chung khung List)
+ * ================================================================== */
+
+export interface QueueRow {
+  _id: string;
+  code: string;
+  kind: DocKind;
+  kind_label: string;
+  company_id: string;
+  company_name: string;
+  department_name: string | null;
+  created_by_name: string;
+  title: string;
+  status: string;
+  status_label: string;
+  overdue: boolean;
+  waiting_days: number;
+  current_owner: string | null;
+  owner_name: string | null;
+  fast_tracked_by: string | null;
+  category_name: string | null;
+  payee_name: string;
+  amount: WireAmount;
+  compact: string;
+  planned_date: string;
+  version: number;
+  missing_evidence_count: number;
+  href: string;
+}
+
+export interface QueueQuery {
+  scope: ScopeLike;
+  userId: string;
+  kind?: DocKind;
+  status?: string | string[];
+  companyId?: string;
+  mine?: 'created' | 'to_approve' | 'approved_by_me';
+  from?: string;
+  to?: string;
+  q?: string;
+  overdueOnly?: boolean;
+  missingEvidenceOnly?: boolean;
+  sort?: string;
+  limit: number;
+  page?: number;
+}
+
+const LIST_PROJECTION = {
+  code: 1,
+  kind: 1,
+  company_id: 1,
+  department_id: 1,
+  created_by: 1,
+  status: 1,
+  title: 1,
+  category_id: 1,
+  payee: 1,
+  amount: 1,
+  planned_date: 1,
+  version: 1,
+  sla_deadline: 1,
+  overdue: 1,
+  submitted_at: 1,
+  created_at: 1,
+  updated_at: 1,
+  'approval.steps': 1,
+  'evidence.missing': 1,
+} as const;
+
+export function queueFilter(input: QueueQuery): Record<string, unknown> {
+  const filter: Record<string, unknown> = {};
+  if (input.kind) filter.kind = input.kind;
+  if (input.companyId) filter.company_id = input.companyId;
+  if (input.status) filter.status = Array.isArray(input.status) ? { $in: input.status } : input.status;
+  if (input.overdueOnly) filter.overdue = true;
+  if (input.missingEvidenceOnly) filter['evidence.missing.0'] = { $exists: true };
+  if (input.mine === 'created') filter.created_by = input.userId;
+  if (input.mine === 'to_approve') {
+    filter['approval.steps'] = { $elemMatch: { user_id: input.userId, state: { $in: ['current', 'waiting'] } } };
+    if (!input.status) filter.status = { $in: [...DECISION_STATUSES] };
+  }
+  if (input.mine === 'approved_by_me') {
+    filter['approval.steps'] = { $elemMatch: { user_id: input.userId, state: 'done' } };
+  }
+  if (input.from || input.to) {
+    filter.planned_date = { ...(input.from ? { $gte: input.from } : {}), ...(input.to ? { $lte: input.to } : {}) };
+  }
+  if (input.q) {
+    const rx = { $regex: escapeRegex(input.q), $options: 'i' };
+    filter.$or = [{ code: rx }, { title: rx }, { 'payee.name': rx }];
+  }
+  return filter;
+}
+
+export function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function sortForQueue(sort?: string): Record<string, 1 | -1> {
+  switch (sort) {
+    case '-amount':
+      return { 'amount.minor': -1 };
+    case '-planned_date':
+      return { planned_date: -1 };
+    case 'planned_date':
+      return { planned_date: 1 };
+    case 'created_at':
+      return { created_at: 1 };
+    case '-created_at':
+      return { created_at: -1 };
+    case 'waiting':
+      return { sla_deadline: -1 };
+    case '-waiting':
+    default:
+      // "chờ lâu nhất" lên đầu (screens §8.3 APPR-01)
+      return { sla_deadline: 1, updated_at: 1 };
+  }
+}
+
+export async function queryQueue(input: QueueQuery): Promise<{ items: QueueRow[]; total: number }> {
+  const f = withScope(scopeOf(input.scope), queueFilter(input));
+  const skip = ((input.page ?? 1) - 1) * input.limit;
+  const [rows, total] = await Promise.all([
+    Models.Document.find(f as never).select(LIST_PROJECTION as never).sort(sortForQueue(input.sort)).skip(skip).limit(input.limit).lean(),
+    Models.Document.countDocuments(f as never),
+  ]);
+  const items = await decorateRows(rows as unknown as Record<string, unknown>[]);
+  return { items, total };
+}
+
+interface StepLite {
+  order: number;
+  role: Role;
+  user_id: string | null;
+  state: string;
+  decided_at?: Date | null;
+  fast_tracked?: boolean;
+}
+
+async function decorateRows(rows: Record<string, unknown>[]): Promise<QueueRow[]> {
+  const companies = await Models.Company.find({}).select({ name: 1 }).lean();
+  const userIds = [
+    ...new Set(rows.map((r) => String(r.created_by ?? '')).concat(rows.map((r) => currentStepOf(r)?.user_id ?? ''))),
+  ].filter(Boolean);
+  const catIds = rows.map((r) => r.category_id).filter(Boolean) as string[];
+  const depIds = rows.map((r) => r.department_id).filter(Boolean) as string[];
+  const [users, categories, departments] = await Promise.all([
+    userIds.length
+      ? Models.User.find({ _id: { $in: userIds } }).select({ display_name: 1, email: 1, status: 1 }).lean()
+      : Promise.resolve([]),
+    catIds.length ? Models.Category.find({ _id: { $in: catIds } }).select({ name: 1 }).lean() : Promise.resolve([]),
+    depIds.length ? Models.Department.find({ _id: { $in: depIds } }).select({ name: 1 }).lean() : Promise.resolve([]),
+  ]);
+
+  const cname = new Map(companies.map((c) => [String(c._id), String(c.name)]));
+  const uname = new Map(
+    (users as { _id: unknown; display_name?: string; email?: string; status?: string }[]).map((u) => [
+      String(u._id),
+      `${u.display_name ?? u.email ?? '—'}${u.status === 'deactivated' ? ' (đã ngừng hoạt động)' : ''}`,
+    ]),
+  );
+  const catname = new Map((categories as { _id: unknown; name?: string }[]).map((c) => [String(c._id), String(c.name)]));
+  const depname = new Map((departments as { _id: unknown; name?: string }[]).map((d) => [String(d._id), String(d.name)]));
+
+  return rows.map((r) => {
+    const steps = stepsOf(r);
+    const current = currentStepOf(r);
+    const early = steps.filter((s) => s.state === 'done' && s.fast_tracked).map((s) => ROLE_LABEL[s.role] ?? s.role);
+    const amount = wireOf(r.amount) ?? wire(0n);
+    const status = String(r.status ?? 'draft');
+    const evidence = r.evidence as { missing?: string[] } | undefined;
+    const sla = r.sla_deadline ? new Date(String(r.sla_deadline)) : null;
+    const submitted = r.submitted_at ?? r.created_at;
+    return {
+      _id: String(r._id),
+      code: String(r.code ?? ''),
+      kind: String(r.kind ?? 'spend') as DocKind,
+      kind_label: DOC_KIND_LABEL[String(r.kind ?? 'spend') as DocKind] ?? '',
+      company_id: String(r.company_id ?? ''),
+      company_name: cname.get(String(r.company_id ?? '')) ?? '—',
+      department_name: r.department_id ? (depname.get(String(r.department_id)) ?? null) : null,
+      created_by_name: uname.get(String(r.created_by ?? '')) ?? '—',
+      title: String(r.title ?? ''),
+      status,
+      status_label: statusLabel(status),
+      overdue: Boolean(r.overdue) || (!!sla && sla < new Date() && DECISION_STATUSES.includes(status as never)),
+      waiting_days: waitingDays(submitted ? new Date(String(submitted)) : null),
+      current_owner: current ? (ROLE_LABEL[current.role] ?? current.role) : null,
+      owner_name: current?.user_id ? (uname.get(String(current.user_id)) ?? null) : null,
+      fast_tracked_by: early.length ? early.join(', ') : null,
+      category_name: r.category_id ? (catname.get(String(r.category_id)) ?? null) : null,
+      payee_name: String((r.payee as { name?: string } | undefined)?.name ?? '—'),
+      amount,
+      compact: compact(asBigInt(amount.minor), amount.currency),
+      planned_date: String(r.planned_date ?? ''),
+      version: Number(r.version ?? 1),
+      missing_evidence_count: evidence?.missing?.length ?? 0,
+      href: docHref(String(r.kind ?? 'spend'), String(r._id)),
+    };
+  });
+}
+
+function stepsOf(r: Record<string, unknown>): StepLite[] {
+  const approval = r.approval as { steps?: StepLite[] } | undefined;
+  return approval?.steps ?? [];
+}
+
+/** "đang nằm ở bàn của ai" = cấp thấp nhất chưa duyệt (blueprint §IV). */
+function currentStepOf(r: Record<string, unknown>): StepLite | null {
+  const steps = stepsOf(r).filter((s) => s.state === 'current' || s.state === 'waiting');
+  if (!steps.length) return null;
+  return steps.sort((a, b) => a.order - b.order)[0] ?? null;
+}
+
+const KIND_SEGMENT: Record<string, string> = { spend: 'chi', income: 'thu', rollover: 'dao-han', internal: 'noi-bo' };
+
+export function docHref(kind: string, id: string): string {
+  return `/ho-so/${KIND_SEGMENT[kind] ?? kind}/${id}`;
+}
+
+/* ================================================================== *
+ * 2. Badge & số dư
+ * ================================================================== */
+
+export async function awaitingBadge(scope: ScopeLike, userId: string): Promise<{ count: number; total_minor: bigint }> {
+  return cacheThrough(`badge:${userId}`, async () => {
+    const f = withScope(scopeOf(scope), {
+      'approval.steps': { $elemMatch: { user_id: userId, state: { $in: ['current', 'waiting'] } } },
+      status: { $in: [...DECISION_STATUSES] },
+    });
+    const [count, rows] = await Promise.all([
+      Models.Document.countDocuments(f as never),
+      Models.Document.find(f as never).select({ 'amount.minor': 1, 'amount.currency': 1 }).limit(500).lean(),
+    ]);
+    const total = (rows as { amount?: { minor?: unknown } }[]).reduce((a, r) => a + asBigInt(r.amount?.minor ?? 0n), 0n);
+    return { count, total_minor: total };
+  });
+}
+
+export interface AccountSnapshot {
+  account_id: string;
+  company_id: string;
+  company_name: string;
+  label: string;
+  account_number_masked: string;
+  kind: string;
+  currency: string;
+  is_group: boolean;
+  status: string;
+  closing: bigint;
+  blocked: bigint;
+  available: bigint;
+  min_balance: bigint;
+  breach: boolean;
+  stale: boolean;
+  balance_date: string | null;
+  open_docs: number;
+}
+
+/** Số dư = bản `balances_daily` mới nhất mỗi tài khoản (không read model — §8.3). */
+export async function accountSnapshots(scope: ScopeLike, opts: { includeClosed?: boolean } = {}): Promise<AccountSnapshot[]> {
+  const accounts = await Models.BankAccount.find(
+    withScope(scopeOf(scope), opts.includeClosed ? {} : { status: { $ne: 'closed' } }) as never,
+  )
+    .select({ company_id: 1, bank_name: 1, account_number: 1, account_name: 1, kind: 1, currency: 1, min_balance_minor: 1, is_group: 1, status: 1 })
+    .lean();
+  if (!accounts.length) return [];
+
+  const ids = accounts.map((a) => String(a._id));
+  const latest = await scopedAggregate<{ _id: string; date: string; closing: unknown; blocked: unknown }>(
+    Models.BalanceDaily,
+    scopeOf(scope),
+    [{ $match: { account_id: { $in: ids as never } } }, { $sort: { date: -1 } }, { $group: { _id: '$account_id', date: { $first: '$date' }, closing: { $first: '$closing_minor' }, blocked: { $first: '$blocked_minor' } } }],
+    'company_id',
+  );
+  const byAccount = new Map(latest.map((l) => [String(l._id), l]));
+
+  const companies = await Models.Company.find({ _id: { $in: [...new Set(accounts.map((a) => String(a.company_id ?? '')))] } }).select({ name: 1 }).lean();
+  const cname = new Map(companies.map((c) => [String(c._id), String(c.name)]));
+
+  const day = today();
+  return accounts.map((a) => {
+    const rec = byAccount.get(String(a._id));
+    const closing = asBigInt(rec?.closing ?? 0n);
+    const blocked = asBigInt(rec?.blocked ?? 0n);
+    const min = asBigInt(a.min_balance_minor ?? 0n);
+    return {
+      account_id: String(a._id),
+      company_id: String(a.company_id ?? ''),
+      company_name: cname.get(String(a.company_id ?? '')) ?? (a.is_group ? 'Tập đoàn' : '—'),
+      label: `${a.bank_name} ${maskAccount(String(a.account_number ?? ''))}`,
+      account_number_masked: maskAccount(String(a.account_number ?? '')),
+      kind: String(a.kind ?? 'bank'),
+      currency: String(a.currency ?? 'VND'),
+      is_group: Boolean(a.is_group),
+      status: String(a.status ?? 'active'),
+      closing,
+      blocked,
+      available: closing - blocked,
+      min_balance: min,
+      breach: closing - blocked < min,
+      stale: !rec || String(rec.date) !== day,
+      balance_date: rec ? String(rec.date) : null,
+      open_docs: 0,
+    };
+  });
+}
+
+/* ================================================================== *
+ * 3. RENEW-01 — maturity ladder 4 mức (§X, DS §3.3)
+ * ================================================================== */
+
+export interface MaturityRow {
+  loan_id: string;
+  contract_code: string;
+  company_id: string;
+  company_name: string;
+  bank_name: string;
+  outstanding: WireAmount;
+  maturity_date: string;
+  days_to_due: number;
+  need_prepare: WireAmount;
+  level: number;
+  tone: string;
+  label: string;
+  rollover: { document_id: string; code: string; status: string; prepared: boolean } | null;
+}
+
+export async function maturityLadder(
+  scope: ScopeLike,
+  opts: { bucket?: string; bankName?: string; horizonDays?: number } = {},
+): Promise<MaturityRow[]> {
+  const horizon = opts.horizonDays ?? 90;
+  const loans = await Models.Loan.find(
+    withScope(scopeOf(scope), {
+      status: { $in: ['active', 'overdue'] },
+      maturity_date: { $lte: addDays(today(), horizon) },
+    }) as never,
+  )
+    .select({ company_id: 1, bank_name: 1, contract_code: 1, outstanding_minor: 1, maturity_date: 1, next_due_date: 1, currency: 1 })
+    .sort({ maturity_date: 1 })
+    .lean();
+
+  const companies = await Models.Company.find({ _id: { $in: [...new Set(loans.map((l) => String(l.company_id)))] } })
+    .select({ name: 1 })
+    .lean();
+  const cname = new Map(companies.map((c) => [String(c._id), String(c.name)]));
+
+  const loanIds = loans.map((l) => String(l._id));
+  const rollovers = loanIds.length
+    ? await Models.Document.find({ loan_id: { $in: loanIds as never }, kind: 'rollover' } as never)
+        .select({ loan_id: 1, code: 1, status: 1 })
+        .lean()
+    : [];
+  const byLoan = new Map(rollovers.map((r) => [String(r.loan_id), r]));
+
+  const rows: MaturityRow[] = loans.map((l) => {
+    const due = String(l.next_due_date || l.maturity_date || today());
+    const days = daysUntil(due);
+    const band = maturity(days);
+    const outstanding = asBigInt(l.outstanding_minor);
+    const ro = byLoan.get(String(l._id));
+    return {
+      loan_id: String(l._id),
+      contract_code: String(l.contract_code),
+      company_id: String(l.company_id),
+      company_name: cname.get(String(l.company_id)) ?? '—',
+      bank_name: String(l.bank_name),
+      outstanding: wire(outstanding, String(l.currency ?? 'VND')),
+      maturity_date: due,
+      days_to_due: days,
+      need_prepare: wire(outstanding, String(l.currency ?? 'VND')),
+      level: band.level,
+      tone: band.tone,
+      label: maturityLabel(days),
+      rollover: ro
+        ? {
+            document_id: String(ro._id),
+            code: String(ro.code),
+            status: String(ro.status),
+            prepared: ['approved', 'processing', 'paid'].includes(String(ro.status)),
+          }
+        : null,
+    };
+  });
+
+  const byBank = opts.bankName ? rows.filter((r) => r.bank_name.toLowerCase().includes(opts.bankName!.toLowerCase())) : rows;
+  if (!opts.bucket) return byBank;
+  const range: Record<string, [number, number]> = { today: [-99_999, 0], '3d': [1, 3], '7d': [4, 7], '30d': [8, 30], later: [31, 99_999] };
+  const bounds = range[opts.bucket];
+  if (!bounds) return byBank;
+  return byBank.filter((r) => r.days_to_due >= bounds[0] && r.days_to_due <= bounds[1]);
+}
+
+/* ================================================================== *
+ * 4. Decision-pack — 7 câu hỏi, server tính 100% (§9.2, §19.5-1)
+ * ================================================================== */
+
+export async function decisionPack(doc: Record<string, unknown>, canReadTax: boolean): Promise<Record<string, unknown>> {
+  const amount = wireOf(doc.amount) ?? wire(0n);
+  const minor = asBigInt(amount.minor);
+  const evidence = (doc.evidence ?? {}) as { required?: string[]; present?: string[]; missing?: string[] };
+  const source = (doc.source ?? {}) as { fund?: string; account_id?: string | null; group_account_id?: string | null; group_managed?: boolean };
+
+  const [account, balances, category, department, budget] = await Promise.all([
+    source.account_id
+      ? Models.BankAccount.findById(String(source.account_id)).select({ bank_name: 1, account_number: 1, min_balance_minor: 1 }).lean()
+      : Promise.resolve(null),
+    source.account_id
+      ? Models.BalanceDaily.find({ account_id: String(source.account_id) }).sort({ date: -1 }).limit(1).select({ closing_minor: 1, blocked_minor: 1 }).lean()
+      : Promise.resolve([]),
+    doc.category_id ? Models.Category.findById(String(doc.category_id)).select({ name: 1 }).lean() : Promise.resolve(null),
+    doc.department_id ? Models.Department.findById(String(doc.department_id)).select({ name: 1 }).lean() : Promise.resolve(null),
+    (doc.budget as { budget_id?: string | null } | undefined)?.budget_id
+      ? Models.Budget.findById(String((doc.budget as { budget_id: string }).budget_id)).select({ label: 1, limit_minor: 1, period: 1, period_start: 1 }).lean()
+      : Promise.resolve(null),
+  ]);
+
+  const available = asBigInt(balances[0]?.closing_minor ?? 0n) - asBigInt(balances[0]?.blocked_minor ?? 0n);
+  const minBalance = asBigInt(account?.min_balance_minor ?? 0n);
+  const after = available - minor;
+  const payee = (doc.payee ?? {}) as { name?: string; tax_code?: string | null; is_internal?: boolean; bank_name?: string | null };
+  const contract = (doc.contract ?? {}) as { code?: string | null; value?: unknown };
+  const limit = asBigInt(budget?.limit_minor ?? 0n);
+  const used = budget ? await budgetUsed(String(budget._id)) : 0n;
+  const approval = (doc.approval ?? {}) as { matrix_label?: string | null };
+
+  return {
+    document_id: String(doc._id),
+    code: String(doc.code ?? ''),
+    q1_payee: {
+      name: payee.name ?? '—',
+      tax_code: canReadTax ? (payee.tax_code ?? null) : null,
+      is_internal: Boolean(payee.is_internal),
+      bank: payee.bank_name ?? null,
+    },
+    q2_amount: { amount, amount_usd: null, fx_rate: (doc.fx as { rate?: string } | undefined)?.rate ?? null },
+    q3_purpose: {
+      text: String(doc.purpose ?? doc.title ?? ''),
+      category: category?.name ? String(category.name) : null,
+      department: department?.name ? String(department.name) : null,
+    },
+    q4_basis: {
+      contract_code: contract.code ?? null,
+      contract_value: wireOf(contract.value),
+      invoice: (doc as { debt_code?: string }).debt_code ?? null,
+    },
+    q5_source: {
+      fund: (source.fund as 'bank' | 'cash') ?? 'bank',
+      account_label: account ? `${account.bank_name} ${maskAccount(String(account.account_number ?? ''))}` : 'Tiền mặt',
+      group_account_label: source.group_account_id ? 'Tài khoản Tập đoàn' : null,
+      group_managed: Boolean(source.group_managed),
+    },
+    q6_impact: {
+      available_now: wire(available, amount.currency),
+      balance_after: wire(after, amount.currency),
+      min_balance: wire(minBalance, amount.currency),
+      breach: after < minBalance,
+    },
+    q7_plan: {
+      in_plan: (doc.budget as { in_plan?: boolean } | undefined)?.in_plan !== false,
+      budget_line: budget?.label ? String(budget.label) : null,
+      used: budget ? wire(used) : null,
+      limit: budget ? wire(limit) : null,
+      percent: limit > 0n ? Number((used * 10_000n) / limit) / 100 : null,
+      period: budget ? `${budget.period} từ ${budget.period_start}` : null,
+    },
+    evidence: {
+      required: evidence.required ?? [],
+      present: evidence.present ?? [],
+      missing: evidence.missing ?? [],
+    },
+    matrix_label: approval.matrix_label ?? 'Quy trình mặc định',
+  };
+}
+
+async function budgetUsed(budgetId: string): Promise<bigint> {
+  const rows = await scopedAggregate<{ total: unknown }>(Models.Document, { companyIds: null }, [
+    { $match: { 'budget.budget_id': budgetId as never, kind: 'spend', status: { $ne: 'draft' } } },
+    { $group: { _id: null, total: { $sum: '$amount.minor' } } },
+  ]);
+  return asBigInt(rows[0]?.total ?? 0n);
+}
+
+/* ================================================================== *
+ * 5. Forecast (§XV) — đọc balances_daily + planned_date của hồ sơ
+ * ================================================================== */
+
+export interface ForecastRow {
+  date: string;
+  weekday: string;
+  opening: WireAmount;
+  inflow: WireAmount;
+  outflow: WireAmount;
+  net: WireAmount;
+  closing: WireAmount;
+  min_balance: WireAmount;
+  breach: boolean;
+}
+
+export async function forecast(
+  scope: ScopeLike,
+  opts: { horizon?: number; from?: string } = {},
+): Promise<{ rows: ForecastRow[]; totals: Record<string, WireAmount>; first_breach_date: string | null; shortfall_by_company: { company_id: string; company_name: string; date: string; amount: WireAmount }[] }> {
+  const horizon = opts.horizon ?? 30;
+  const from = opts.from ?? today();
+  const to = addDays(from, horizon);
+
+  const [opening, flows, thresholdRows, perCompany] = await Promise.all([
+    scopedAggregate<{ _id: string; closing: unknown }>(Models.BalanceDaily, scopeOf(scope), [
+      { $match: { date: { $lte: from } } },
+      { $sort: { date: -1 } },
+      { $group: { _id: '$account_id', closing: { $first: '$closing_minor' } } },
+    ]),
+    scopedAggregate<{ _id: { date: string; kind: string }; total: unknown }>(Models.Document, scopeOf(scope), [
+      { $match: { planned_date: { $gte: from, $lte: to }, status: { $nin: ['draft', 'rejected', 'cancelled'] } } },
+      { $group: { _id: { date: '$planned_date', kind: '$kind' }, total: { $sum: '$amount.minor' } } },
+    ]),
+    Models.Company.find(scope.companyIds === null ? {} : { _id: { $in: scope.companyIds as never } }).select({ name: 1, min_balance_minor: 1 }).lean(),
+    scopedAggregate<{ _id: string; closing: unknown }>(Models.BalanceDaily, scopeOf(scope), [
+      { $match: { date: { $lte: from } } },
+      { $sort: { date: -1 } },
+      { $group: { _id: '$company_id', closing: { $first: '$closing_minor' } } },
+    ]),
+  ]);
+
+  const start = opening.reduce((a, o) => a + asBigInt(o.closing), 0n);
+  const threshold = thresholdRows.reduce((a, c) => a + asBigInt(c.min_balance_minor), 0n);
+  const byDate = new Map<string, { in: bigint; out: bigint }>();
+  for (const f of flows) {
+    const date = String(f._id.date);
+    const cur = byDate.get(date) ?? { in: 0n, out: 0n };
+    if (f._id.kind === 'income') cur.in += asBigInt(f.total);
+    else cur.out += asBigInt(f.total);
+    byDate.set(date, cur);
+  }
+
+  const rows: ForecastRow[] = [];
+  let running = start;
+  let firstBreach: string | null = null;
+  for (let i = 0; i <= horizon; i++) {
+    const date = addDays(from, i);
+    const f = byDate.get(date) ?? { in: 0n, out: 0n };
+    const openingDay = running;
+    running = openingDay + f.in - f.out;
+    const breach = running < threshold;
+    if (breach && !firstBreach) firstBreach = date;
+    rows.push({
+      date,
+      weekday: weekdayVi(date),
+      opening: wire(openingDay),
+      inflow: wire(f.in),
+      outflow: wire(f.out),
+      net: wire(f.in - f.out),
+      closing: wire(running),
+      min_balance: wire(threshold),
+      breach,
+    });
+  }
+
+  const totalIn = rows.reduce((a, r) => a + asBigInt(r.inflow.minor), 0n);
+  const totalOut = rows.reduce((a, r) => a + asBigInt(r.outflow.minor), 0n);
+  const minClosing = rows.reduce((min, r) => (asBigInt(r.closing.minor) < min ? asBigInt(r.closing.minor) : min), running);
+
+  // "Công ty B có khả năng thiếu 5 tỷ ngày 12/09" — bản tin §XIV
+  const shortfalls: { company_id: string; company_name: string; date: string; amount: WireAmount }[] = [];
+  const cmin = new Map(thresholdRows.map((c) => [String(c._id), asBigInt(c.min_balance_minor)]));
+  const cname = new Map(thresholdRows.map((c) => [String(c._id), String(c.name)]));
+  for (const p of perCompany) {
+    const min = cmin.get(String(p._id)) ?? 0n;
+    const closing = asBigInt(p.closing);
+    if (closing < min) {
+      shortfalls.push({ company_id: String(p._id), company_name: cname.get(String(p._id)) ?? '—', date: from, amount: wire(min - closing) });
+    }
+  }
+
+  return {
+    rows,
+    totals: { inflow: wire(totalIn), outflow: wire(totalOut), net: wire(totalIn - totalOut), min_closing: wire(minClosing) },
+    first_breach_date: firstBreach,
+    shortfall_by_company: shortfalls,
+  };
+}
+
+const WEEKDAYS = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+export function weekdayVi(iso: string): string {
+  return WEEKDAYS[new Date(`${iso}T00:00:00Z`).getUTCDay()] ?? '';
+}
+
+/* ================================================================== *
+ * 6. DASH-01 — overview: MỘT endpoint gộp, Promise.all, ETag ở route (§8.3)
+ * ================================================================== */
+
+export async function dashboardOverview(scope: ScopeLike, userId: string): Promise<Record<string, unknown>> {
+  const scopeKey = scope.companyIds === null ? 'all' : scope.companyIds.join(',');
+  return cacheThrough(`overview:${userId}:${scopeKey}:${today()}`, () => buildOverview(scope, userId), 20_000);
+}
+
+async function buildOverview(scope: ScopeLike, userId: string): Promise<Record<string, unknown>> {
+  const day = today();
+  const [accounts, awaiting, queue, income, spend, overdue, maturities, missing, unread] = await Promise.all([
+    accountSnapshots(scope),
+    awaitingBadge(scope, userId),
+    queryQueue({ scope, userId, mine: 'to_approve', limit: 8, sort: '-waiting' }),
+    sumByDateAndKind(scope, 'income', day),
+    sumByDateAndKind(scope, 'spend', day),
+    overdueReceivable(scope),
+    maturityLadder(scope, { horizonDays: 30 }),
+    scopedCount(Models.Document, scopeOf(scope), {
+      'evidence.missing.0': { $exists: true },
+      status: { $in: [...OPEN_STATUSES] },
+    }),
+    Models.Notification.countDocuments({ user_id: userId, read_at: null }).exec(),
+  ]);
+
+  const cashAvailable = accounts.reduce((a, x) => a + x.available, 0n);
+  const blocked = accounts.reduce((a, x) => a + x.blocked, 0n);
+  const cashOnHand = accounts.filter((a) => a.kind === 'cash').reduce((a, x) => a + x.available, 0n);
+  const bankMoney = cashAvailable - cashOnHand;
+  const debt = await sumOutstanding(scope);
+  const matToday = maturities.filter((m) => m.days_to_due <= 0).reduce((a, m) => a + asBigInt(m.outstanding.minor), 0n);
+  const mat3 = maturities.filter((m) => m.days_to_due <= 3).reduce((a, m) => a + asBigInt(m.outstanding.minor), 0n);
+  const mat7 = maturities.filter((m) => m.days_to_due <= 7).reduce((a, m) => a + asBigInt(m.outstanding.minor), 0n);
+  const mat30 = maturities.reduce((a, m) => a + asBigInt(m.outstanding.minor), 0n);
+  const awaitingTotal = awaiting.total_minor;
+
+  const exceptions = buildExceptions({
+    awaitingCount: awaiting.count,
+    awaitingTotal,
+    matToday,
+    mat7,
+    mat7Count: maturities.filter((m) => m.days_to_due <= 7).length,
+    overdueCount: overdue.count,
+    overdueTotal: overdue.total,
+    missing,
+    breachAccounts: accounts.filter((a) => a.breach).slice(0, 3),
+    staleCompanies: [...new Set(accounts.filter((a) => a.stale).map((a) => a.company_name))],
+  });
+
+  const byBankAgg = new Map<string, bigint>();
+  const loanRows = await Models.Loan.find(withScope(scopeOf(scope), { status: { $in: ['active', 'overdue'] } }) as never)
+    .select({ bank_name: 1, outstanding_minor: 1 })
+    .lean();
+  for (const l of loanRows) byBankAgg.set(String(l.bank_name), (byBankAgg.get(String(l.bank_name)) ?? 0n) + asBigInt(l.outstanding_minor));
+
+  return {
+    scope: {
+      all: scope.companyIds === null,
+      company_ids: scope.companyIds ?? [],
+      company_names: await namesForScope(scope),
+    },
+    business_date: day,
+    generated_at: new Date().toISOString(),
+    stale: false,
+    partial_companies: [...new Set(accounts.filter((a) => a.stale).map((a) => ({ company_id: a.company_id, name: a.company_name, last_balance_date: a.balance_date })))],
+    kpi: {
+      cash_total: {
+        label: 'Tổng tiền hiện có',
+        amount: wire(cashAvailable),
+        compact: formatMoney(money(cashAvailable), { mode: 'kpi' }),
+        breakdown: [
+          { label: 'Tiền mặt', amount: wire(cashOnHand), compact: compact(cashOnHand) },
+          { label: 'Tiền ngân hàng', amount: wire(bankMoney), compact: compact(bankMoney) },
+          { label: 'Bị hạn chế', amount: wire(blocked), compact: compact(blocked) },
+        ],
+        delta_percent: null,
+        as_of: new Date().toISOString(),
+      },
+      income_today: {
+        label: 'Dự kiến thu hôm nay',
+        amount: wire(income),
+        compact: formatMoney(money(income), { mode: 'kpi' }),
+        breakdown: [],
+        delta_percent: null,
+        as_of: new Date().toISOString(),
+      },
+      spend_today: {
+        label: 'Cần chi hôm nay',
+        amount: wire(spend),
+        compact: formatMoney(money(spend), { mode: 'kpi' }),
+        breakdown: [],
+        delta_percent: null,
+        as_of: new Date().toISOString(),
+      },
+      awaiting_me: {
+        label: 'Chờ tôi duyệt',
+        amount: wire(awaitingTotal),
+        compact: formatMoney(money(awaitingTotal), { mode: 'kpi' }),
+        breakdown: [{ label: `${awaiting.count} khoản`, amount: wire(awaitingTotal), compact: compact(awaitingTotal) }],
+        delta_percent: null,
+        as_of: new Date().toISOString(),
+      },
+    },
+    bank: {
+      debt_total: wire(debt),
+      maturity_today: wire(matToday),
+      maturity_3d: wire(mat3),
+      maturity_7d: wire(mat7),
+      maturity_30d: wire(mat30),
+      by_bank: [...byBankAgg.entries()]
+        .sort((a, b) => Number(b[1] - a[1]))
+        .map(([bank_name, outstanding]) => ({
+          bank_name,
+          outstanding: wire(outstanding),
+          share_percent: debt > 0n ? Number((outstanding * 10_000n) / debt) / 100 : 0,
+        })),
+    },
+    exceptions: exceptions.slice(0, 6),
+    awaiting_me_rows: queue.items.map((r) => ({
+      document_id: r._id,
+      code: r.code,
+      kind: r.kind,
+      company_name: r.company_name,
+      title: r.title,
+      amount: r.amount,
+      compact: r.compact,
+      created_by_name: r.created_by_name,
+      status: r.status,
+      waiting_days: r.waiting_days,
+      next_role_label: r.current_owner,
+      overdue: r.overdue,
+      href: r.href,
+    })),
+    forecast: null,
+    receivable_overdue: wire(overdue.total),
+    payable_due: wire(await sumPayableDue(scope)),
+    counts: {
+      awaiting_me: awaiting.count,
+      overdue_receivable: overdue.count,
+      maturity_7d_count: maturities.filter((m) => m.days_to_due <= 7).length,
+      missing_evidence: missing,
+      notifications_unread: unread,
+    },
+  };
+}
+
+function buildExceptions(input: {
+  awaitingCount: number;
+  awaitingTotal: bigint;
+  matToday: bigint;
+  mat7: bigint;
+  mat7Count: number;
+  overdueCount: number;
+  overdueTotal: bigint;
+  missing: number;
+  breachAccounts: AccountSnapshot[];
+  staleCompanies: string[];
+}): Record<string, unknown>[] {
+  const items: Record<string, unknown>[] = [];
+  if (input.matToday > 0n) {
+    items.push({ id: 'mat-today', severity: 3, tone: 'danger', glyph: '⛔', text: 'Đáo hạn hôm nay', amount: wire(input.matToday), compact: compact(input.matToday), href: '/ngan-hang/dao-han', cta: 'Xem' });
+  }
+  for (const a of input.breachAccounts) {
+    items.push({
+      id: `breach-${a.account_id}`,
+      severity: 3,
+      tone: 'danger',
+      glyph: '⛔',
+      text: `${a.label} dưới ngưỡng tối thiểu`,
+      amount: wire(a.available),
+      compact: compact(a.available),
+      href: `/ngan-hang/taikhoan/${a.account_id}`,
+      cta: 'Xem',
+    });
+  }
+  if (input.awaitingCount > 0) {
+    items.push({
+      id: 'awaiting',
+      severity: 2,
+      tone: 'warning',
+      glyph: '⚠',
+      text: `${input.awaitingCount} khoản đang chờ bạn duyệt`,
+      amount: wire(input.awaitingTotal),
+      compact: compact(input.awaitingTotal),
+      href: '/cho-toi-duyet',
+      cta: 'Duyệt',
+    });
+  }
+  if (input.mat7Count > 0) {
+    items.push({
+      id: 'mat-7',
+      severity: 2,
+      tone: 'warning',
+      glyph: '⚠',
+      text: `${input.mat7Count} khoản đáo hạn trong 7 ngày tới`,
+      amount: wire(input.mat7),
+      compact: compact(input.mat7),
+      href: '/ngan-hang/dao-han',
+      cta: 'Xem',
+    });
+  }
+  if (input.overdueCount > 0) {
+    items.push({
+      id: 'receivable',
+      severity: 1,
+      tone: 'info',
+      glyph: '●',
+      text: `${input.overdueCount} khoản phải thu quá hạn`,
+      amount: wire(input.overdueTotal),
+      compact: compact(input.overdueTotal),
+      href: '/thu/qua-han',
+      cta: 'Đôn đốc',
+    });
+  }
+  if (input.missing > 0) {
+    items.push({ id: 'evidence', severity: 1, tone: 'attention', glyph: '▲', text: `${input.missing} hồ sơ thiếu chứng từ`, amount: null, compact: null, href: '/can-xu-ly', cta: 'Bổ sung' });
+  }
+  for (const name of input.staleCompanies.slice(0, 2)) {
+    items.push({ id: `stale-${name}`, severity: 1, tone: 'attention', glyph: '▲', text: `Dữ liệu ${name} chưa đồng bộ hôm nay`, amount: null, compact: null, href: '/ngan-hang/so-du', cta: 'Nhập' });
+  }
+  return items.sort((a, b) => Number(b.severity) - Number(a.severity));
+}
+
+async function sumByDateAndKind(scope: ScopeLike, kind: DocKind, date: string): Promise<bigint> {
+  const rows = await scopedAggregate<{ total: unknown }>(Models.Document, scopeOf(scope), [
+    { $match: { kind, planned_date: date, status: { $ne: 'draft' } } },
+    { $group: { _id: null, total: { $sum: '$amount.minor' } } },
+  ]);
+  return asBigInt(rows[0]?.total ?? 0n);
+}
+
+async function overdueReceivable(scope: ScopeLike): Promise<{ count: number; total: bigint }> {
+  const f = withScope(scopeOf(scope), { kind: 'receivable', status: { $ne: 'settled' }, due_date: { $lt: today() } });
+  const [count, rows] = await Promise.all([
+    Models.DebtItem.countDocuments(f as never),
+    Models.DebtItem.find(f as never).select({ value_minor: 1, settled_minor: 1 }).limit(500).lean(),
+  ]);
+  const total = (rows as { value_minor?: unknown; settled_minor?: unknown }[]).reduce(
+    (a, r) => a + asBigInt(r.value_minor ?? 0n) - asBigInt(r.settled_minor ?? 0n),
+    0n,
+  );
+  return { count, total };
+}
+
+async function sumOutstanding(scope: ScopeLike): Promise<bigint> {
+  const rows = await scopedAggregate<{ total: unknown }>(Models.Loan, scopeOf(scope), [
+    { $match: { status: { $in: ['active', 'overdue'] } } },
+    { $group: { _id: null, total: { $sum: '$outstanding_minor' } } },
+  ]);
+  return asBigInt(rows[0]?.total ?? 0n);
+}
+
+async function sumPayableDue(scope: ScopeLike): Promise<bigint> {
+  const rows = await scopedAggregate<{ total: unknown }>(Models.DebtItem, scopeOf(scope), [
+    { $match: { kind: 'payable', status: { $ne: 'settled' }, due_date: { $lte: addDays(today(), 7) } } },
+    { $project: { remaining: { $subtract: ['$value_minor', '$settled_minor'] } } },
+    { $group: { _id: null, total: { $sum: '$remaining' } } },
+  ]);
+  return asBigInt(rows[0]?.total ?? 0n);
+}
+
+async function namesForScope(scope: ScopeLike): Promise<string[]> {
+  if (scope.companyIds === null) {
+    const all = await Models.Company.find({ status: 'active' }).select({ name: 1 }).lean();
+    return ['Tất cả công ty', ...all.map((c) => String(c.name))];
+  }
+  const cs = await Models.Company.find({ _id: { $in: scope.companyIds as never } }).select({ name: 1 }).lean();
+  return cs.map((c) => String(c.name));
+}
+
+export { wire as toWire };

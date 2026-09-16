@@ -1,0 +1,396 @@
+/**
+ * FinGate Design System — CSS custom properties (§2)
+ *
+ * Ba tầng, không đi tắt: PRIMITIVE → SEMANTIC → COMPONENT.
+ * Screen chỉ dùng tầng SEMANTIC. Lint `fg/no-raw-color` chặn hex trong apps/**.
+ * Nguồn: docs/02_design_system.md §2.1–§2.9. Đổi giá trị → phải qua quy trình §13.3.
+ */
+
+:root,
+[data-fg-theme='light'] {
+  /* ---------- PRIMITIVE: neutral (xám lạnh) ---------- */
+  --fg-n-0: #ffffff;
+  --fg-n-25: #f7f8fa;
+  --fg-n-50: #f2f4f7;
+  --fg-n-100: #eaecf0;
+  --fg-n-150: #e1e5eb;
+  --fg-n-200: #d6dbe3;
+  --fg-n-300: #bcc4d0;
+  --fg-n-400: #98a2b3;
+  --fg-n-500: #7c8798;
+  --fg-n-600: #5d6673;
+  --fg-n-700: #3d4451;
+  --fg-n-800: #262b34;
+  --fg-n-900: #171a1f;
+
+  /* ---------- PRIMITIVE: brand (indigo navy) ---------- */
+  --fg-brand-50: #eef1fe;
+  --fg-brand-100: #dce2fd;
+  --fg-brand-200: #bac6fb;
+  --fg-brand-300: #93a5f7;
+  --fg-brand-400: #6b80f0;
+  --fg-brand-500: #4759e0;
+  --fg-brand-600: #3445c4;
+  --fg-brand-700: #29379c;
+  --fg-brand-800: #1f2a78;
+  --fg-brand-900: #16205a;
+
+  /* ---------- PRIMITIVE: status ---------- */
+  --fg-success-50: #e9f7ef;
+  --fg-success-100: #cdebd9;
+  --fg-success-500: #1f9d55;
+  --fg-success-600: #157f44;
+  --fg-success-700: #0f6636;
+  --fg-warning-50: #fff1e8;
+  --fg-warning-100: #ffd9bf;
+  --fg-warning-500: #e0651a;
+  --fg-warning-600: #b84e0d;
+  --fg-warning-700: #8f3c08;
+  --fg-attention-50: #fff8e1;
+  --fg-attention-100: #ffecb3;
+  --fg-attention-500: #b7860b;
+  --fg-attention-600: #946b04;
+  --fg-attention-700: #7a5804;
+  --fg-danger-50: #fef1f2;
+  --fg-danger-100: #fcd9dc;
+  --fg-danger-500: #cc2936;
+  --fg-danger-600: #a81e2b;
+  --fg-danger-700: #84161f;
+  --fg-info-50: #edf4fc;
+  --fg-info-100: #d5e6f7;
+  --fg-info-500: #2477cc;
+  --fg-info-600: #1b5faa;
+  --fg-info-700: #154a85;
+
+  /* ---------- FIXED (không đảo trong dark) ---------- */
+  --fg-fix-white: #ffffff;
+  --fg-fix-black: #000000;
+  --fg-fix-overlay: rgba(16, 19, 24, 0.55);
+
+  /* ---------- SEMANTIC: background ---------- */
+  --fg-bg-page: #f7f8fa;
+  --fg-bg-surface: #ffffff;
+  --fg-bg-subtle: #f2f4f7;
+  --fg-bg-elevated: #ffffff;
+  --fg-bg-inverse: #171a1f;
+  --fg-bg-selected: #eef1fe;
+  --fg-bg-hover: #f7f8fa;
+  --fg-bg-disabled: #f2f4f7;
+  --fg-bg-rail: #262b34;
+
+  /* ---------- SEMANTIC: text ---------- */
+  --fg-text-primary: #171a1f;
+  --fg-text-secondary: #3d4451;
+  --fg-text-muted: #5d6673;
+  --fg-text-tertiary: #7c8798; /* chỉ dùng cạnh text chính — không cho thông tin đơn lẻ */
+  --fg-text-disabled: #98a2b3;
+  --fg-text-on-accent: #ffffff;
+  --fg-text-link: #3445c4;
+  --fg-text-danger: #a81e2b;
+  --fg-text-success: #157f44;
+
+  /* ---------- SEMANTIC: border / focus ---------- */
+  --fg-border-subtle: #eaecf0;
+  --fg-border-default: #e1e5eb;
+  --fg-border-strong: #d6dbe3;
+  --fg-border-selected: #3445c4;
+  --fg-border-focus: #3445c4;
+  --fg-border-on-dark: #2a313b;
+
+  /* ---------- SEMANTIC: action ---------- */
+  --fg-action-primary: #3445c4;
+  --fg-action-primary-hover: #29379c;
+  --fg-action-primary-press: #1f2a78;
+  --fg-action-primary-text: #ffffff;
+  --fg-action-danger: #a81e2b;
+  --fg-action-danger-hover: #84161f;
+  --fg-action-danger-text: #ffffff;
+  --fg-action-secondary-bg: #ffffff;
+  --fg-action-soft-bg: #eef1fe;
+  --fg-action-soft-text: #29379c;
+
+  /* ---------- SEMANTIC: status (bộ 4 thuộc tính mỗi tone) ---------- */
+  --fg-status-success-text: #157f44;
+  --fg-status-success-bg: #e9f7ef;
+  --fg-status-success-border: #cdebd9;
+  --fg-status-success-icon: #157f44;
+  --fg-status-warning-text: #b84e0d;
+  --fg-status-warning-bg: #fff1e8;
+  --fg-status-warning-border: #ffd9bf;
+  --fg-status-warning-icon: #b84e0d;
+  --fg-status-attention-text: #946b04;
+  --fg-status-attention-bg: #fff8e1;
+  --fg-status-attention-border: #ffecb3;
+  --fg-status-attention-icon: #946b04;
+  --fg-status-danger-text: #a81e2b;
+  --fg-status-danger-bg: #fef1f2;
+  --fg-status-danger-border: #fcd9dc;
+  --fg-status-danger-icon: #a81e2b;
+  --fg-status-info-text: #1b5faa;
+  --fg-status-info-bg: #edf4fc;
+  --fg-status-info-border: #d5e6f7;
+  --fg-status-info-icon: #1b5faa;
+  --fg-status-neutral-text: #5d6673;
+  --fg-status-neutral-bg: #f2f4f7;
+  --fg-status-neutral-border: #e1e5eb;
+  --fg-status-neutral-icon: #5d6673;
+
+  /* ---------- CHART palette (DS §9.1 — theo thứ tự, không chọn ngẫu nhiên) ---------- */
+  --fg-chart-1: #3445c4;
+  --fg-chart-2: #157f44;
+  --fg-chart-3: #b84e0d;
+  --fg-chart-4: #946b04;
+  --fg-chart-5: #1b5faa;
+  --fg-chart-6: #7a3fc0;
+  --fg-chart-7: #0e7a8a;
+  --fg-chart-8: #545d6d;
+  --fg-chart-9: #a81e2b;
+  --fg-chart-10: #0f6636;
+
+  /* ---------- TYPOGRAPHY ---------- */
+  --fg-font-family: 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --fg-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --fg-font-display-size: 32px;
+  --fg-font-display-line: 40px;
+  --fg-font-h1-size: 24px;
+  --fg-font-h1-line: 32px;
+  --fg-font-h2-size: 20px;
+  --fg-font-h2-line: 28px;
+  --fg-font-h3-size: 17px;
+  --fg-font-h3-line: 24px;
+  --fg-font-h4-size: 15px;
+  --fg-font-h4-line: 22px;
+  --fg-font-body-l-size: 15px;
+  --fg-font-body-l-line: 24px;
+  --fg-font-body-size: 14px;
+  --fg-font-body-line: 22px;
+  --fg-font-body-s-size: 13px;
+  --fg-font-body-s-line: 20px;
+  --fg-font-caption-size: 12px;
+  --fg-font-caption-line: 18px;
+  --fg-font-overline-size: 11px;
+  --fg-font-overline-line: 16px;
+  --fg-font-number-xl-size: 32px;
+  --fg-font-number-xl-line: 38px;
+  --fg-font-number-l-size: 24px;
+  --fg-font-number-l-line: 30px;
+  --fg-font-number-m-size: 15px;
+  --fg-font-number-m-line: 20px;
+  --fg-font-number-s-size: 13px;
+  --fg-font-number-s-line: 18px;
+  --fg-weight-regular: 400;
+  --fg-weight-medium: 500; /* chỉ cho số */
+  --fg-weight-semibold: 600;
+  --fg-tracking-display: -0.02em;
+  --fg-tracking-h2: -0.01em;
+  --fg-tracking-overline: 0.06em;
+  --fg-numeric: 'tnum' 1;
+
+  /* ---------- SPACING (base 4px) ---------- */
+  --fg-space-0: 0px;
+  --fg-space-1: 4px;
+  --fg-space-2: 8px;
+  --fg-space-3: 12px;
+  --fg-space-4: 16px;
+  --fg-space-5: 20px;
+  --fg-space-6: 24px;
+  --fg-space-8: 32px;
+  --fg-space-10: 40px;
+  --fg-space-12: 48px;
+  --fg-space-16: 64px;
+  --fg-space-20: 80px;
+
+  /* ---------- SIZING ---------- */
+  --fg-control-sm: 32px;
+  --fg-control-md: 40px;
+  --fg-control-lg: 48px;
+  --fg-touch-min: 44px;
+  --fg-header-h: 64px;
+  --fg-rail-w: 240px;
+  --fg-rail-w-collapsed: 72px;
+  --fg-content-max: 1440px;
+  --fg-row-h-comfortable: 44px;
+  --fg-row-h-compact: 34px;
+
+  /* ---------- RADIUS / BORDER ---------- */
+  --fg-radius-xs: 4px;
+  --fg-radius-sm: 6px;
+  --fg-radius-md: 8px;
+  --fg-radius-lg: 12px;
+  --fg-radius-xl: 16px;
+  --fg-radius-full: 999px;
+  --fg-border-w-1: 1px;
+  --fg-border-w-2: 2px;
+
+  /* ---------- ELEVATION (card thường KHÔNG shadow — chỉ border) ---------- */
+  --fg-shadow-0: none;
+  --fg-shadow-1: 0 1px 2px rgba(23, 26, 31, 0.06);
+  --fg-shadow-2: 0 4px 12px rgba(23, 26, 31, 0.1);
+  --fg-shadow-3: 0 12px 32px rgba(23, 26, 31, 0.16);
+  --fg-shadow-4: 0 16px 48px rgba(23, 26, 31, 0.2);
+
+  /* ---------- MOTION ---------- */
+  --fg-motion-instant: 80ms;
+  --fg-motion-fast: 140ms;
+  --fg-motion-base: 200ms;
+  --fg-motion-slow: 320ms;
+  --fg-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --fg-ease-in: cubic-bezier(0.4, 0, 1, 1);
+
+  /* ---------- Z-INDEX ---------- */
+  --fg-z-table-sticky: 10;
+  --fg-z-header: 100;
+  --fg-z-sidebar: 200;
+  --fg-z-dropdown: 900;
+  --fg-z-drawer: 1000;
+  --fg-z-modal: 1100;
+  --fg-z-toast: 1200;
+  --fg-z-approval-bar: 1300;
+
+  /* ---------- LAYOUT ---------- */
+  --fg-density: comfortable;
+  --fg-grid-gutter: 16px;
+  --fg-grid-margin: 24px;
+}
+
+[data-fg-theme='dark'] {
+  --fg-bg-page: #0e1116;
+  --fg-bg-surface: #171a1f;
+  --fg-bg-subtle: #12161c;
+  --fg-bg-elevated: #1e232b;
+  --fg-bg-inverse: #e6e9ef;
+  --fg-bg-selected: #1c2440;
+  --fg-bg-hover: #12161c;
+  --fg-bg-disabled: #12161c;
+  --fg-bg-rail: #0b0e12;
+
+  --fg-text-primary: #e6e9ef;
+  --fg-text-secondary: #c3cad4;
+  --fg-text-muted: #9aa4b2;
+  --fg-text-tertiary: #7c8798;
+  --fg-text-disabled: #5d6673;
+  --fg-text-link: #bac6fb;
+  --fg-text-danger: #ff9aa6;
+  --fg-text-success: #5ccb8a;
+
+  --fg-border-subtle: #222831;
+  --fg-border-default: #2a313b;
+  --fg-border-strong: #38414e;
+  --fg-border-selected: #6b80f0;
+  --fg-border-focus: #6b80f0;
+
+  --fg-action-primary: #6b80f0;
+  --fg-action-primary-hover: #93a5f7;
+  --fg-action-primary-press: #bac6fb;
+  --fg-action-primary-text: #0b0e12;
+  --fg-action-danger: #ff9aa6;
+  --fg-action-danger-hover: #ffbcc4;
+  --fg-action-danger-text: #291417;
+  --fg-action-secondary-bg: #171a1f;
+  --fg-action-soft-bg: #1c2440;
+  --fg-action-soft-text: #bac6fb;
+
+  /* dark: text trên nền tối cùng họ, không dùng nền pastel (DS §2.3) */
+  --fg-status-success-text: #5ccb8a;
+  --fg-status-success-bg: #14261c;
+  --fg-status-success-border: #1f4a32;
+  --fg-status-success-icon: #5ccb8a;
+  --fg-status-warning-text: #ffb877;
+  --fg-status-warning-bg: #2a1c11;
+  --fg-status-warning-border: #55361b;
+  --fg-status-warning-icon: #ffb877;
+  --fg-status-attention-text: #ffd666;
+  --fg-status-attention-bg: #26200e;
+  --fg-status-attention-border: #4e411b;
+  --fg-status-attention-icon: #ffd666;
+  --fg-status-danger-text: #ff9aa6;
+  --fg-status-danger-bg: #291417;
+  --fg-status-danger-border: #55262c;
+  --fg-status-danger-icon: #ff9aa6;
+  --fg-status-info-text: #7fc0ff;
+  --fg-status-info-bg: #12202e;
+  --fg-status-info-border: #1d3550;
+  --fg-status-info-icon: #7fc0ff;
+  --fg-status-neutral-text: #9aa4b2;
+  --fg-status-neutral-bg: #12161c;
+  --fg-status-neutral-border: #2a313b;
+  --fg-status-neutral-icon: #9aa4b2;
+
+  --fg-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.1);
+  --fg-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.16);
+  --fg-shadow-3: 0 12px 32px rgba(0, 0, 0, 0.26);
+  --fg-shadow-4: 0 16px 48px rgba(0, 0, 0, 0.32);
+}
+
+/* ---------- DENSITY (§2.9) ---------- */
+[data-fg-density='compact'] {
+  --fg-row-h: var(--fg-row-h-compact);
+  --fg-font-body-size: 13px;
+  --fg-cell-pad-block: 8px;
+  --fg-cell-pad-inline: 12px;
+}
+
+[data-fg-density='comfortable'] {
+  --fg-row-h: var(--fg-row-h-comfortable);
+  --fg-cell-pad-block: 12px;
+  --fg-cell-pad-inline: 16px;
+}
+
+:root {
+  --fg-row-h: var(--fg-row-h-comfortable);
+  --fg-cell-pad-block: 12px;
+  --fg-cell-pad-inline: 16px;
+}
+
+/* ---------- Reduced motion (§2.7) ---------- */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --fg-motion-instant: 0ms;
+    --fg-motion-fast: 0ms;
+    --fg-motion-base: 0ms;
+    --fg-motion-slow: 0ms;
+  }
+}
+
+/* ---------- Số luôn thẳng cột theo dấu phân cách thập phân (§1.3) ---------- */
+.fg-num,
+.fg-money,
+.fg-mono {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: var(--fg-numeric);
+}
+
+.fg-mono {
+  font-family: var(--fg-font-mono);
+}
+
+/* ---------- Focus ring: 2px + offset 2, không bao giờ outline:none (§10) ---------- */
+:focus-visible {
+  outline: var(--fg-border-w-2) solid var(--fg-border-focus);
+  outline-offset: 2px;
+  border-radius: var(--fg-radius-xs);
+}
+
+/* ---------- Print (route /in/* — PDF bằng trình duyệt, arch K-12) ---------- */
+@media print {
+  :root {
+    --fg-bg-page: #fff;
+    --fg-bg-surface: #fff;
+  }
+  .fg-no-print,
+  nav,
+  header[data-fg='header'],
+  aside[data-fg='rail'] {
+    display: none !important;
+  }
+  main[data-fg='content'] {
+    padding: 0 !important;
+    max-width: none !important;
+  }
+  table {
+    break-inside: auto;
+  }
+  tr {
+    break-inside: avoid;
+  }
+}

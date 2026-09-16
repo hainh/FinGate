@@ -8,7 +8,12 @@
     "outDir": "dist",
     "rootDir": "src",
     "declaration": false,
-    "declarationMap": false
+    "declarationMap": false,
+    // src chạy trực tiếp bằng Node 24 type-stripping (`node --watch src/server.ts`),
+    // nên import tương đối ghi đuôi `.ts`; tsc rewrite về `.js` khi emit ra dist.
+    "rewriteRelativeImportExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true
   },
   "include": ["src/**/*.ts"]
 }
