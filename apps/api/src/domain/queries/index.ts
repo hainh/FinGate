@@ -24,7 +24,7 @@ import {
 } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
 import { cacheThrough } from '../../lib/cache.ts';
-import { scopedAggregate, scopedCount, withScope, type Scope } from '../../lib/mongo.ts';
+import { oid, scopedAggregate, scopedCount, withScope, type Scope } from '../../lib/mongo.ts';
 import { waitingDays } from '../calendar/index.ts';
 import type { ScopeLike } from '../types.ts';
 
@@ -347,15 +347,21 @@ export async function accountSnapshots(scope: ScopeLike, opts: { includeClosed?:
   if (!accounts.length) return [];
 
   const ids = accounts.map((a) => String(a._id));
+  // mongoose 9 aggregate $match KHÔNG cast string → ObjectId: phải tự cast (oid)
+  const oidIds = ids.map((i) => oid(i));
+  // Số dư hiện có = bản ghi cuối kỳ **tính đến hôm nay** — dòng planned ngày tương lai
+  // (seed/jobs tạo trước) không được định nghĩa số dư hiện tại.
   const latest = await scopedAggregate<{ _id: string; date: string; closing: unknown; blocked: unknown }>(
     Models.BalanceDaily,
     scopeOf(scope),
-    [{ $match: { account_id: { $in: ids as never } } }, { $sort: { date: -1 } }, { $group: { _id: '$account_id', date: { $first: '$date' }, closing: { $first: '$closing_minor' }, blocked: { $first: '$blocked_minor' } } }],
+    [{ $match: { account_id: { $in: oidIds as never }, date: { $lte: today() } } }, { $sort: { date: -1 } }, { $group: { _id: '$account_id', date: { $first: '$date' }, closing: { $first: '$closing_minor' }, blocked: { $first: '$blocked_minor' } } }],
     'company_id',
   );
   const byAccount = new Map(latest.map((l) => [String(l._id), l]));
 
-  const companies = await Models.Company.find({ _id: { $in: [...new Set(accounts.map((a) => String(a.company_id ?? '')))] } }).select({ name: 1 }).lean();
+  // TK tập đoàn có company_id = null → lọc rỗng để tránh CastError khi tra tên công ty
+  const companyIds = [...new Set(accounts.map((a) => (a.company_id ? String(a.company_id) : '')))].filter(Boolean);
+  const companies = await Models.Company.find({ _id: { $in: companyIds as never } }).select({ name: 1 }).lean();
   const cname = new Map(companies.map((c) => [String(c._id), String(c.name)]));
 
   const day = today();
@@ -556,7 +562,7 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
 
 async function budgetUsed(budgetId: string): Promise<bigint> {
   const rows = await scopedAggregate<{ total: unknown }>(Models.Document, { companyIds: null }, [
-    { $match: { 'budget.budget_id': budgetId as never, kind: 'spend', status: { $ne: 'draft' } } },
+    { $match: { 'budget.budget_id': oid(budgetId) as never, kind: 'spend', status: { $ne: 'draft' } } },
     { $group: { _id: null, total: { $sum: '$amount.minor' } } },
   ]);
   return asBigInt(rows[0]?.total ?? 0n);

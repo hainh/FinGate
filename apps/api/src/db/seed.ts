@@ -371,8 +371,8 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
     'pending.pgd': 3,
     'pending.gd': 4,
     'pending.chairman': 5,
-    approved: 99,
     processing: 99,
+    approved: 99,
     paid: 99,
     rejected: -1,
     changes_requested: 0,
@@ -490,7 +490,15 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
           order: s.order,
           role: s.role,
           user_id: approver(s.role, companyCode),
-          state: status === 'paid' || status === 'approved' ? 'done' : idx === 0 && status !== 'draft' && status !== 'changes_requested' ? 'current' : idx === 0 ? 'waiting' : 'waiting',
+          // TRƯỚC: luôn đặt step 1 'current' bất kể status → không user nào là người xử lý
+          // hiện tại hợp lệ (can.approve=false toàn bộ). Nay đồng bộ theo statusStepState như hồ sơ PLAN.
+          state: (() => {
+            const reached = statusStepState[status] ?? 0;
+            if (reached >= 99) return 'done' as const;
+            if (idx + 1 < reached) return 'done' as const;
+            if (idx + 1 === reached) return 'current' as const;
+            return 'waiting' as const;
+          })(),
           sla_deadline: new Date(Date.now() + ((i % 5) - 2) * DAY),
         })),
       },

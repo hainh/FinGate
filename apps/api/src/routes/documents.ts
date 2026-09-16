@@ -697,7 +697,9 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
   ]);
 
   const actorCompany = assignments.find((a) => String(a.company_id) === String(doc.company_id)) ?? assignments[0];
-  const steps = ((doc.approval as { steps?: { order: number; role: Role; user_id: string | null; state: string }[] }) ?? { steps: [] }).steps ?? [];
+  const rawSteps = ((doc.approval as { steps?: { order: number; role: Role; user_id: unknown; state: string }[] }) ?? { steps: [] }).steps ?? [];
+  // `.lean()` trả ObjectId cho user_id nhúng trong steps → so sánh với string luôn sai (bug can.approve).
+  const steps = rawSteps.map((s) => ({ ...s, user_id: s.user_id == null ? null : String(s.user_id) }));
   const evidence = (doc.evidence ?? { required: [], present: [], missing: [] }) as { required: string[]; present: string[]; missing: string[] };
   const amountMinor = BigInt(String((doc.amount as { minor?: unknown })?.minor ?? '0'));
   const permissions = new Set<string>();

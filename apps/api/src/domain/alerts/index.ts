@@ -161,7 +161,8 @@ export async function evaluateAlerts(): Promise<Record<string, unknown>> {
       const limit = asBigInt(b.limit_minor);
       if (limit <= 0n) continue;
       const used = await Models.Document.aggregate(
-        [{ $match: { 'budget.budget_id': String(b._id), kind: 'spend', status: { $ne: 'draft' } } }, { $group: { _id: null, total: { $sum: '$amount.minor' } } }] as never[],
+        // aggregate $match không cast string → ObjectId — giữ nguyên ObjectId từ lean()
+        [{ $match: { 'budget.budget_id': b._id as never, kind: 'spend', status: { $ne: 'draft' } } }, { $group: { _id: null, total: { $sum: '$amount.minor' } } }] as never[],
       );
       const u = asBigInt((used as { total?: unknown }[])[0]?.total ?? 0n);
       const percent = Number((u * 100n) / limit);

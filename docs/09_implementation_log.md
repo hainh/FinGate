@@ -134,3 +134,42 @@ node apps/api/dist/server.js
 5. Seed **số dư đầu ngày** vào `balances_daily` — hiện dashboard "Tiền hiện có = 0 ₫" vì seed tạo tài khoản nhưng chưa nhập số dư (đây là **thiếu data demo**, không phải lỗi API; BANK-04 hoặc thêm vào `seed.ts`).
 6. `docs/05_data_dictionary.md` + `06_er_diagram.md` + `runbook.md` + `adr/01–18` (§19.3 còn thiếu).
 7. Quyết định hạ tầng BA-0/§12.5 (A/B/C/D) trước P1.
+
+
+---
+
+## 6. Session FRONTEND (web) — P0+P1 xong, một phần P2
+
+**Đã dựng** (`apps/web/src/`) theo đúng thứ tự handoff `10_frontend_handoff.md` §4:
+
+- `app/theme.ts` — ThemeConfig antd 6 map 1-1 token sáng/tối (file duy nhất được chứa hex);
+- `app/store.tsx` — AppContext (theme/density persist localStorage + sync prefs server) + AuthContext (me/scope/entitlements) + QueryClient defaults (`refetchInterval 30s`, `keepPreviousData`, retry ở api-client);
+- `app/api.ts` — envelope + `parseProblem`, `request_id` UUID tự sinh cho mutation, header `x-company-scope`, retry GET 2×2s, cold-start >3s → "Máy chủ đang thức dậy…"; **401 FG-AUTH-008/005 (step-up) không đá về login** (phiên còn sống);
+- `components/` — FgButton/FgText/FgField/FgInput/FgSelect/FgMoneyInput/FgMoney/FgStatusChip/FgTable/FgCard/FgKpiCard/FgExceptionList/FgApprovalTimeline/FgDecisionPack/FgFilterBar(URL-state)/FgTabs/FgModal/FgDrawer/FgToast/FgErrorBoundary/FgAppShell (rail 240/72; mobile <768 còn 5 mục approval-first: Tổng quan · Chờ tôi duyệt · Cần xử lý · Đáo hạn · Dòng tiền);
+- `screens/` — AUTH-01(+2FA)/03/04 · DASH-01 5 tầng · DASH-05 · APPR-01/02/03 (bulk bar có TỔNG TIỀN qua `sum()` BigInt) · DOC-01 5 tab + action bar chứa số tiền + phím tắt Alt+D/Alt+X + ladder: confirm 7 câu hỏi (decision-pack) → step-up mật khẩu/OTP (FG-AUTH-008) → gõ lại số tiền (FG-WF-007) → 409 FG-WF-011 modal "ai vừa sửa" (không ghi đè im lặng) · CHI-01/02/03/04/07 · THU-01/02/04 · BANK-01/04 · LOAN-01 · RENEW-01/02 · DEBT-01/03 · CASH-01 (SVG + ô breach đỏ) · RPT-00 + report runner 1 khung theo `columns[].type` · DASH-03 bản tin + In · NOTI-01 · SRCH-02 · ADM-01/04/12 · PREF-01 · ERR-01/02/04.
+
+**Luật cứng giữ nguyên**: mọi tiền qua `money()/formatMoney()/parseMoneyInput()` shared; mọi status qua registry; chỉ token `--fg-*` (lint `fg/no-raw-color` đăng ký trong `eslint.config.js`, loại trừ theme.ts); mọi màn đi qua `FgQuery` (skeleton đúng hình · empty ≠ no-results · error có trace_id · 403 kèm giải thích · partial · stale).
+
+**Kiểm chứng bằng bấm thật (chrome)**: luồng vàng 1→4 đạt — đăng nhập ktt.mp → dashboard exception/KPI → hàng chờ (8 hồ sơ · 36,55 tỷ) → mở DOC-01 → confirm 7 câu hỏi → "Duyệt khoản 3,50 tỷ" → step-up mật khẩu → FG-WF-004 (thiếu chứng từ, cần lý do ≥20 ký tự) → FG-WF-007 (gõ lại 7,08 tỷ) → **approved, version+1, history ghi nhận, modal tự đóng**; chairman fast-track; director.ap đọc hồ sơ AP đúng phạm vi; rail mobile còn 5 mục; dark mode đạt tương phản token.
+
+### 6.1 Bug backend tìm ra nhờ web — đã sửa + rebuild + reseed
+
+1. `lib/serialize.ts` — `jsonSafe` nay serialize ObjectId (bson) → hex chuỗi; trước đó `source.account_id`/`steps[].user_id` trả về `{i0,i1,…}` làm UI mù id;
+2. `db/seed.ts` — 60 hồ sơ "extras" đặt step 1 `current` bất kể status → không user nào là người xử lý hợp lệ (`can.approve` false toàn hệ thống, luồng vàng chết). Nay đồng bộ `statusStepState[status]` như hồ sơ PLAN;
+3. `routes/documents.ts` + `domain/workflow/index.ts` — so `user_id` step (ObjectId từ `.lean()`) với `actor.user_id` (string) bằng `===` → không bao giờ khớp; chuẩn hoá `String()`;
+4. `domain/alerts` + `domain/queries` — `$match` aggregate không cast string→ObjectId (cùng họ bug, sửa nốt).
+
+### 6.2 Lệch còn lại — việc backend kỳ sau
+
+- email seed `giám đốc.mp@fingate.local` chứa dấu → zod `email` trả 422 — tài khoản GĐ MP KHÔNG đăng nhập được; đổi thành `director.mp@`;
+- decision-pack `q6_impact` trừ tiền cả PHIẾU THU (thu phải cộng) → "Sau giao dịch −3,5 tỷ" khi xử lý phiếu thu;
+- `documentPermissions.inScope` cho đọc mọi công ty khi có `doc:read` — chặn đọc chéo nên là FG-RBAC-002 ở route đọc;
+- queue `mine=to_approve` tính cả bước `waiting` của mình → "Chờ tôi duyệt" lẫn hồ sơ đang ở bàn khác (UI đã ẩn nút theo `can`, nhưng danh sách gây nhiễu);
+- `created_by_name` đôi khi sai người (lookup id → tên khác).
+
+### 6.3 Ghi chú build/dev
+
+- Initial gzip ≈ 381 KB (antd 312 + react 14 + app 55) — vượt nhẹ budget 350; gọt tiếp bằng cách bỏ re-export antd không dùng;
+- Vite 8 = rolldown: **không dùng `output.manualChunks` function** (tách đôi react-router → crash runtime `basename of null` ở lazy chunk). Đã chuyển sang `advancedChunks.groups` + `optimizeDeps.include`; màn reports/admin đang import tĩnh cho chắc;
+- API cache danh sách file static lúc boot → **restart api sau mỗi `vite build`**, nếu không `/assets/*` fallback về index.html (MIME sai, trắng màn);
+- `pnpm api:types` (openapi sau auth) + font Inter self-host subset + E2E playwright: chưa chạy — việc kế tiếp.

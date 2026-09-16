@@ -14,8 +14,11 @@ import type { ProblemJson } from '@fingate/shared';
 
 export function jsonSafe<T>(value: T, seen = new WeakSet<object>()): unknown {
   if (typeof value === 'bigint') return value.toString();
-  if (value instanceof Date) return value.toISOString();
   if (value === null || typeof value !== 'object') return value;
+  if (value instanceof Date) return value.toISOString();
+  // ObjectId (bson) từ `.lean()` — JSON.stringify mặc định sẽ thành {i0,i1,...}
+  if (typeof (value as unknown as { toHexString?: unknown }).toHexString === 'function')
+    return (value as unknown as { toHexString(): string }).toHexString();
   if (seen.has(value as object)) return null; // vòng lặp (mongoose) — cắt
   seen.add(value as object);
   if (Array.isArray(value)) return value.map((v) => jsonSafe(v, seen));

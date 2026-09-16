@@ -367,14 +367,14 @@ export async function transition(input: {
     if (!actor.permissions.includes('approval:act')) {
       throw new ApiError({ code: 'FG-RBAC-001', detail: 'Bạn không có quyền duyệt hồ sơ' });
     }
-    if (doc.created_by === actor.user_id) {
+    if (String(doc.created_by) === actor.user_id) {
       throw new ApiError({ code: 'FG-WF-009' });
     }
   }
   if (action === 'pay' && !actor.permissions.includes('payment:mark')) {
     throw new ApiError({ code: 'FG-RBAC-001', detail: 'Bạn không có quyền ghi nhận thanh toán' });
   }
-  if (action === 'cancel' && doc.created_by !== actor.user_id && !actor.permissions.includes('approval:override')) {
+  if (action === 'cancel' && String(doc.created_by) !== actor.user_id && !actor.permissions.includes('approval:override')) {
     throw new ApiError({ code: 'FG-RBAC-001' });
   }
 
@@ -389,7 +389,7 @@ export async function transition(input: {
   // 3. đúng người? fast-track: step của mình có thể đang `waiting`
   const myStep = isDecision
     ? steps
-        .filter((s) => s.user_id === actor.user_id && (s.state === 'current' || s.state === 'waiting'))
+        .filter((s) => s.user_id != null && String(s.user_id) === actor.user_id && (s.state === 'current' || s.state === 'waiting'))
         .sort((a, b) => a.order - b.order)[0]
     : null;
   if (isDecision && !myStep) {
@@ -649,7 +649,7 @@ export async function assertStepUp(
 
 /** Kiểm tra nhanh xem người dùng có phải đang giữ node nào không (cho entitlement per doc). */
 export function holdsStep(steps: StepRow[], userId: string): boolean {
-  return steps.some((s) => s.user_id === userId && (s.state === 'current' || s.state === 'waiting'));
+  return steps.some((s) => s.user_id != null && String(s.user_id) === userId && (s.state === 'current' || s.state === 'waiting'));
 }
 
 export function diffForAudit(before: Record<string, unknown>, after: Record<string, unknown>) {

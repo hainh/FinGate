@@ -15,3 +15,5 @@ data/
 
 # pi MCP adapter: per-project enable/disable toggles (local preference, share .mcp.json instead)
 .pi/mcp.json
+.tmpapi/
+frontend-session.log

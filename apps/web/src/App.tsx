@@ -1,35 +1,41 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+/**
+ * FinGate web — entry React (React 19 + Vite + antd 6 engine, Fg* API).
+ */
 
-function App() {
-  const [count, setCount] = useState(0)
+import { useEffect, type ReactNode } from 'react';
+import { BrowserRouter } from 'react-router';
+import { App as AntdApp } from 'antd';
+import { AppProviders } from './app/store.tsx';
+import { AppRoutes } from './routes.tsx';
+import { FgErrorBoundary } from './screens/errors.tsx';
+import { SkipLink } from './components/a11y.tsx';
 
-  return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+function ToastBridge(): ReactNode {
+  // toastOk() dispatch event → antd message (một nơi duy nhất, không static API)
+  const { message } = AntdApp.useApp();
+  useEffect(() => {
+    const h = (e: Event) => {
+      const { msg, type } = (e as CustomEvent).detail as { msg: string; type?: string };
+      if (type === 'error') message.error(msg);
+      else message.success(msg);
+    };
+    document.addEventListener('fg:toast', h);
+    return () => document.removeEventListener('fg:toast', h);
+  }, [message]);
+  return null;
 }
 
-export default App
+export default function App(): ReactNode {
+  return (
+    <BrowserRouter>
+      {/* Boundary BÊN TRONG router: fallback ServerErrorScreen chứa <Link>, đặt ngoài router sẽ crash 'basename of null' khi catch. */}
+      <FgErrorBoundary>
+        <AppProviders>
+          <ToastBridge />
+          <SkipLink />
+          <AppRoutes />
+        </AppProviders>
+      </FgErrorBoundary>
+    </BrowserRouter>
+  );
+}
