@@ -478,8 +478,45 @@ export interface PersonnelRow {
   mfa_enabled: boolean;
   last_login_at: string | null;
   invited_at: string | null;
+  /** trạng thái link kích hoạt đã ký (chỉ có nghĩa khi status = invited). */
+  invite_status: 'active' | 'expired' | 'revoked' | 'none';
+  invite_expires_at: string | null;
+  invite_regenerate_count: number;
   started_at: string | null;
   holding_docs: number;
+}
+
+/** kết quả GET/POST /personnel/:id/invite-link — admin copy link gửi tay. */
+export interface InviteLinkResult {
+  user_id: string;
+  email: string;
+  status: 'active' | 'expired' | 'revoked' | 'used' | 'none';
+  invite_url: string | null;
+  expires_at: string | null;
+  invited_at: string | null;
+  regenerate_count: number;
+  send_count: number;
+}
+
+/** thông tin lời mời cho màn /kich-hoat (public). */
+export interface InviteInfo {
+  email: string;
+  display_name: string | null;
+  company_name: string;
+  role: string;
+  role_label: string;
+  department_name: string | null;
+  invited_by_name: string | null;
+  expires_at: string;
+  mfa_required: boolean;
+}
+
+/** kết quả POST /activate — một bước, có phiên ngay. */
+export interface ActivateResult {
+  ok: boolean;
+  user_id: string;
+  /** vai trò nhóm bắt buộc 2FA → FE nhắc bật trong Cài đặt sau khi đăng nhập. */
+  mfa_suggested?: boolean;
 }
 
 export interface AuditRow {

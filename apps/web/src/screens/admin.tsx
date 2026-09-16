@@ -6,35 +6,57 @@
  * Audit log KHÔNG có nút xóa (blueprint §XIX).
  */
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   accountStatusFor,
   formatMoney,
   money,
   ddmmyyyy,
   dateTimeLabel,
+  moneyToWire,
+  type Money,
 } from '@fingate/shared';
-import { useAuditLog, useMatrix, usePersonnel } from '../app/queries.ts';
+import { useAuditLog, useCompanies, useMatrix, usePersonnel } from '../app/queries.ts';
 import { useAuth, useUi } from '../app/store.tsx';
-import { FgButton, FgMoney, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
+import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
-import { FgEmptyState, FgSkeletonTable, FgTable, FgTabs, FgTag } from '../components/uitk.tsx';
+import { FgEmptyState, FgModal, FgSkeletonTable, FgTable, FgTabs, FgTag } from '../components/uitk.tsx';
 import { FgApprovalTimeline } from '../components/finance.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
-import { FgQuery } from '../components/pagekit.tsx';
+import { FgQuery, toastOk } from '../components/pagekit.tsx';
 import { AUDIT_ACTION_LABEL, ROLES_LABEL } from '../components/labels.ts';
-import { apiCall } from '../app/api.ts';
+import { ApiRequestError, apiCall } from '../app/api.ts';
 import { DOC_KIND_LABEL } from '@fingate/shared';
+import type { InviteLinkResult, PersonnelRow } from '../app/types.ts';
 
 /* ================= ADM-01 ================= */
+
+const VALID_DAY_OPTIONS = [
+  { label: '1 ngày', value: '1' },
+  { label: '3 ngày', value: '3' },
+  { label: '7 ngày', value: '7' },
+];
 
 export function PersonnelScreen(): ReactNode {
   const { can } = useAuth();
   const query = usePersonnel(1);
   const [busy, setBusy] = useState<string | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [linkTarget, setLinkTarget] = useState<PersonnelRow | null>(null);
+  const [linkResult, setLinkResult] = useState<LinkSeed | null>(null);
   return (
     <>
-      <FgPageHeader title="Nhân sự" meta="Mời người dùng mới, đổi vai trò, ngừng hoạt động — mọi thao tác có audit" />
+      <FgPageHeader
+        title="Nhân sự"
+        meta="Tạo tài khoản, phân công ty + vai trò, cấp link kích hoạt có chữ ký (hạn 1 ngày) để gửi tay — mọi thao tác có audit"
+        actions={
+          can('hr:invite') ? (
+            <FgButton variant="primary" onClick={() => setInviteOpen(true)}>
+              + Mời nhân sự
+            </FgButton>
+          ) : null
+        }
+      />
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={6} />}>
         {(data) => (
           <div className="fg-card" style={{ padding: 0 }}>
@@ -69,7 +91,22 @@ export function PersonnelScreen(): ReactNode {
                   key: 'st',
                   render: (_v, r) => {
                     const def = accountStatusFor(r.status);
-                    return <FgTag tone={def.tone}>{`${def.glyph} ${def.labelVi}`}</FgTag>;
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <FgTag tone={def.tone}>{`${def.glyph} ${def.labelVi}`}</FgTag>
+                        {r.status === 'invited' ? (
+                          r.invite_status === 'active' ? (
+                            <FgTooltip title={`Link hết hạn ${dateTimeLabel(r.invite_expires_at ?? '')}`}>
+                              <FgTag tone="info">link còn hạn</FgTag>
+                            </FgTooltip>
+                          ) : r.invite_status === 'expired' ? (
+                            <FgTag tone="warning">link hết hạn</FgTag>
+                          ) : r.invite_status === 'revoked' ? (
+                            <FgTag tone="neutral">link đã thu hồi</FgTag>
+                          ) : null
+                        ) : null}
+                      </div>
+                    );
                   },
                 },
                 {
@@ -81,40 +118,383 @@ export function PersonnelScreen(): ReactNode {
                 {
                   title: '',
                   key: 'act',
-                  render: (_v, r) =>
-                    can('hr:disable') && r.status === 'active' ? (
-                      <FgButton
-                        size="small"
-                        variant="danger"
-                        loading={busy === r.user_id}
-                        onClick={async () => {
-                          const reason = window.prompt(`Ngừng hoạt động ${r.display_name}? Nêu lý do (bắt buộc, có audit):`);
-                          if (!reason || reason.trim().length < 5) return;
-                          if (r.holding_docs > 0) {
-                            window.alert(`${r.display_name} đang giữ ${r.holding_docs} hồ sơ chờ duyệt — phải chỉ định người thay thế (FG-HR-003). Vào hồ sơ để chuyển bàn.`);
-                            return;
-                          }
-                          setBusy(r.user_id);
-                          try {
-                            await apiCall(`/personnel/${r.user_id}/deactivate`, { method: 'POST', body: { reason } });
-                            void query.refetch();
-                          } catch (e) {
-                            window.alert((e as { problem?: { title: string } }).problem?.title ?? 'Không thực hiện được');
-                          } finally {
-                            setBusy(null);
-                          }
-                        }}
-                      >
-                        Ngừng hoạt động
-                      </FgButton>
-                    ) : null,
+                  render: (_v, r) => (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {can('hr:invite') && r.status === 'invited' ? (
+                        <FgButton size="small" onClick={() => setLinkTarget(r)}>
+                          Link kích hoạt
+                        </FgButton>
+                      ) : null}
+                      {can('hr:disable') && r.status === 'active' ? (
+                        <FgButton
+                          size="small"
+                          variant="danger"
+                          loading={busy === r.user_id}
+                          onClick={async () => {
+                            const reason = window.prompt(`Ngừng hoạt động ${r.display_name}? Nêu lý do (bắt buộc, có audit):`);
+                            if (!reason || reason.trim().length < 5) return;
+                            if (r.holding_docs > 0) {
+                              window.alert(`${r.display_name} đang giữ ${r.holding_docs} hồ sơ chờ duyệt — phải chỉ định người thay thế (FG-HR-003). Vào hồ sơ để chuyển bàn.`);
+                              return;
+                            }
+                            setBusy(r.user_id);
+                            try {
+                              await apiCall(`/personnel/${r.user_id}/deactivate`, { method: 'POST', body: { reason } });
+                              void query.refetch();
+                            } catch (e) {
+                              window.alert((e as { problem?: { title: string } }).problem?.title ?? 'Không thực hiện được');
+                            } finally {
+                              setBusy(null);
+                            }
+                          }}
+                        >
+                          Ngừng hoạt động
+                        </FgButton>
+                      ) : null}
+                    </div>
+                  ),
                 },
               ]}
             />
           </div>
         )}
       </FgQuery>
+      <InviteModal
+        open={inviteOpen}
+        onClose={() => setInviteOpen(false)}
+        onDone={(link) => {
+          setInviteOpen(false);
+          void query.refetch();
+          // mở ngay hộp link để admin copy gửi — không bắt phải tìm lại trong bảng
+          if (link) setLinkResult(link);
+        }}
+      />
+      {linkTarget ? (
+        <InviteLinkModal
+          row={linkTarget}
+          onClose={() => setLinkTarget(null)}
+          onChanged={() => void query.refetch()}
+        />
+      ) : null}
+      {linkResult ? <InviteLinkModal link={linkResult} onClose={() => setLinkResult(null)} onChanged={() => void query.refetch()} /> : null}
     </>
+  );
+}
+
+/** kết quả vừa tạo (sau mời) — hiển thị luôn để copy. */
+type LinkSeed = InviteLinkResult;
+
+function InviteLinkBanner({ link }: { link: LinkSeed }): ReactNode {
+  const [copied, setCopied] = useState(false);
+  const copy = async (): Promise<void> => {
+    if (!link.invite_url) return;
+    try {
+      await navigator.clipboard.writeText(link.invite_url);
+    } catch {
+      // fallback môi trường không có clipboard API (http nội bộ)
+      const el = document.createElement('textarea');
+      el.value = link.invite_url;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      el.remove();
+    }
+    setCopied(true);
+    toastOk('Đã copy liên kết kích hoạt');
+    setTimeout(() => setCopied(false), 2500);
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-3)' }}>
+      <FgAlert
+        tone={link.status === 'active' ? 'success' : link.status === 'used' ? 'info' : 'warning'}
+        title={
+          link.status === 'active'
+            ? `Liên kết còn hiệu lực tới ${dateTimeLabel(link.expires_at ?? '')}`
+            : link.status === 'used'
+              ? 'Tài khoản đã kích hoạt — liên kết không còn dùng được'
+              : link.status === 'expired'
+                ? 'Liên kết đã hết hạn — tạo liên kết mới'
+                : link.status === 'revoked'
+                  ? 'Liên kết đã bị thu hồi — tạo liên kết mới'
+                  : 'Chưa có liên kết'
+        }
+      />
+      <div style={{ display: 'flex', gap: 6 }}>
+        <FgInput
+          readOnly
+          value={link.invite_url ?? '(không còn liên kết để hiển thị)'}
+          style={{ fontFamily: 'var(--fg-font-mono)', fontSize: 12 }}
+          onFocus={(e: { target: { select: () => void } }) => e.target.select()}
+        />
+        <FgButton variant="primary" disabled={!link.invite_url} onClick={() => void copy()}>
+          {copied ? '✓ Đã copy' : 'Copy link'}
+        </FgButton>
+      </div>
+      <FgText style="caption" color="muted">
+        Người nhận mở liên kết sẽ tự đặt mật khẩu (tối thiểu 12 ký tự). Link mang chữ ký server, sửa bất kỳ đâu sẽ bị từ chối.
+        {link.regenerate_count > 0 ? ` Đã cấp lại ${link.regenerate_count} lần.` : ''}
+      </FgText>
+    </div>
+  );
+}
+
+/** Modal quản lý link: xem lại / copy / regenerate / revoke cho một hàng nhân sự. */
+function InviteLinkModal({
+  row,
+  link: initial,
+  onClose,
+  onChanged,
+}: {
+  row?: PersonnelRow;
+  link?: LinkSeed;
+  onClose: () => void;
+  onChanged: () => void;
+}): ReactNode {
+  const [data, setData] = useState<LinkSeed | null>(initial ?? null);
+  const [loading, setLoading] = useState(!initial);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initial || !row) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await apiCall<{ data: LinkSeed }>(`/personnel/${row.user_id}/invite-link`);
+        if (!cancelled) setData(r.data);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof ApiRequestError ? e.problem.title : 'Không tải được liên kết');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [row, initial]);
+
+  const regenerate = async (): Promise<void> => {
+    if (!row && !data) return;
+    setBusy('regen');
+    setError(null);
+    try {
+      const r = await apiCall<{ data: LinkSeed }>(`/personnel/${data?.user_id ?? row?.user_id}/invite-link`, { method: 'POST', body: { valid_days: 1 } });
+      setData(r.data);
+      onChanged();
+      toastOk('Đã tạo liên kết mới — liên kết cũ không còn hiệu lực');
+    } catch (e) {
+      setError(e instanceof ApiRequestError ? `${e.problem.title}${e.problem.detail ? ` — ${e.problem.detail}` : ''}` : 'Không tạo được liên kết');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const revoke = async (): Promise<void> => {
+    if (!data || !window.confirm('Thu hồi liên kết? Người nhận sẽ không dùng liên kết cũ được nữa.')) return;
+    setBusy('revoke');
+    setError(null);
+    try {
+      const r = await apiCall<{ data: LinkSeed }>(`/personnel/${data.user_id}/invite-link`, { method: 'DELETE' });
+      setData(r.data);
+      onChanged();
+      toastOk('Đã thu hồi liên kết');
+    } catch (e) {
+      setError(e instanceof ApiRequestError ? e.problem.title : 'Không thu hồi được');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const target = row?.display_name || row?.email || data?.email || '';
+  return (
+    <FgModal
+      open
+      title={`Liên kết kích hoạt · ${target}`}
+      onCancel={onClose}
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <FgButton loading={busy === 'regen'} onClick={() => void regenerate()} disabled={!data || data.status === 'used'}>
+              Tạo link mới (vô hiệu link cũ)
+            </FgButton>
+            <FgButton
+              variant="danger"
+              loading={busy === 'revoke'}
+              disabled={!data || data.status !== 'active'}
+              onClick={() => void revoke()}
+            >
+              Thu hồi link
+            </FgButton>
+          </div>
+          <FgButton onClick={onClose}>Đóng</FgButton>
+        </div>
+      }
+    >
+      {loading ? <FgText color="muted">Đang tải liên kết…</FgText> : null}
+      {error ? <FgAlert tone="danger" title={error} /> : null}
+      {data ? <InviteLinkBanner link={data} /> : null}
+    </FgModal>
+  );
+}
+
+/** Modal tạo tài khoản: email + công ty + vai trò + hạn mức → trả link ký để copy. */
+function InviteModal({
+  open,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onDone: (link: LinkSeed | null) => void;
+}): ReactNode {
+  const { me, can } = useAuth();
+  const companies = useCompanies();
+  const [email, setEmail] = useState('');
+  const [companyId, setCompanyId] = useState<string | undefined>(me?.scope.active_company_id ?? undefined);
+  const [role, setRole] = useState<string>('staff');
+  const [deptId, setDeptId] = useState<string | undefined>(undefined);
+  const [limit, setLimit] = useState<Money | null>(null);
+  const [validDays, setValidDays] = useState('1');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [depts, setDepts] = useState<{ _id: string; name: string }[]>([]);
+
+  const lockedToOwnCompany = !me?.scope.all;
+  useEffect(() => {
+    if (lockedToOwnCompany && me?.scope.active_company_id) setCompanyId(me.scope.active_company_id);
+  }, [lockedToOwnCompany, me?.scope.active_company_id]);
+
+  useEffect(() => {
+    if (!open || !companyId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await apiCall<{ items: { _id: string; name: string; company_id: string }[] }>('/departments', { query: { company_id: companyId } });
+        if (!cancelled) setDepts(r.items.filter((d) => String(d.company_id) === companyId).map((d) => ({ _id: d._id, name: d.name })));
+      } catch {
+        if (!cancelled) setDepts([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, companyId]);
+
+  const companyOptions = useMemo(
+    () => (companies.data?.items ?? []).map((c) => ({ label: c.name, value: c._id })),
+    [companies.data],
+  );
+
+  const submit = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    setFieldErrors({});
+    try {
+      const r = await apiCall<{ data: LinkSeed }>('/personnel/invite', {
+        method: 'POST',
+        body: {
+          email: email.trim(),
+          company_id: companyId,
+          role,
+          department_id: deptId ?? null,
+          amount_limit_minor: limit ? moneyToWire(limit).minor : undefined,
+          valid_days: Number(validDays),
+        },
+      });
+      onDone(r.data);
+    } catch (e) {
+      if (e instanceof ApiRequestError) {
+        const d = e.problem.data as Partial<LinkSeed> | undefined;
+        if (e.problem.code === 'FG-HR-001' && d?.user_id) {
+          // email đang chờ — mở hộp link của tài khoản cũ để admin copy/regenerate
+          setError(null);
+          onDone({
+            user_id: String(d.user_id),
+            email: email.trim(),
+            status: d.invite_url ? 'active' : 'expired',
+            invite_url: (d.invite_url as string | null) ?? null,
+            expires_at: (d.expires_at as string | null) ?? null,
+            invited_at: null,
+            regenerate_count: 0,
+            send_count: 0,
+          });
+          return;
+        }
+        setError(e.problem.detail ?? e.problem.title);
+        setFieldErrors(e.problem.errors ?? {});
+      } else setError('Không tạo được tài khoản mời');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <FgModal
+      open={open}
+      title="Mời nhân sự mới"
+      onCancel={onClose}
+      onOk={() => void submit()}
+      okText="Tạo tài khoản + link"
+      confirmLoading={busy}
+      width={520}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)', paddingTop: 8 }}>
+        <FgText style="bodyS" color="muted">
+          Hệ thống KHÔNG gửi email. Sau khi tạo, bạn nhận về một liên kết có chữ ký (mặc định còn hiệu lực 1 ngày) để tự gửi cho người qua Zalo/email nội bộ.
+        </FgText>
+        <FgField label="Email người được mời" required error={fieldErrors.email ?? null}>
+          <FgInput type="email" value={email} onChange={(e: { target: { value: string } }) => setEmail(e.target.value)} placeholder="ban@congty.vn" />
+        </FgField>
+        <FgField label="Công ty" required error={fieldErrors.company_id ?? null}>
+          <FgSelect
+            options={companyOptions}
+            value={companyId}
+            onChange={setCompanyId}
+            placeholder="Chọn công ty"
+            disabled={lockedToOwnCompany}
+            style={{ width: '100%' }}
+          />
+          {lockedToOwnCompany ? (
+            <FgText style="caption" color="muted">
+              Bạn chỉ mời được nhân sự cho công ty của mình
+            </FgText>
+          ) : null}
+        </FgField>
+        <FgField label="Vai trò (phân quyền)" required>
+          <FgSelect
+            options={Object.entries(ROLES_LABEL).map(([value, label]) => ({ label, value }))}
+            value={role}
+            onChange={(v) => setRole(v ?? 'staff')}
+            style={{ width: '100%' }}
+          />
+          {['chief_accountant', 'deputy_director', 'director', 'chairman', 'admin'].includes(role) ? (
+            <FgText style="caption" color="muted">
+              Vai trò này thuộc nhóm bắt buộc 2FA — người nhận tự bật Xác thực 2 lớp trong Cài đặt sau khi kích hoạt.
+            </FgText>
+          ) : null}
+        </FgField>
+        <FgField label="Bộ phận (tùy chọn)">
+          <FgSelect
+            options={depts.map((d) => ({ label: d.name, value: d._id }))}
+            value={deptId}
+            onChange={setDeptId}
+            placeholder={companyId ? 'Chọn bộ phận' : 'Chọn công ty trước'}
+            allowClear
+            disabled={!companyId}
+            style={{ width: '100%' }}
+          />
+        </FgField>
+        <FgField label="Hạn mức duyệt (VND, tùy chọn)">
+          <FgMoneyInput value={limit} onChange={setLimit} ariaLabel="Hạn mức duyệt" />
+        </FgField>
+        <FgField label="Link có hiệu lực trong">
+          <FgSelect options={VALID_DAY_OPTIONS} value={validDays} onChange={(v) => setValidDays(v ?? '1')} style={{ width: 160 }} />
+        </FgField>
+        {!can('hr:invite') ? <FgAlert tone="warning" title="Bạn không có quyền mời nhân sự" /> : null}
+        {error ? <FgAlert tone="danger" title={error} /> : null}
+      </div>
+    </FgModal>
   );
 }
 

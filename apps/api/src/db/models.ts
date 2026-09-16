@@ -132,11 +132,19 @@ export const UserSchema = new Schema(
     recovery_codes: { type: [{ hash: String, used_at: { type: Date, default: null } }], default: [] },
     mfa_required: { type: Boolean, default: false },
     invite: {
-      token_hash: { type: String, default: null },
+      /**
+       * Link mời là token TỰ CHỨA CÓ CHỮ KÝ HMAC (lib/invite.ts) — admin copy gửi,
+       * không cần SMTP. DB chỉ giữ seed đối chiếu: regenerate đổi seed ⇒ mọi link
+       * cũ chết ngay; revoke xoá seed ⇒ link chết. Seed chỉ tồn tại khi `invited`.
+       */
+      seed: { type: String, default: null },
       expires_at: { type: Date, default: null },
       invited_by: { type: Schema.Types.ObjectId, default: null },
       sent_at: { type: Date, default: null },
       send_count: { type: Number, default: 0 },
+      /** số lần cấp lại link (audit: mỗi lần làm link cũ hết hiệu lực) */
+      regenerate_count: { type: Number, default: 0 },
+      revoked_at: { type: Date, default: null },
       company_id: { type: Schema.Types.ObjectId, default: null },
       role: { type: String, default: null },
       department_id: { type: Schema.Types.ObjectId, default: null },

@@ -49,11 +49,10 @@ export const resetPasswordBody = z.object({
 });
 
 export const activateBody = z.object({
-  token: z.string().min(10).max(200),
+  /** token ký trong link mời. */
+  token: z.string().min(10).max(600),
   password,
   display_name: z.string().min(2).max(120),
-  /** người dùng xác nhận đã bật 2FA — server verify code trước khi active. */
-  totp_code: z.string().regex(/^\d{6}$/).optional(),
 });
 
 export const totpEnableResult = z.object({
@@ -116,8 +115,10 @@ export const personnelInviteBody = z
     department_id: objectId.nullable().optional(),
     amount_limit_minor: z.string().regex(/^\d+$/).optional(),
     note: z.string().max(500).optional(),
-    /** số ngày link có hiệu lực, mặc định 7 (blueprint §XXIX.2). */
-    valid_days: z.number().int().min(1).max(30).default(7),
+    /** số ngày link có hiệu lực — mặc định 1 ngày (admin tự copy link gửi, không qua mail). */
+    valid_days: z.number().int().min(1).max(30).default(1),
+    /** true = gửi email kèm (SMTP cấu hình); mặc định false: admin copy link ký sẵn gửi tay. */
+    send_email: z.boolean().default(false),
     request_id: uuid,
   })
   .superRefine((v, ctx) => {
@@ -125,6 +126,57 @@ export const personnelInviteBody = z
       ctx.addIssue({ code: 'custom', path: ['company_id'], message: 'Phải chọn công ty trực thuộc' });
     }
   });
+
+/**
+ * Kết quả cấp lại link mời — ADM-01. Token tự chứa chữ ký HMAC nên server
+ * ký lại được từ (user, seed, expires_at) — link trả về LUÔN giống bản đã gửi
+ * chừng nào chưa regenerate/revoke. `status`:
+ *   active = còn hiệu lực · expired = hết hạn · revoked = admin thu hồi
+ *   used   = tài khoản đã kích hoạt · none = chưa có link
+ */
+export const inviteLinkResult = z.object({
+  user_id: objectId,
+  email: z.string(),
+  /** link tuyệt đối {PUBLIC_URL}/kich-hoat?token=… — null khi used/revoked/none. */
+  invite_url: z.string().nullable(),
+  status: z.enum(['active', 'expired', 'revoked', 'used', 'none']),
+  expires_at: z.string().nullable(),
+  invited_at: z.string().nullable(),
+  regenerate_count: z.number().int().default(0),
+  send_count: z.number().int().default(0),
+});
+
+/** body regenerate / đổi hạn link. */
+export const inviteRegenerateBody = z
+  .object({
+    valid_days: z.number().int().min(1).max(30).default(1),
+    /** true = gửi email kèm link mới (khi có SMTP). */
+    send_email: z.boolean().default(false),
+    request_id: uuid,
+  })
+  .passthrough();
+
+/** Thông tin lời mời hiển thị trên màn kích hoạt (public — đọc từ link đã ký). */
+export const inviteInfoResult = z.object({
+  email: z.string(),
+  display_name: z.string().nullable(),
+  company_name: z.string(),
+  role: idString,
+  role_label: z.string(),
+  department_name: z.string().nullable(),
+  invited_by_name: z.string().nullable(),
+  expires_at: z.string(),
+  /** vai trò bắt buộc 2FA → màn kích hoạt sẽ có bước quét QR + nhập OTP. */
+  mfa_required: z.boolean(),
+});
+
+/** kết quả /activate — một bước: đặt mật khẩu là vào hệ thống. */
+export const activateResult = z.object({
+  ok: z.boolean(),
+  user_id: z.string(),
+  /** vai trò nằm trong nhóm bắt buộc 2FA → FE nhắc bật trong Cài đặt sau khi đăng nhập. */
+  mfa_suggested: z.boolean().default(false),
+});
 
 export const personnelListQuery = z.object({
   company_id: objectId.optional(),
@@ -152,6 +204,10 @@ export const personnelRow = z.object({
   mfa_enabled: z.boolean(),
   last_login_at: z.string().nullable(),
   invited_at: z.string().nullable(),
+  /** trạng thái link mời hiện tại (chỉ có nghĩa với tài khoản `invited`). */
+  invite_status: z.enum(['active', 'expired', 'revoked', 'none']).default('none'),
+  invite_expires_at: z.string().nullable(),
+  invite_regenerate_count: z.number().int().default(0),
   started_at: businessDate.nullable(),
   /** số hồ sơ người này đang giữ ở bước current — quyết định có phải chỉ định người thay (§XXIX.4). */
   holding_docs: z.number().int().default(0),

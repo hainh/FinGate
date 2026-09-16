@@ -87,7 +87,7 @@ Rail cấp 2 collapse được; `Chờ tôi duyệt` luôn có `FgBadgeCount`. N
 | AUTH-02 | Xác thực 2 lớp (OTP/PIN) | `/dang-nhap/2fa` | KTT, PGĐ, GĐ, QT | `FgInput` (otp, `inputmode=numeric`, tự fill 1 dòng), resend cooldown 30s | sai, hết hiệu lực, khóa phiên | P4 | D/M |
 | AUTH-03 | Quên mật khẩu | `/mat-khau/quen` | tất cả | `FgField` `FgButton` | gửi thành công (luôn trả cùng thông điệp, chống dò email) | P1 | D/M |
 | AUTH-04 | Đặt lại mật khẩu | `/mat-khau/dat-lai` | tất cả | `FgField` + strength meter (attention/danger) | link hết hạn, yếu, không khớp | P1 | D/M |
-| AUTH-05 | Kích hoạt tài khoản (mời) | `/kich-hoat` | QT, nhân sự mới | form đặt mật khẩu + đổi thông tin bắt buộc | token hết hạn, đã dùng | P2 | D/M |
+| AUTH-05 | Kích hoạt tài khoản (link mời có chữ ký, hạn 1 ngày — admin copy gửi, không cần SMTP) | `/kich-hoat` | QT, nhân sự mới | form họ tên + đặt mật khẩu (một bước; vai trò nhóm 2FA được nhắc bật trong PREF-01 sau đăng nhập) | token hết hạn/sai chữ ký/đã thu hồi/đã dùng (FG-AUTH-009) | P2 | D/M |
 | AUTH-06 | Hết phiên — mở khóa | `/hoa` (khóa màn hình, không có route lịch sử) | tất cả | overlay full, hiện `đang giữ hồ sơ dở` + nút khôi phục | idle timeout (§XXVI), giữ bản nháp form | P2 | D/M |
 
 **Bắt buộc mọi màn A:** không log mật khẩu/OTP, `FgText` không hiển thị email đầy đủ của người khác, có link "Không phải bạn? — Đăng xuất".
@@ -269,7 +269,7 @@ Mọi màn L: số liệu qua `@fingate/ui/format` (cùng hàm với Excel §4.2
 
 | ID | Màn hình | Route | Vai trò | Component | St | Ph | Nền |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| ADM-01 | Người dùng | `/quantri/nguoidung` | QT | `FgTable` (tên, email, vai trò, công ty, trạng thái, đăng nhập cuối) + mời/khóa/reset | bị khóa, chưa kích hoạt | P2 | D |
+| ADM-01 | Người dùng | `/quantri/nguoidung` | QT | `FgTable` (tên, email, vai trò, công ty, trạng thái + nhãn link mời, đăng nhập cuối) + tạo tài khoản mới (email/công ty/vai trò/bộ phận/hạn mức) → nhận **link kích hoạt có chữ ký, hạn 1 ngày** để copy gửi tay; xem lại/copy lại link, **regenerate** (vô hiệu link cũ tức thì), **thu hồi link**; khóa/reset | bị khóa, chưa kích hoạt, link hết hạn/thu hồi | P2 | D |
 | ADM-02 | Tạo / sửa người dùng | `/quantri/nguoidung/moi` | QT | form + `FgRolePicker` + `FgCompanyPicker` (phân quyền theo công ty) | email trùng, thiếu vai trò | P2 | D |
 | ADM-03 | Vai trò & phân quyền (RBAC) | `/quantri/vai-tro` | QT | ma trận vai trò × quyền (§III), `FgSwitch` per quyền, ghi chú "không cho tự duyệt hồ sơ mình tạo" | quyền xung đột, vai trò đang dùng không xóa được | P2 | D |
 | ADM-04 | **Approval Matrix** | `/quantri/quy-trinh-duyet` | QT, TGĐ | bảng ngưỡng tiền → chuỗi cấp (§XX), **cấu hình được, không hard-code**, editor theo dải + preview `FgApprovalTimeline` cho từng khoảng | preview chưa lưu, thay đổi có audit, va chạm ngưỡng | **P2** | D |

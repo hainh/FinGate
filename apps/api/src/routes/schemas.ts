@@ -34,6 +34,7 @@ import {
   opinionBody,
   personnelDeactivateBody,
   personnelInviteBody,
+  inviteRegenerateBody,
   personnelTransferBody,
   prefsUpdateBody,
   recurringUpsertBody,
@@ -85,6 +86,7 @@ export const auditLogQuerySchema = j(auditLogQuery);
 
 // nhân sự
 export const personnelInviteBodySchema = j(personnelInviteBody);
+export const inviteRegenerateBodySchema = j(inviteRegenerateBody);
 export const personnelDeactivateBodySchema = j(personnelDeactivateBody);
 export const personnelTransferBodySchema = j(personnelTransferBody);
 export const delegationBodySchema = j(delegationBody);

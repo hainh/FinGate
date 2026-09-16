@@ -34,6 +34,7 @@ import {
 import { generateRecoveryCodes, hashToken, hashPassword, randomToken, verifyPassword } from '../lib/password.ts';
 import { decryptField, encryptField } from '../lib/crypto.ts';
 import { newTotpSecret, otpauthUrl, verifyTotp } from '../lib/totp.ts';
+import { inviteLinkStatus, seedMatches, verifyInviteToken, type InviteShape } from '../lib/invite.ts';
 import { mirrorAudit } from '../domain/audit/index.ts';
 import { resolveIdentity } from '../domain/entitlement/index.ts';
 import { mailTemplates, sendMail } from '../mail/sender.ts';
@@ -261,84 +262,86 @@ export function authRoutes(app: FastifyInstance): void {
     }),
   );
 
-  /** AUTH-05 — kích hoạt tài khoản từ email mời → tự gắn đúng công ty + chức danh (§XXIX.3). */
+  /**
+   * AUTH-05 (public) — xác minh chữ ký link và trả thông tin lời mời để màn
+   * kích hoạt hiển thị "bạn được mời vào công ty X, chức danh Y" trước khi đặt mật khẩu.
+   */
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/activate/info',
+      config: { perms: 'public', screen: 'AUTH-05', summary: 'Thông tin lời mời (theo link ký)' },
+      handler: async (req) => {
+        const token = (req.query as { token?: string } | undefined)?.token ?? '';
+        const payload = verifyInviteToken(token); // sai chữ ký/hết hạn → FG-AUTH-009
+        const user = await Models.User.findById(payload.user_id)
+          .select({ email: 1, display_name: 1, status: 1, invite: 1 })
+          .lean<{ _id: unknown; email: string; display_name?: string | null; status: string; invite?: InviteShape } | null>();
+        if (!user || !seedMatches(user.invite?.seed, payload.seed)) throw new ApiError({ code: 'FG-AUTH-009' });
+        if (user.status !== 'invited') throw new ApiError({ code: 'FG-AUTH-009', detail: 'Tài khoản đã được kích hoạt' });
+
+        const inv = user.invite ?? {};
+        const company = inv.company_id ? await Models.Company.findById(inv.company_id).select({ name: 1 }).lean() : null;
+        const dept = inv.department_id ? await Models.Department.findById(inv.department_id).select({ name: 1 }).lean() : null;
+        const inviter = inv.invited_by ? await Models.User.findById(inv.invited_by).select({ display_name: 1, email: 1 }).lean() : null;
+        const role = (inv.role ?? 'staff') as Role;
+        return {
+          data: {
+            email: String(user.email),
+            display_name: user.display_name ?? null,
+            company_name: String(company?.name ?? ''),
+            role,
+            role_label: ROLE_LABEL[role] ?? role,
+            department_name: dept ? String(dept.name) : null,
+            invited_by_name: inviter ? String(inviter.display_name ?? inviter.email) : null,
+            expires_at: payload.exp ? new Date(payload.exp).toISOString() : new Date().toISOString(),
+            mfa_required: MFA_REQUIRED_ROLES.includes(role),
+          },
+        };
+      },
+    }),
+  );
+
+  /**
+   * AUTH-05 — người nhận link ĐẶT MẬT KHẨU + họ tên → kích hoạt (một bước).
+   * Công ty/chức danh đã gắn sẵn từ lúc mời (§XXIX.3) — link chỉ để chứng minh
+   * "đúng người được admin cấp" và để giao mật khẩu.
+   * Vai trò bắt buộc 2FA: người dùng tự bật trong Cài đặt (PREF-01) sau khi đăng nhập.
+   */
   app.route(
     defineRoute({
       method: 'POST',
       url: '/activate',
-      config: { perms: 'public', screen: 'AUTH-05', summary: 'Kích hoạt tài khoản (mời)' },
+      config: { perms: 'public', screen: 'AUTH-05', summary: 'Kích hoạt tài khoản (đặt mật khẩu)' },
       schema: { tags: ['auth'], body: activateBodySchema },
       handler: async (req, reply) => {
         const body = validate(activateBody, req.body);
-        const hash = hashToken(body.token);
-        const user = await Models.User.findOne({ 'invite.token_hash': hash, 'invite.expires_at': { $gt: new Date() } }).lean();
-        if (!user) throw new ApiError({ code: 'FG-AUTH-009' });
+
+        const payload = verifyInviteToken(body.token);
+        const user = await Models.User.findById(payload.user_id).lean();
+        const inv = (user as { invite?: InviteShape } | null)?.invite;
+        if (!user || !seedMatches(inv?.seed, payload.seed)) throw new ApiError({ code: 'FG-AUTH-009' });
+        if (inviteLinkStatus(String(user.status), inv) !== 'active') throw new ApiError({ code: 'FG-AUTH-009' });
         if (user.status === 'active') throw new ApiError({ code: 'FG-HR-001', detail: 'Tài khoản đã được kích hoạt' });
+        if (user.status === 'deactivated') throw new ApiError({ code: 'FG-AUTH-004' });
 
         const pw = await hashPassword(body.password);
-        const inv = user.invite as { company_id?: unknown; role?: string; department_id?: unknown } | undefined;
-        const totpSecret = inv?.role && MFA_REQUIRED_ROLES.includes(inv.role as Role) ? newTotpSecret() : null;
-
+        const role = (inv?.role ?? 'staff') as Role;
         await Models.User.updateOne(
           { _id: user._id },
           {
             $set: {
               display_name: body.display_name,
               password: pw,
-              status: 'active',
-              mfa_required: inv?.role ? MFA_REQUIRED_ROLES.includes(inv.role as Role) : false,
-              totp: totpSecret ? { enabled: true, secret_enc: encryptField(totpSecret) } : user.totp,
-              invite: null,
+              mfa_required: MFA_REQUIRED_ROLES.includes(role),
               updated_at: new Date(),
             },
           },
         ).exec();
 
-        if (inv?.company_id) {
-          const existing = await Models.Assignment.findOne({ user_id: user._id, company_id: inv.company_id }).lean();
-          if (!existing) {
-            await Models.Assignment.create({
-              user_id: user._id,
-              company_id: inv.company_id,
-              department_id: inv.department_id ?? null,
-              role: inv.role ?? 'staff',
-              amount_limit_minor: 0n,
-            } as never);
-          }
-        }
-
-        // báo cho người mời (§XXIX.3)
-        if (inv) {
-          const inviterId = String((user as { invite?: { invited_by?: unknown } }).invite?.invited_by ?? '');
-          const inviter = inviterId ? await Models.User.findById(inviterId).select({ email: 1 }).lean() : null;
-          if (inviter) {
-            void sendMail({
-              to: String(inviter.email),
-              subject: `${body.display_name} đã kích hoạt tài khoản`,
-              html: `<p>${body.display_name} đã hoàn tất kích hoạt và vào đúng công ty được chỉ định.</p>`,
-            });
-          }
-        }
-
-        await mirrorAudit({
-          at: new Date(),
-          actor: { user_id: String(user._id), name: body.display_name, role: inv?.role ?? null },
-          action: 'hr.activate',
-          subject: { type: 'user', id: String(user._id), code: String(user.email) },
-          company_id: inv?.company_id ? String(inv.company_id) : null,
-          ip: requestCtx(req).ip,
-        });
-
-        const scopeIds = inv?.company_id ? [String(inv.company_id)] : [];
-        const { raw } = await createSession({
-          user_id: String(user._id),
-          company_scope: scopeIds,
-          active_company_id: scopeIds[0] ?? null,
-          ip: requestCtx(req).ip,
-          ua: requestCtx(req).ua,
-        });
-        reply.header('set-cookie', cookieHeader(raw));
-        return { data: { ok: true, totp_setup: totpSecret ? { secret: totpSecret, otpauth_url: otpauthUrl({ secret: totpSecret, account: String(user.email) }) } : null } };
+        const done = await finishActivation(user, { ip: requestCtx(req).ip, ua: requestCtx(req).ua });
+        reply.header('set-cookie', cookieHeader(done.raw));
+        return { data: { ok: true, user_id: done.user_id, mfa_suggested: MFA_REQUIRED_ROLES.includes(role) } };
       },
     }),
   );
@@ -589,4 +592,69 @@ function pickActive(activeCompanyId: unknown, scopeIds: string[]): string | null
   const pref = activeCompanyId ? String(activeCompanyId) : null;
   if (pref && scopeIds.includes(pref)) return pref;
   return scopeIds[0] ?? null;
+}
+
+/**
+ * Bước cuối kích hoạt: status=active, xoá link (seed null ⇒ mọi link cũ chết),
+ * báo người mời, mở phiên. Assignment đã tạo từ lúc mời — không tạo lại (§XXIX.3).
+ */
+async function finishActivation(
+  user: { _id: unknown; email: unknown; display_name?: string | null; invite?: InviteShape | null },
+  ctx: { ip: string | null; ua: string | null },
+): Promise<{ raw: string; user_id: string }> {
+  const inv = user.invite ?? {};
+  const role = (inv.role ?? 'staff') as Role;
+  const displayName = String(user.display_name ?? String(user.email).split('@')[0]);
+
+  const set: Record<string, unknown> = {
+    status: 'active',
+    invite: null,
+    updated_at: new Date(),
+  };
+  await Models.User.updateOne({ _id: user._id }, { $set: set }).exec();
+
+  // bảo đảm Assignment đúng cấu hình mời (phòng user bị xoá assignment giữa chừng)
+  if (inv.company_id) {
+    const existing = await Models.Assignment.findOne({ user_id: user._id, company_id: inv.company_id } as never).lean();
+    if (!existing) {
+      await Models.Assignment.create({
+        user_id: user._id,
+        company_id: inv.company_id,
+        department_id: inv.department_id ?? null,
+        role,
+        amount_limit_minor: 0n,
+      } as never);
+    }
+  }
+
+  // báo cho người mời (§XXIX.3) — best-effort, không chặn luồng
+  const inviterId = inv.invited_by ? String(inv.invited_by) : '';
+  const inviter = inviterId ? await Models.User.findById(inviterId).select({ email: 1 }).lean() : null;
+  if (inviter) {
+    void sendMail({
+      to: String(inviter.email),
+      subject: `${displayName} đã kích hoạt tài khoản`,
+      html: `<p>${displayName} (${String(user.email)}) đã hoàn tất đặt mật khẩu và vào đúng công ty được chỉ định.</p>`,
+    });
+  }
+
+  await mirrorAudit({
+    at: new Date(),
+    actor: { user_id: String(user._id), name: displayName, role },
+    action: 'hr.activate',
+    subject: { type: 'user', id: String(user._id), code: String(user.email) },
+    company_id: inv.company_id ? String(inv.company_id) : null,
+    ip: ctx.ip,
+    ua: ctx.ua,
+  });
+
+  const scopeIds = inv.company_id ? [String(inv.company_id)] : [];
+  const { raw } = await createSession({
+    user_id: String(user._id),
+    company_scope: scopeIds,
+    active_company_id: scopeIds[0] ?? null,
+    ip: ctx.ip,
+    ua: ctx.ua,
+  });
+  return { raw, user_id: String(user._id) };
 }

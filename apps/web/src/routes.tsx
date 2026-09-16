@@ -7,7 +7,7 @@ import { useEffect, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router';
 import { useAuth } from './app/store.tsx';
 import { FgAppShell } from './components/shell.tsx';
-import { LoginScreen, ForgotPasswordScreen, ResetPasswordScreen } from './screens/auth.tsx';
+import { ActivateScreen, LoginScreen, ForgotPasswordScreen, ResetPasswordScreen } from './screens/auth.tsx';
 import { DashboardScreen } from './screens/dashboard.tsx';
 import {
   ApprovalQueueScreen,
@@ -39,7 +39,7 @@ function Guard({ children }: { children: ReactNode }): ReactNode {
   const { status } = useAuth();
   const location = useLocation();
   useEffect(() => {
-    if (status === 'anon' && !location.pathname.startsWith('/dang-nhap')) {
+    if (status === 'anon' && !location.pathname.startsWith('/dang-nhap') && !location.pathname.startsWith('/kich-hoat') && !location.pathname.startsWith('/mat-khau')) {
       sessionStorage.setItem('fg.returnTo', location.pathname + location.search);
     }
   }, [status, location.pathname, location.search]);
@@ -66,6 +66,7 @@ export function AppRoutes(): ReactNode {
   return (
     <Routes key={location.pathname}>
       <Route path="/dang-nhap" element={<LoginScreen />} />
+      <Route path="/kich-hoat" element={<ActivateScreen />} /> {/* AUTH-05 — mở công khai, vào bằng link ký */}
       <Route path="/mat-khau/quen" element={<ForgotPasswordScreen />} />
       <Route path="/mat-khau/dat-lai" element={<ResetPasswordScreen />} />
       <Route path="/403" element={<ForbiddenScreen />} />
