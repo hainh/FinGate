@@ -132,6 +132,10 @@ export async function apiCall<T = unknown>(path: string, opts: ApiOptions = {}):
       });
     }
 
+    // Server đã trả lời (bất kỳ status nào, kể cả 401 của /me lúc anon) → không còn "đang thức dậy".
+    // Đặt ở đây thay vì chỉ nhánh res.ok để banner cold-start không kẹt trên màn đăng nhập.
+    if (isGet) coldStart.set(false);
+
     if (res.status === 401) {
       const problem = parseProblem(401, await res.json().catch(() => null));
       // FG-AUTH-008/005 = phiên CÒN sống, chỉ cần xác thực lại (step-up) → KHÔNG đá về login
@@ -154,8 +158,6 @@ export async function apiCall<T = unknown>(path: string, opts: ApiOptions = {}):
       }
       throw new ApiRequestError(problem);
     }
-
-    if (isGet) coldStart.set(false);
 
     if (opts.raw) return res as unknown as T;
     const ct = res.headers.get('content-type') ?? '';
