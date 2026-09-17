@@ -13,7 +13,7 @@ import { apiCall } from '../app/api.ts';
 import { useAuth } from '../app/store.tsx';
 import { FgButton, FgField, FgInput, FgMoney, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
-import { FgEmptyState, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
+import { FgEmptyState, FgSegmented, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useToast } from '../components/pagekit.tsx';
 import type { BankAccountRow } from '../app/types.ts';
@@ -21,22 +21,37 @@ import type { BankAccountRow } from '../app/types.ts';
 export function BankAccountsScreen(): ReactNode {
   const query = useBankAccounts();
   const { can } = useAuth();
+  const [kindFilter, setKindFilter] = useState<'all' | 'cash' | 'bank'>('all');
   return (
     <>
       <FgPageHeader
-        title="Tài khoản ngân hàng"
+        title="Tài khoản tiền"
+        meta="Quản lý tài khoản tiền mặt và tài khoản ngân hàng — của công ty và Tập đoàn"
         actions={
           can('bank:write') ? (
             <FgTooltipNew />
           ) : undefined
         }
       />
-      <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={6} />}>
-        {(data) => (
+      <div style={{ marginBottom: 'var(--fg-space-3)' }}>
+        <FgSegmented
+          value={kindFilter}
+          onChange={(v) => setKindFilter(v as 'all' | 'cash' | 'bank')}
+          options={[
+            { label: 'Tất cả', value: 'all' },
+            { label: 'Tiền mặt', value: 'cash' },
+            { label: 'Ngân hàng', value: 'bank' },
+          ]}
+        />
+      </div>
+      <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={7} />}>
+        {(data) => {
+          const items = kindFilter === 'all' ? data.items : data.items.filter((a) => a.kind === kindFilter);
+          return (
           <div className="fg-card" style={{ padding: 0 }}>
             <FgTable<BankAccountRow>
               rowKey="_id"
-              dataSource={data.items}
+              dataSource={items}
               columns={[
                 {
                   title: 'Tài khoản',
@@ -51,7 +66,22 @@ export function BankAccountsScreen(): ReactNode {
                     </div>
                   ),
                 },
-                { title: 'Số TK', dataIndex: 'account_number_masked', key: 'num', render: (v: string) => <span className="fg-mono">{v}</span> },
+                {
+                  title: 'Hình thức',
+                  key: 'kind',
+                  width: 110,
+                  render: (_v, r) =>
+                    r.kind === 'cash' ? (
+                      <span className="fg-chip" style={{ borderColor: 'var(--fg-status-attention-border)', color: 'var(--fg-status-attention-text)', background: 'var(--fg-status-attention-bg)' }}>
+                        Tiền mặt
+                      </span>
+                    ) : (
+                      <span className="fg-chip" style={{ borderColor: 'var(--fg-status-neutral-border)', color: 'var(--fg-status-neutral-text)' }}>
+                        Ngân hàng
+                      </span>
+                    ),
+                },
+                { title: 'Số TK / Mã quỹ', dataIndex: 'account_number_masked', key: 'num', render: (v: string) => <span className="fg-mono">{v}</span> },
                 { title: 'Loại tiền', dataIndex: 'currency', key: 'cur', width: 90 },
                 {
                   title: 'Số dư',
@@ -97,7 +127,8 @@ export function BankAccountsScreen(): ReactNode {
               ]}
             />
           </div>
-        )}
+          );
+        }}
       </FgQuery>
     </>
   );
