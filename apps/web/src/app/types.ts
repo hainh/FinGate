@@ -558,8 +558,13 @@ export interface CompanyRow {
   _id: string;
   name: string;
   code: string;
+  tax_code?: string | null;
+  address?: string | null;
+  contact_email?: string | null;
+  is_group?: boolean;
   status?: string;
   min_balance?: MoneyWire;
+  working_calendar?: { workdays: number[]; holidays: string[] } | null;
 }
 
 export interface SearchHit {

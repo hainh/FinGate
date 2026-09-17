@@ -68,7 +68,7 @@ interface AuthContextValue {
   login: (email: string, password: string, remember?: boolean) => Promise<LoginResult>;
   login2fa: (challenge: string, code: string) => Promise<void>;
   logout: () => Promise<void>;
-  refreshMe: () => Promise<void>;
+  refreshMe: () => Promise<MeProfile | null>;
   /** quyền nghiệp vụ từ entitlements. */
   can: (permission: string) => boolean;
   canAction: (action: string) => boolean;
@@ -110,7 +110,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
     setScopeProvider(() => (scope && scope !== SCOPE_ALL ? scope : null));
   }, [scope]);
 
-  const loadMe = useCallback(async () => {
+  const loadMe = useCallback(async (): Promise<MeProfile | null> => {
     try {
       const profile = await apiData<MeProfile>('/me');
       setMe(profile);
@@ -118,10 +118,31 @@ export function AppProviders({ children }: { children: ReactNode }) {
       const active = profile.scope?.active_company_id;
       const def = profile.prefs?.default_scope;
       setScopeState(def === 'all' || !def ? SCOPE_ALL : active && profile.scope.company_ids.includes(def) ? def : SCOPE_ALL);
+      return profile;
     } catch (e) {
       if (e instanceof ApiRequestError && (e.status === 401 || e.code === 'FG-AUTH-001')) setStatus('anon');
       else setStatus('anon');
+      return null;
     }
+  }, []);
+
+  /**
+   * Trang đích sau đăng nhập: tôn trọng `fg.returnTo` cho người xem nghiệp vụ, nhưng
+   * tài khoản quản lý thuần (không `doc:read`) về thẳng khu Quản trị thay vì dashboard 403.
+   */
+  const homeFor = useCallback((profile: MeProfile | null): string => {
+    const back = sessionStorage.getItem('fg.returnTo');
+    sessionStorage.removeItem('fg.returnTo');
+    const canDoc = Boolean(profile?.entitlements?.permissions?.includes('doc:read'));
+    const fallback = canDoc ? '/dashboard' : '/quantri/nguoidung';
+    if (!back || back.startsWith('/dang-nhap') || back.startsWith('/kich-hoat') || back.startsWith('/mat-khau')) return fallback;
+    if (!canDoc && !back.startsWith('/quantri') && back !== '/') return fallback;
+    return back;
+  }, []);
+
+  const go = useCallback((target: string): void => {
+    window.history.replaceState(null, '', target);
+    setTimeout(() => window.dispatchEvent(new PopStateEvent('popstate')), 0);
   }, []);
 
   useEffect(() => {
@@ -147,22 +168,18 @@ export function AppProviders({ children }: { children: ReactNode }) {
     const r = await apiData<LoginResult>('/auth/login', { method: 'POST', body: { email, password, remember } });
     if (!r.need_2fa) {
       markSignedOut(false);
-      await loadMe();
-      const back = sessionStorage.getItem('fg.returnTo');
-      if (back) {
-        sessionStorage.removeItem('fg.returnTo');
-        window.history.replaceState(null, '', back);
-        setTimeout(() => window.dispatchEvent(new PopStateEvent('popstate')), 0);
-      }
+      const profile = await loadMe();
+      go(homeFor(profile));
     }
     return r;
-  }, [loadMe]);
+  }, [loadMe, homeFor, go]);
 
   const login2fa = useCallback(async (challenge: string, code: string) => {
     await apiData('/auth/2fa', { method: 'POST', body: { challenge, code } });
     markSignedOut(false);
-    await loadMe();
-  }, [loadMe]);
+    const profile = await loadMe();
+    go(homeFor(profile));
+  }, [loadMe, homeFor, go]);
 
   const logout = useCallback(async () => {
     try {

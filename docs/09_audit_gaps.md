@@ -65,12 +65,12 @@ Các khoảng trống còn lại tập trung vào **kiểm thử (§15)**, **art
 
 ## 4. Độ phủ màn hình
 
-- `docs/03_screens.md` định nghĩa **127 mã màn hình**; `apps/web/src/routes.tsx` có **40 route** (bao gồm auth/errors).
+- `docs/03_screens.md` định nghĩa **127 mã màn hình**; `apps/web/src/routes.tsx` có **41 route** (bao gồm auth/errors). Khu Quản trị đã có web: `ADM-01` nhân sự, `ADM-04` ma trận, `ADM-06/07` công ty & bộ phận, `ADM-12` audit.
 - **0 thuộc tính `data-screen`** trong toàn bộ web — quy ước §16 (`screenId ↔ screens/<...>/ ↔ data-screen`) **chưa được áp dụng**.
 - Chưa có `/dev/components` hoặc Storybook (T-5, mức MAY).
 
 **Nhóm màn hình còn thiếu (chưa có route):**
-`MOB-01…06` · `IMP-01` · `SRCH-01` · `OVL-01…21` (catalog trạng thái DS §7.20) · `CASH-02…06` · `BANK-02/03/05/06/09` (gồm import sao kê CSV, đối chiếu) · `CHI-05/06/08/09` · `THU-03/05/06` · `DEBT-02/04/05/06` · `LOAN-02/03/04` · `ADM-02/03/05…11/13/14` · `APPR-04` · `DASH-02/04/08` · `NOTI-02/03` · `ERR-03/05/06` · `RPT-14` · `PREF-*` còn lại.
+`MOB-01…06` · `IMP-01` · `SRCH-01` · `OVL-01…21` (catalog trạng thái DS §7.20) · `CASH-02…06` · `BANK-02/03/05/06/09` (gồm import sao kê CSV, đối chiếu) · `CHI-05/06/08/09` · `THU-03/05/06` · `DEBT-02/04/05/06` · `LOAN-02/03/04` · `ADM-02/03/05/08/09/10/11/13/14` · `APPR-04` · `DASH-02/04/08` · `NOTI-02/03` · `ERR-03/05/06` · `RPT-14` · `PREF-*` còn lại.
 
 > Điều này **phù hợp tiến độ** (mới P0/P1 + phần P2), nhưng cần đối chiếu với bảng §17 trước khi chốt phạm vi kỳ 1 (§19.2 BA-10).
 

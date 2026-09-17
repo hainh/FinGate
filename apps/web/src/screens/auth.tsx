@@ -50,7 +50,6 @@ function AuthFrame({ children, title }: { children: ReactNode; title: string }):
 
 export function LoginScreen(): ReactNode {
   const { login, login2fa } = useAuth();
-  const navigate = useNavigate();
   const waking = useColdStart();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -79,9 +78,8 @@ export function LoginScreen(): ReactNode {
       if (r.need_2fa && r.challenge) {
         setTwoFa({ challenge: r.challenge, resendAfterS: r.resend_after_s ?? 30 });
         setCooldown(r.resend_after_s ?? 30);
-      } else {
-        navigate(sessionStorage.getItem('fg.returnTo') ?? '/dashboard');
       }
+      // Đăng nhập thành công: `login` đã điều hướng theo quyền (xem store.tsx homeFor).
     } catch (err) {
       const p = err instanceof ApiRequestError ? err.problem : null;
       if (p?.code === 'FG-AUTH-007') setError(p.title);
@@ -99,7 +97,7 @@ export function LoginScreen(): ReactNode {
     setError(null);
     try {
       await login2fa(twoFa.challenge, code.trim());
-      navigate('/dashboard');
+      // `login2fa` đã điều hướng theo quyền (store.tsx homeFor).
     } catch (err) {
       const p = err instanceof ApiRequestError ? err.problem : null;
       setError(p?.code === 'FG-AUTH-006' ? 'Mã không đúng hoặc đã hết hiệu lực. Nhập lại.' : p?.title ?? 'Xác thực thất bại.');

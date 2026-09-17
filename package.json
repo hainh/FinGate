@@ -21,6 +21,8 @@
     "db:migrate": "node db/migrate.js",
     "db:indexes": "node db/apply-indexes.js",
     "db:seed": "node db/seed.js",
+    "db:reset": "node db/reset.js",
+    "db:bootstrap": "node db/bootstrap.js",
     "db:rebuild-balances": "node db/rebuild-balances.js",
     "db:rebuild-audit": "node db/rebuild-audit.js",
     "db:archive": "node db/archive.js",

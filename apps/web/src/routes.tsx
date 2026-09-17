@@ -25,7 +25,7 @@ import { BalanceEntryScreen, BankAccountsScreen } from './screens/bank.tsx';
 import { DebtsScreen, LoansScreen, RolloversScreen } from './screens/loans.tsx';
 import { ForecastScreen } from './screens/forecast.tsx';
 import { ReportLibraryScreen, ReportRunnerScreen } from './screens/reports.tsx';
-import { PersonnelScreen, MatrixScreen, AuditLogScreen, SettingsScreen } from './screens/admin.tsx';
+import { PersonnelScreen, MatrixScreen, AuditLogScreen, SettingsScreen, CompaniesScreen } from './screens/admin.tsx';
 import { NeedsAttentionScreen, NewsletterScreen, NotificationsScreen, SearchScreen } from './screens/misc.tsx';
 import { DocumentFormScreen } from './screens/create-form.tsx';
 import { ForbiddenScreen, NotFoundScreen } from './screens/errors.tsx';
@@ -53,12 +53,56 @@ function Guard({ children }: { children: ReactNode }): ReactNode {
   return <>{children}</>;
 }
 
+/**
+ * Quyền tối thiểu theo tiền tố đường dẫn — để gõ URL trực tiếp vào màn không có quyền
+ * cũng bị đưa về trang phù hợp, thay vì 403 lửng hoặc skeleton treo.
+ * (Khu `/quantri` không khóa ở đây — từng màn tự ẩn nút và server vẫn kiểm quyền.)
+ */
+const PATH_PERMS: { prefix: string; perm: string }[] = [
+  { prefix: '/dashboard', perm: 'doc:read' },
+  { prefix: '/cho-toi-duyet', perm: 'approval:act' },
+  { prefix: '/toi-da-duyet', perm: 'approval:act' },
+  { prefix: '/can-bo-sung', perm: 'approval:act' },
+  { prefix: '/can-xu-ly', perm: 'doc:read' },
+  { prefix: '/chi', perm: 'doc:read' },
+  { prefix: '/thu', perm: 'doc:read' },
+  { prefix: '/ho-so', perm: 'doc:read' },
+  { prefix: '/ngan-hang/taikhoan', perm: 'bank:read' },
+  { prefix: '/ngan-hang/so-du', perm: 'bank:read' },
+  { prefix: '/ngan-hang/chuyen-noi-bo', perm: 'bank:read' },
+  { prefix: '/ngan-hang/khoan-vay', perm: 'loan:read' },
+  { prefix: '/ngan-hang/dao-han', perm: 'loan:read' },
+  { prefix: '/cong-no', perm: 'debt:read' },
+  { prefix: '/dong-tien', perm: 'forecast:read' },
+  { prefix: '/baocao', perm: 'report:view' },
+  { prefix: '/ban-tin', perm: 'report:view' },
+];
+
 function Shell({ children }: { children: ReactNode }): ReactNode {
   return (
     <Guard>
-      <FgAppShell>{children}</FgAppShell>
+      <ShellInner>{children}</ShellInner>
     </Guard>
   );
+}
+
+function ShellInner({ children }: { children: ReactNode }): ReactNode {
+  const { can } = useAuth();
+  const location = useLocation();
+  const need = PATH_PERMS.find((p) => location.pathname.startsWith(p.prefix))?.perm;
+  if (need && !can(need)) {
+    // Tài khoản quản lý thuần (không doc:read) về khu Quản trị; còn lại về Tổng quan.
+    return <Navigate to={can('doc:read') ? '/dashboard' : '/quantri/nguoidung'} replace />;
+  }
+  return <FgAppShell>{children}</FgAppShell>;
+}
+
+/** Trang chủ theo quyền: tài khoản quản lý thuần (không có doc:read) vào thẳng Quản trị. */
+function HomeRedirect(): ReactNode {
+  const { status, can } = useAuth();
+  if (status === 'loading') return <FgSpinner center />;
+  if (status === 'anon') return <Navigate to="/dang-nhap" replace />;
+  return <Navigate to={can('doc:read') ? '/dashboard' : '/quantri/nguoidung'} replace />;
 }
 
 export function AppRoutes(): ReactNode {
@@ -71,7 +115,7 @@ export function AppRoutes(): ReactNode {
       <Route path="/mat-khau/dat-lai" element={<ResetPasswordScreen />} />
       <Route path="/403" element={<ForbiddenScreen />} />
 
-      <Route path="/" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/" element={<HomeRedirect />} />
       <Route path="/dashboard" element={<Shell><DashboardScreen /></Shell>} /> {/* DASH-01 */}
       <Route path="/cho-toi-duyet" element={<Shell><ApprovalQueueScreen /></Shell>} /> {/* APPR-01 */}
       <Route path="/toi-da-duyet" element={<Shell><ProcessedScreen /></Shell>} /> {/* APPR-02 */}
@@ -103,6 +147,7 @@ export function AppRoutes(): ReactNode {
       <Route path="/tim-kiem" element={<Shell><SearchScreen /></Shell>} /> {/* SRCH-02 */}
       <Route path="/ho-so/:loai/:id" element={<Shell><DocumentDetailScreen /></Shell>} /> {/* DOC-01 */}
       <Route path="/quantri/nguoidung" element={<Shell><PersonnelScreen /></Shell>} /> {/* ADM-01 */}
+      <Route path="/quantri/cong-ty" element={<Shell><CompaniesScreen /></Shell>} /> {/* ADM-06/07 */}
       <Route path="/quantri/quy-trinh-duyet" element={<Shell><MatrixScreen /></Shell>} /> {/* ADM-04 */}
       <Route path="/quantri/audit" element={<Shell><AuditLogScreen /></Shell>} /> {/* ADM-12 */}
       <Route path="/ca-nhan" element={<Shell><SettingsScreen /></Shell>} /> {/* PREF-01 */}

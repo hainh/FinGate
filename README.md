@@ -48,7 +48,8 @@ Luật phụ thuộc: `apps/* → packages/shared`; `packages/shared` không imp
 - **TypeScript**: các package dùng `typescript@7.0.2` để build/typecheck. Riêng root dùng `typescript@6.0.3` chỉ để `typescript-eslint@8` chạy được — typescript-eslint chưa hỗ trợ API TS 7 (xem `typescript-eslint#10940`). Đây là cách "chạy song song TS 6" mà chính TypeScript khuyến nghị; không ảnh hưởng code đã compile.
 - **`otp`**: architecture ghi `13.5.0` nhưng npm chỉ có tới `2.0.1` cho package `otp`. Đang dùng `2.0.1`; nếu ý định là `otplib` (v13) thì đổi lại trước P1.
 - **`pnpm-workspace.yaml`**: `allowBuilds` chặn postinstall của `mongodb-memory-server` (tải binary Mongo ~100MB). Bật `true` khi viết API integration test (§15).
-- `db/*.js` (migrate/indexes/seed/check-tie/…) là việc của P0 T-6 — script đã khai trong `package.json`, file chưa tạo.
+- `db/*.js` (migrate/indexes/seed/reset/bootstrap/check-tie/…) là việc của P0 T-6 — đã có đủ trong `db/`.
+- **Tài khoản quản trị đầu tiên**: tự tạo khi DB rỗng (`BOOTSTRAP_ON_BOOT=true`, hoặc `pnpm db:bootstrap`) — mặc định `admin@fingate.local` / `fingate-demo-2026`, vai trò `admin` **quản lý thuần** (nhân sự · công ty/bộ phận · ma trận · cấu hình · audit; KHÔNG có quyền hoá đơn/phiếu thu chi). Xoá sạch DB: `pnpm db:reset --yes`.
 
 ## Debug app bằng MCP
 

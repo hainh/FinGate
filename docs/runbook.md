@@ -35,6 +35,10 @@ pnpm db:seed           # seed demo (chỉ chạy khi users rỗng — thêm --fo
 pnpm dev
 ```
 
+> **Muốn DB trắng (không dữ liệu demo)?** `pnpm db:reset --yes` (xoá sạch mọi collection) rồi
+> `pnpm db:bootstrap` — tạo **tài khoản quản trị đầu tiên** + pháp nhân Tập đoàn (`GROUP`) làm gốc.
+> Server cũng tự chạy bootstrap khi DB rỗng nếu `BOOTSTRAP_ON_BOOT=true` (mặc định).
+
 Mở **http://localhost:5173** → đăng nhập bằng tài khoản demo (§3).
 
 > Dev: Vite proxy `/api` → `http://localhost:8080` (same-origin, không CORS).
@@ -48,6 +52,13 @@ curl -s http://localhost:8080/healthz
 ```
 
 ## 3. Tài khoản demo (mật khẩu chung: `fingate-demo-2026`)
+
+> **Tài khoản quản trị đầu tiên (bootstrap)**: `admin@fingate.local` / `fingate-demo-2026`
+> (đổi bằng `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`, hoặc mật khẩu mới trong *Cá nhân*).
+> Vai trò `admin` là **quản lý thuần** — nhân sự · công ty/bộ phận · ma trận duyệt · cấu hình ·
+> tài khoản tập đoàn · audit — **KHÔNG** có quyền trên hồ sơ/hoá đơn/phiếu thu chi; sau đăng nhập
+> được đưa thẳng vào khu **Quản trị** (`/quantri/nguoidung`). Danh mục dưới đây là **dữ liệu demo**,
+> chỉ có sau `pnpm db:seed`.
 
 Dữ liệu demo ẩn danh (BA-11), 3 công ty: **MP** (Minh Phúc), **AP** (An Phú), **HH**.
 
@@ -84,6 +95,7 @@ Dữ liệu demo ẩn danh (BA-11), 3 công ty: **MP** (Minh Phúc), **AP** (An 
 | 10 | Công nợ, dòng tiền | `Công nợ` (DEBT-01/03), `Dòng tiền` (CASH-01) |
 | 11 | Đổi theme sáng/tối | Nút theme trên header; kiểm tra token `--fg-*` |
 | 12 | Audit log | `Quản trị → Audit` (ADM-12) |
+| 13 | Tạo công ty con | `Quản trị → Công ty & bộ phận` (ADM-06/07): **+ Thêm công ty** (mã HOA, không dấu cách) → thêm bộ phận |
 
 > Kiểm tra tính toàn vẹn tiền: `pnpm check:tie` (lệch thì phải khoá export — §19.5-9).
 
@@ -94,6 +106,8 @@ pnpm lint && pnpm typecheck && pnpm test && pnpm build   # chất lượng
 pnpm start                    # chạy API production từ apps/api/dist
 pnpm db:rebuild-balances      # dựng lại số dư tổng hợp
 pnpm db:rebuild-audit         # dựng lại audit_log từ history[]
+pnpm db:reset                 # xoá sạch dữ liệu app (thêm --yes để xác nhận)
+pnpm db:bootstrap             # tạo tài khoản quản trị đầu tiên nếu DB rỗng
 pnpm db:archive               # lưu trữ dữ liệu cũ
 pnpm check:tie                # kiểm tra cân đối
 pnpm mail:test                # thử gửi mail (SMTP_URL)
@@ -107,7 +121,7 @@ pnpm infra:down               # tắt MongoDB local
 | --- | --- |
 | `listen EADDRINUSE ... :8080` hoặc web nhảy sang `:5174` | Còn tiến trình cũ. Tìm & diệt: `netstat -ano \| grep -E ":8080\|:5173"` rồi `taskkill //PID <pid> //T //F` |
 | `Env không hợp lệ: SESSION_SECRET ...` | Thiếu `.env`. `cp .env.example .env` |
-| `db:*` báo `secret tự sinh` / trỏ sai DB | **Đã biết:** script `db/*.js` chạy `node db/x.js` **không** nạp `.env`. Local dùng default `mongodb://localhost:27017/fingate?replicaSet=rs0` nên vẫn đúng; nếu đổi `MONGODB_URI` trong `.env` phải export biến môi trường khi chạy script (hoặc sửa script thêm `--env-file-if-exists=./.env`) |
+| `db:*` báo `secret tự sinh` / trỏ sai DB | **Đã sửa:** `db/_common.js` nạp `.env` gốc repo trước `loadEnv()` (`process.loadEnvFile`), nên script dùng đúng `MONGODB_URI`/secret/`BOOTSTRAP_ADMIN_*` (biến môi trường đã đặt vẫn được ưu tiên). |
 | Mongo không kết nối (`db":"down"`) | `pnpm infra:up`; đợi healthcheck `healthy` (`docker ps`) |
 | Đăng nhập không được / sai mật khẩu | Mật khẩu demo là `fingate-demo-2026`; nếu DB đã bị seed bằng `FIELD_KEY` khác thì reset: `pnpm db:seed --force` |
 | Banner **"Máy chủ đang thức dậy"** kẹt ở màn đăng nhập | **Đã sửa** (`apps/web/src/app/api.ts`: reset `coldStart` khi nhận *bất kỳ* response, kể cả 401 của `/me`) |

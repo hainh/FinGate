@@ -24,18 +24,19 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { to: '/dashboard', label: 'Tổng quan', glyph: '◧', mobile: true, match: ['/dashboard', '/hom-nay'] },
-  { to: '/cho-toi-duyet', label: 'Chờ tôi duyệt', glyph: '✍', badge: 'awaiting', mobile: true, match: ['/cho-toi-duyet', '/toi-da-duyet', '/can-bo-sung'] },
-  { to: '/can-xu-ly', label: 'Cần xử lý', glyph: '⚑', badge: 'unread', mobile: true, match: ['/can-xu-ly'] },
-  { to: '/chi', label: 'Chi', glyph: '↗', match: ['/chi'] },
-  { to: '/thu', label: 'Thu', glyph: '↙', match: ['/thu'] },
-  { to: '/ngan-hang/taikhoan', label: 'Ngân hàng', glyph: '▤', match: ['/ngan-hang', '/ngan-hang/khoan-vay'] },
-  { to: '/ngan-hang/dao-han', label: 'Đáo hạn', glyph: '⧗', mobile: true, match: ['/ngan-hang/dao-han'] },
-  { to: '/cong-no/phai-thu', label: 'Công nợ', glyph: '≡', match: ['/cong-no'] },
-  { to: '/dong-tien', label: 'Dòng tiền', glyph: '∿', mobile: true, match: ['/dong-tien'] },
+  { to: '/dashboard', label: 'Tổng quan', glyph: '◧', mobile: true, perm: 'doc:read', match: ['/dashboard', '/hom-nay'] },
+  { to: '/cho-toi-duyet', label: 'Chờ tôi duyệt', glyph: '✍', badge: 'awaiting', mobile: true, perm: 'approval:act', match: ['/cho-toi-duyet', '/toi-da-duyet', '/can-bo-sung'] },
+  { to: '/can-xu-ly', label: 'Cần xử lý', glyph: '⚑', badge: 'unread', mobile: true, perm: 'doc:read', match: ['/can-xu-ly'] },
+  { to: '/chi', label: 'Chi', glyph: '↗', perm: 'doc:read', match: ['/chi'] },
+  { to: '/thu', label: 'Thu', glyph: '↙', perm: 'doc:read', match: ['/thu'] },
+  { to: '/ngan-hang/taikhoan', label: 'Ngân hàng', glyph: '▤', perm: 'bank:read', match: ['/ngan-hang', '/ngan-hang/khoan-vay'] },
+  { to: '/ngan-hang/dao-han', label: 'Đáo hạn', glyph: '⧗', mobile: true, perm: 'loan:read', match: ['/ngan-hang/dao-han'] },
+  { to: '/cong-no/phai-thu', label: 'Công nợ', glyph: '≡', perm: 'debt:read', match: ['/cong-no'] },
+  { to: '/dong-tien', label: 'Dòng tiền', glyph: '∿', mobile: true, perm: 'forecast:read', match: ['/dong-tien'] },
   { to: '/baocao', label: 'Báo cáo', glyph: '☰', perm: 'report:view', match: ['/baocao'] },
-  { to: '/ban-tin/ngay', label: 'Bản tin', glyph: '✉', match: ['/ban-tin'] },
-  { to: '/quantri/nguoidung', label: 'Quản trị', glyph: '⚙', perm: 'admin:matrix', match: ['/quantri'] },
+  { to: '/ban-tin/ngay', label: 'Bản tin', glyph: '✉', perm: 'report:view', match: ['/ban-tin'] },
+  // Người có quyền mời/điều phối nhân sự (Chủ tịch · GĐ · KTT · Quản trị) — không chỉ admin:matrix.
+  { to: '/quantri/nguoidung', label: 'Quản trị', glyph: '⚙', perm: 'hr:invite', match: ['/quantri'] },
 ];
 
 export function FgAppShell({ children }: { children: ReactNode }): ReactNode {

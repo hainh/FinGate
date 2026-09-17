@@ -137,7 +137,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'audit:read',
     'admin:matrix',
   ],
-  // Chủ tịch HĐQT: phê duyệt + giám sát toàn hệ thống + nhân sự + tài khoản tập đoàn. KHÔNG nhập liệu.
+  // Chủ tịch HĐQT: phê duyệt + giám sát toàn hệ thống + nhân sự + cấu hình/tài khoản tập đoàn.
+  // Có `admin:settings` để tự tạo công ty con (ADM-06) — KHÔNG nhập liệu hồ sơ.
   chairman: [
     'doc:read',
     'approval:act',
@@ -154,29 +155,23 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'hr:invite',
     'hr:disable',
     'hr:transfer',
+    'admin:settings',
     'admin:group_accounts',
     'audit:read',
   ],
+  // Quản trị hệ thống: CHỈ quyền quản lý (nhân sự, công ty/bộ phận, ma trận duyệt,
+  // cấu hình, tài khoản tập đoàn, audit). KHÔNG có bất kỳ quyền nào với hồ sơ,
+  // hoá đơn hay phiếu thu/chi (không `doc:*`, `approval:*`, `payment:*`,
+  // bank/loan/debt/budget/forecast/report) — tách bạch nhiệm vụ, đúng yêu cầu
+  // "tài khoản quản trị đầu tiên" (bootstrap): quản lý hệ thống, không giao dịch.
   admin: [
-    'doc:read',
-    'approval:act',
-    'bank:read',
-    'bank:write',
-    'loan:read',
-    'rollover:act',
-    'debt:read',
-    'budget:read',
-    'budget:write',
-    'forecast:read',
-    'report:view',
-    'report:export',
-    'alert:config',
     'hr:invite',
     'hr:disable',
     'hr:transfer',
     'admin:matrix',
     'admin:settings',
     'admin:group_accounts',
+    'alert:config',
     'audit:read',
   ],
 };

@@ -7,6 +7,8 @@
  */
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useLocation, useNavigate } from 'react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   accountStatusFor,
   formatMoney,
@@ -16,7 +18,7 @@ import {
   moneyToWire,
   type Money,
 } from '@fingate/shared';
-import { useAuditLog, useCompanies, useMatrix, usePersonnel } from '../app/queries.ts';
+import { useAuditLog, useCompanies, useDepartments, useMatrix, usePersonnel } from '../app/queries.ts';
 import { useAuth, useUi } from '../app/store.tsx';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -27,7 +29,32 @@ import { FgQuery, toastOk } from '../components/pagekit.tsx';
 import { AUDIT_ACTION_LABEL, ROLES_LABEL } from '../components/labels.ts';
 import { ApiRequestError, apiCall } from '../app/api.ts';
 import { DOC_KIND_LABEL } from '@fingate/shared';
-import type { InviteLinkResult, PersonnelRow } from '../app/types.ts';
+import type { CompanyRow, InviteLinkResult, PersonnelRow } from '../app/types.ts';
+
+/* ================= Khu Quản trị — điều hướng chung ================= */
+
+/** Các tab trong khu Quản trị; chỉ tab người dùng có quyền mới hiện. */
+const ADMIN_TABS: { to: string; label: string; perm: string }[] = [
+  { to: '/quantri/nguoidung', label: 'Nhân sự', perm: 'hr:invite' },
+  { to: '/quantri/cong-ty', label: 'Công ty & bộ phận', perm: 'admin:settings' },
+  { to: '/quantri/quy-trinh-duyet', label: 'Ma trận duyệt', perm: 'admin:matrix' },
+  { to: '/quantri/audit', label: 'Audit log', perm: 'audit:read' },
+];
+
+function AdminNav(): ReactNode {
+  const { can } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const items = ADMIN_TABS.filter((t) => can(t.perm)).map((t) => ({ key: t.to, label: t.label }));
+  // Người chỉ có 1 mục (VD KTT) → không cần thanh tab.
+  if (items.length <= 1) return null;
+  const active = ADMIN_TABS.find((t) => location.pathname.startsWith(t.to))?.to ?? items[0]?.key ?? '';
+  return (
+    <div style={{ marginBottom: 'var(--fg-space-4)' }}>
+      <FgTabs activeKey={active} onChange={(k: string) => navigate(k)} items={items} />
+    </div>
+  );
+}
 
 /* ================= ADM-01 ================= */
 
@@ -46,6 +73,7 @@ export function PersonnelScreen(): ReactNode {
   const [linkResult, setLinkResult] = useState<LinkSeed | null>(null);
   return (
     <>
+      <AdminNav />
       <FgPageHeader
         title="Nhân sự"
         meta="Tạo tài khoản, phân công ty + vai trò, cấp link kích hoạt có chữ ký (hạn 1 ngày) để gửi tay — mọi thao tác có audit"
@@ -498,6 +526,320 @@ function InviteModal({
   );
 }
 
+/* ================= ADM-06/07 ================= */
+
+/** Màn "Công ty & bộ phận" — tạo/sửa công ty con + pháp nhân Tập đoàn, quản bộ phận. */
+export function CompaniesScreen(): ReactNode {
+  const { can } = useAuth();
+  const query = useCompanies();
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<CompanyRow | null>(null);
+
+  return (
+    <>
+      <AdminNav />
+      <FgPageHeader
+        title="Công ty & bộ phận"
+        meta="1 Tập đoàn → nhiều công ty con · ngưỡng tiền tối thiểu · bộ phận dùng khi mời nhân sự"
+        actions={
+          can('admin:settings') ? (
+            <FgButton
+              variant="primary"
+              onClick={() => {
+                setEditing(null);
+                setModalOpen(true);
+              }}
+            >
+              + Thêm công ty
+            </FgButton>
+          ) : null
+        }
+      />
+      <FgQuery query={query} skeleton={<FgSkeletonTable rows={4} cols={6} />}>
+        {(data) =>
+          !data.items.length ? (
+            <div className="fg-card">
+              <FgEmptyState
+                glyph="▤"
+                title="Chưa có công ty nào"
+                description="Tạo pháp nhân Tập đoàn và các công ty con để bắt đầu mời nhân sự."
+              />
+            </div>
+          ) : (
+            <>
+              <div className="fg-card" style={{ padding: 0 }}>
+                <FgTable
+                  rowKey="_id"
+                  dataSource={data.items}
+                  columns={[
+                    { title: 'Mã', dataIndex: 'code', key: 'code', render: (v: string) => <span className="fg-mono">{v}</span> },
+                    {
+                      title: 'Tên',
+                      dataIndex: 'name',
+                      key: 'name',
+                      render: (v: string, r: CompanyRow) => (
+                        <span>
+                          <FgText strong>{v}</FgText>
+                          {r.is_group ? <> <FgTag tone="info">Tập đoàn</FgTag></> : null}
+                        </span>
+                      ),
+                    },
+                    { title: 'MST', dataIndex: 'tax_code', key: 'tax', render: (v: string | null) => v ?? '—' },
+                    {
+                      title: 'Ngưỡng tiền tối thiểu',
+                      dataIndex: 'min_balance',
+                      key: 'mb',
+                      align: 'right',
+                      render: (v: string | undefined) => <FgMoney value={v ?? '0'} mode="compact" />,
+                    },
+                    {
+                      title: 'Trạng thái',
+                      dataIndex: 'status',
+                      key: 'st',
+                      render: (v: string) => (
+                        <FgTag tone={v === 'active' ? 'success' : 'attention'}>{v === 'active' ? 'Đang hoạt động' : 'Tạm dừng'}</FgTag>
+                      ),
+                    },
+                    {
+                      title: '',
+                      key: 'act',
+                      render: (_v: unknown, r: CompanyRow) =>
+                        can('admin:settings') ? (
+                          <FgButton
+                            size="small"
+                            onClick={() => {
+                              setEditing(r);
+                              setModalOpen(true);
+                            }}
+                          >
+                            Sửa
+                          </FgButton>
+                        ) : null,
+                    },
+                  ]}
+                />
+              </div>
+              <DepartmentsCard companies={data.items} />
+            </>
+          )
+        }
+      </FgQuery>
+      <CompanyModal open={modalOpen} editing={editing} onClose={() => setModalOpen(false)} />
+    </>
+  );
+}
+
+/** Modal thêm/sửa công ty — upsert theo `code` (mã bất biến sau khi tạo). */
+function CompanyModal({ open, editing, onClose }: { open: boolean; editing: CompanyRow | null; onClose: () => void }): ReactNode {
+  const qc = useQueryClient();
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [taxCode, setTaxCode] = useState('');
+  const [address, setAddress] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
+  const [isGroup, setIsGroup] = useState('false');
+  const [minBalance, setMinBalance] = useState<Money | null>(null);
+  const [status, setStatus] = useState('active');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!open) return;
+    setName(editing?.name ?? '');
+    setCode(editing?.code ?? '');
+    setTaxCode(editing?.tax_code ?? '');
+    setAddress(editing?.address ?? '');
+    setContactEmail(editing?.contact_email ?? '');
+    setIsGroup(editing?.is_group ? 'true' : 'false');
+    setMinBalance(editing?.min_balance ? money(editing.min_balance) : null);
+    setStatus(editing?.status ?? 'active');
+    setError(null);
+    setFieldErrors({});
+  }, [open, editing]);
+
+  const submit = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    setFieldErrors({});
+    try {
+      await apiCall('/admin/companies', {
+        method: 'POST',
+        body: {
+          name: name.trim(),
+          code: code.trim().toUpperCase(),
+          tax_code: taxCode.trim() || undefined,
+          address: address.trim() || undefined,
+          contact_email: contactEmail.trim() || undefined,
+          is_group: isGroup === 'true',
+          min_balance_minor: minBalance ? moneyToWire(minBalance).minor : '0',
+          status,
+        },
+      });
+      await qc.invalidateQueries({ queryKey: ['companies'] });
+      toastOk(editing ? 'Đã cập nhật công ty' : 'Đã tạo công ty');
+      onClose();
+    } catch (e) {
+      if (e instanceof ApiRequestError) {
+        setError(e.problem.detail ?? e.problem.title);
+        setFieldErrors(e.problem.errors ?? {});
+      } else setError('Không lưu được công ty');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <FgModal
+      open={open}
+      title={editing ? `Sửa công ty · ${editing.code}` : 'Thêm công ty'}
+      onCancel={onClose}
+      onOk={() => void submit()}
+      okText={editing ? 'Lưu' : 'Tạo công ty'}
+      confirmLoading={busy}
+      width={560}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)', paddingTop: 8 }}>
+        <FgField label="Tên công ty" required error={fieldErrors.name ?? null}>
+          <FgInput value={name} onChange={(e: { target: { value: string } }) => setName(e.target.value)} placeholder="Công ty TNHH …" />
+        </FgField>
+        <FgField label="Mã công ty" required error={fieldErrors.code ?? null} hint="Viết HOA, không dấu cách, tối đa 12 ký tự (VD: MP, AP, HH)">
+          <FgInput
+            value={code}
+            onChange={(e: { target: { value: string } }) => setCode(e.target.value.toUpperCase())}
+            placeholder="ABC"
+            disabled={Boolean(editing)}
+          />
+        </FgField>
+        <FgField label="Mã số thuế" error={fieldErrors.tax_code ?? null}>
+          <FgInput value={taxCode} onChange={(e: { target: { value: string } }) => setTaxCode(e.target.value)} placeholder="0301234567" />
+        </FgField>
+        <FgField label="Địa chỉ">
+          <FgInput value={address} onChange={(e: { target: { value: string } }) => setAddress(e.target.value)} placeholder="Số … đường …" />
+        </FgField>
+        <FgField label="Email liên hệ" error={fieldErrors.contact_email ?? null}>
+          <FgInput value={contactEmail} onChange={(e: { target: { value: string } }) => setContactEmail(e.target.value)} placeholder="info@congty.vn" />
+        </FgField>
+        <FgField label="Pháp nhân cấp Tập đoàn (nhóm)">
+          <FgSelect
+            options={[
+              { label: 'Không — đây là công ty con', value: 'false' },
+              { label: 'Có — pháp nhân Tập đoàn', value: 'true' },
+            ]}
+            value={isGroup}
+            onChange={(v) => setIsGroup(v ?? 'false')}
+            style={{ width: '100%' }}
+          />
+        </FgField>
+        <FgField label="Ngưỡng tiền tối thiểu (VND)" help="Dưới ngưỡng → cảnh báo đỏ trên dashboard/dòng tiền">
+          <FgMoneyInput value={minBalance} onChange={setMinBalance} ariaLabel="Ngưỡng tiền tối thiểu" />
+        </FgField>
+        <FgField label="Trạng thái">
+          <FgSelect
+            options={[
+              { label: 'Đang hoạt động', value: 'active' },
+              { label: 'Tạm dừng', value: 'suspended' },
+            ]}
+            value={status}
+            onChange={(v) => setStatus(v ?? 'active')}
+            style={{ width: '100%' }}
+          />
+        </FgField>
+        {error ? <FgAlert tone="danger" title={error} /> : null}
+      </div>
+    </FgModal>
+  );
+}
+
+/** ADM-07 — bộ phận theo công ty (dùng khi mời nhân sự). */
+function DepartmentsCard({ companies }: { companies: CompanyRow[] }): ReactNode {
+  const { can } = useAuth();
+  const qc = useQueryClient();
+  const [companyId, setCompanyId] = useState<string | undefined>(companies[0]?._id);
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const query = useDepartments(companyId);
+
+  useEffect(() => {
+    if (!companyId && companies[0]) setCompanyId(companies[0]._id);
+  }, [companies, companyId]);
+
+  const add = async (): Promise<void> => {
+    if (!companyId || !name.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiCall('/admin/departments', {
+        method: 'POST',
+        body: { company_id: companyId, name: name.trim(), code: code.trim() || undefined },
+      });
+      setName('');
+      setCode('');
+      await qc.invalidateQueries({ queryKey: ['departments'] });
+      toastOk('Đã tạo bộ phận');
+    } catch (e) {
+      setError(e instanceof ApiRequestError ? (e.problem.detail ?? e.problem.title) : 'Không tạo được bộ phận');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <FgCard style={{ marginTop: 'var(--fg-space-4)' }}>
+      <FgText style="body" strong as="div">
+        Bộ phận theo công ty
+      </FgText>
+      <FgText style="caption" color="muted">
+        Bộ phận dùng để phân nhóm nhân sự khi mời tài khoản.
+      </FgText>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 'var(--fg-space-3)' }}>
+        <FgField label="Công ty">
+          <FgSelect
+            options={companies.map((c) => ({ label: `${c.code} · ${c.name}`, value: c._id }))}
+            value={companyId}
+            onChange={setCompanyId}
+            style={{ width: 280 }}
+          />
+        </FgField>
+        <FgField label="Tên bộ phận" required>
+          <FgInput value={name} onChange={(e: { target: { value: string } }) => setName(e.target.value)} placeholder="Kế toán" />
+        </FgField>
+        <FgField label="Mã (tùy chọn)">
+          <FgInput value={code} onChange={(e: { target: { value: string } }) => setCode(e.target.value)} placeholder="KT" />
+        </FgField>
+        <FgButton variant="primary" disabled={!can('admin:settings') || busy || !companyId || !name.trim()} onClick={() => void add()}>
+          + Thêm bộ phận
+        </FgButton>
+      </div>
+      {error ? <FgAlert tone="danger" title={error} /> : null}
+      <div style={{ marginTop: 'var(--fg-space-3)' }}>
+        <FgQuery query={query} skeleton={<FgSkeletonTable rows={3} cols={3} />}>
+          {(data) =>
+            !data.items.length ? (
+              <FgEmptyState glyph="◇" title="Công ty chưa có bộ phận" description="Thêm bộ phận để phân nhóm nhân sự." />
+            ) : (
+              <div className="fg-card" style={{ padding: 0 }}>
+                <FgTable
+                  rowKey="_id"
+                  dataSource={data.items}
+                  pagination={false}
+                  columns={[
+                    { title: 'Tên', dataIndex: 'name', key: 'n', render: (v: string) => <FgText strong>{v}</FgText> },
+                    { title: 'Mã', dataIndex: 'code', key: 'c', render: (v: string | null) => v ?? '—' },
+                    { title: 'Trạng thái', dataIndex: 'active', key: 'a', render: (v: boolean) => (v ? 'Đang dùng' : 'Ngừng') },
+                  ]}
+                />
+              </div>
+            )
+          }
+        </FgQuery>
+      </div>
+    </FgCard>
+  );
+}
+
 /* ================= ADM-04 ================= */
 
 export function MatrixScreen(): ReactNode {
@@ -505,6 +847,7 @@ export function MatrixScreen(): ReactNode {
   const [preview, setPreview] = useState<string | null>(null);
   return (
     <>
+      <AdminNav />
       <FgPageHeader title="Ma trận duyệt" meta="Ngưỡng tiền → chuỗi cấp duyệt — cấu hình được, thay đổi luôn vào audit" />
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={5} />}>
         {(data) =>
@@ -603,6 +946,7 @@ export function AuditLogScreen(): ReactNode {
   const query = useAuditLog(page);
   return (
     <>
+      <AdminNav />
       <FgPageHeader title="Audit log" meta="Ai · làm gì · lúc nào · từ IP nào — chỉ thêm, không sửa, KHÔNG có nút xóa (blueprint §XIX)" />
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={10} cols={6} />}>
         {(data) => (

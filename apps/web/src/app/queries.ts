@@ -32,9 +32,11 @@ import type {
 } from './types.ts';
 
 export function useOverview() {
-  const { scope } = useAuth();
+  const { scope, can } = useAuth();
   return useQuery({
     queryKey: ['overview', scope],
+    // Tài khoản quản lý thuần (không có doc:read) không gọi dashboard — tránh 403 vô nghĩa.
+    enabled: can('doc:read'),
     queryFn: () => apiData<DashboardOverview>('/dashboard/overview', { query: { scope } }),
   });
 }
@@ -258,6 +260,24 @@ export function useCompanies() {
     queryKey: ['companies'],
     staleTime: 600_000,
     queryFn: () => apiCall<{ items: import('./types.ts').CompanyRow[] }>('/companies'),
+  });
+}
+
+export interface DepartmentRow {
+  _id: string;
+  company_id: string;
+  name: string;
+  code?: string | null;
+  parent_id?: string | null;
+  active?: boolean;
+}
+
+export function useDepartments(companyId?: string) {
+  return useQuery({
+    queryKey: ['departments', companyId ?? 'all'],
+    staleTime: 300_000,
+    queryFn: () =>
+      apiCall<{ items: DepartmentRow[] }>('/departments', companyId ? { query: { company_id: companyId } } : {}),
   });
 }
 

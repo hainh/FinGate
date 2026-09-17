@@ -43,9 +43,9 @@ const envSchema = z.object({
   /** bỏ qua mail ở dev/test: log ra console thay vì gửi */
   MAIL_MODE: z.enum(['smtp', 'log', 'off']).default('log'),
 
-  /** phiên thường (không chọn "ghi nhớ"): idle 15', absolute 8h (arch §7.2) */
-  SESSION_IDLE_MINUTES: z.coerce.number().int().default(15),
-  SESSION_ABSOLUTE_HOURS: z.coerce.number().int().default(8),
+  /** phiên thường (không chọn "ghi nhớ"): idle 1day, absolute 7 day (arch §7.2) */
+  SESSION_IDLE_MINUTES: z.coerce.number().int().default(60 * 24),
+  SESSION_ABSOLUTE_HOURS: z.coerce.number().int().default(24 * 7),
   /**
    * Phiên "ghi nhớ đăng nhập" (mặc định BẬT — yêu cầu: giữ đăng nhập lâu nhất có thể).
    * Đây là hạn CUỘN: mỗi lần có hoạt động (tối đa 1 write/ngày/phiên) hạn được nạp lại,
@@ -63,6 +63,17 @@ const envSchema = z.object({
   CACHE_TTL_MS: z.coerce.number().int().default(60_000),
 
   SEED_ON_BOOT: z.enum(['true', 'false']).default('false'),
+  /**
+   * Tài khoản quản trị ĐẦU TIÊN (bootstrap) — tạo tự động khi DB chưa có user.
+   * Vai trò `admin` là QUẢN LÝ thuần: nhân sự · công ty/bộ phận · ma trận · cấu hình ·
+   * tài khoản tập đoàn · audit — KHÔNG có quyền trên hồ sơ/hoá đơn/phiếu thu chi.
+   * Đổi mật khẩu ngay sau lần đăng nhập đầu (mặc định chỉ để chạy được).
+   */
+  BOOTSTRAP_ADMIN_EMAIL: z.string().min(3).default('admin@fingate.local'),
+  BOOTSTRAP_ADMIN_PASSWORD: z.string().min(8).default('fingate-demo-2026'),
+  BOOTSTRAP_ADMIN_NAME: z.string().default('Quản trị hệ thống'),
+  /** true = tự tạo tài khoản quản trị đầu tiên khi khởi động nếu DB rỗng. */
+  BOOTSTRAP_ON_BOOT: z.enum(['true', 'false']).default('true'),
   LOG_LEVEL: z.string().default('info'),
   VERSION: z.string().default('0.1.0'),
 });

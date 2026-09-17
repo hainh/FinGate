@@ -78,7 +78,9 @@ export function adminRoutes(app: FastifyInstance): void {
         const actor = requireActor(req);
         const scope = requireScope(req);
         const q = (req.query ?? {}) as { company_id?: string; status?: string; q?: string; limit?: string };
-        const companyId = q.company_id ?? actor.company_id;
+        // scope_all (chairman/admin): mặc định xem MỌI công ty; truyền company_id mới lọc 1 công ty.
+        // Người bị ghim công ty: mặc định công ty mình.
+        const companyId = q.company_id ?? (scope.companyIds === null ? undefined : actor.company_id);
         if (scope.companyIds !== null && companyId && !scope.companyIds.includes(companyId)) {
           throw new ApiError({ code: 'FG-HR-002' });
         }

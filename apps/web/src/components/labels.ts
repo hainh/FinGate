@@ -11,7 +11,7 @@ export const ROLES_LABEL: Record<string, string> = {
   deputy_director: 'Phó Giám đốc',
   director: 'Giám đốc / Tổng Giám đốc',
   chairman: 'Chủ tịch HĐQT',
-  admin: 'Quản trị',
+  admin: 'Quản trị hệ thống',
 };
 
 export const actionLabel = (a: string): string => ACTION_LABEL[a as Action] ?? a;
