@@ -113,10 +113,13 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
         message.success('Đã lưu bản nháp');
         navigate(`/ho-so/${pathKind(kind)}/${id}`);
       } else {
-        const created = await apiData<{ _id: string }>('/documents', { method: 'POST', body });
+        const created = await apiData<{ _id: string; version: number }>('/documents', { method: 'POST', body });
         message.success(submitAsDraft ? `Đã tạo nháp ${created._id ? '' : ''}` : 'Đã gửi duyệt');
         if (!submitAsDraft) {
-          await apiData(`/documents/${created._id}/transition`, { method: 'POST', body: { action: 'submit', if_match: 0 } });
+          await apiData(`/documents/${created._id}/transition`, {
+            method: 'POST',
+            body: { action: 'submit', if_match: created.version },
+          });
         }
         navigate(`/ho-so/${pathKind(kind)}/${created._id}`);
       }
