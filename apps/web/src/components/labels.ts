@@ -32,6 +32,8 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'doc.fast_track': 'Duyệt trước',
   'doc.pay': 'Ghi nhận thanh toán',
   'doc.cancel': 'Hủy hồ sơ',
+  'doc.delete': 'Xoá phiếu thu/chi',
+  'document.delete': 'Xoá phiếu thu/chi',
   'doc.override': 'Bước nhảy cấp',
   'attach.add': 'Thêm chứng từ',
   'balance.entry': 'Nhập số dư',

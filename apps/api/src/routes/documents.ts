@@ -10,7 +10,7 @@ import {
   ApiError,
   currencyDecimals,
   DOC_KIND_LABEL,
-  permissionsForRole,
+  effectivePermissions,
   ROLE_LABEL,
   STATUS_REGISTRY,
   formatMoney,
@@ -31,6 +31,7 @@ import {
   attachmentConfirmBodySchema,
   attachmentPrepareBodySchema,
   documentCreateBodySchema,
+  documentDeleteBodySchema,
   documentListQuerySchema,
   documentUpdateBodySchema,
   opinionBodySchema,
@@ -38,6 +39,7 @@ import {
 } from './schemas.ts';
 import {
   documentCreateBody,
+  documentDeleteBody,
   documentListQuery,
   documentUpdateBody,
   opinionBody,
@@ -45,8 +47,8 @@ import {
   attachmentPrepareBody,
   attachmentConfirmBody,
 } from '@fingate/shared';
-import { loadDoc, transition } from '../domain/workflow/index.ts';
-import { documentPermissions } from '../domain/entitlement/index.ts';
+import { loadDoc, transition, assertStepUp } from '../domain/workflow/index.ts';
+import { documentPermissions, returnedByDeputyDirector } from '../domain/entitlement/index.ts';
 import { awaitingBadge, decisionPack, docHref, queryQueue } from '../domain/queries/index.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
 import { invalidateFor, rebuildEvidence } from '../domain/side-effects.ts';
@@ -429,6 +431,59 @@ export function documentRoutes(app: FastifyInstance): void {
   );
 
   /* ----------------------------- workflow -------------------------------- */
+
+  /**
+   * Xoá cứng phiếu thu/chi (yêu cầu ADM-01). Chỉ cho phép:
+   *  (a) bản nháp do CHÍNH người gọi tạo; hoặc
+   *  (b) hồ sơ đã bị Phó Giám đốc trả lại (từ chối / yêu cầu bổ sung).
+   * Mirror audit TRƯỚC khi xoá để còn dấu vết, nhưng KHÔNG ghi vào history hồ sơ
+   * (bản ghi sắp bị xoá). Bắt buộc step-up (ADR-14) vì là thao tác phá huỷ.
+   */
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/documents/:id/delete',
+      config: { perms: ['doc:delete'] as Permission[], stepUp: true, screen: 'DOC-01', summary: 'Xoá phiếu thu/chi (nháp của mình / PGD trả lại)' },
+      schema: { tags: ['documents'], body: documentDeleteBodySchema },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const params = req.params as { id: string };
+        const body = validate(documentDeleteBody, req.body);
+        const doc = await loadDoc(params.id);
+        await assertVisible(req, String(doc.company_id));
+
+        const steps = (doc.approval?.steps ?? []) as { role: Role; action?: string | null }[];
+        const allowed =
+          (doc.status === 'draft' && String(doc.created_by) === actor.user_id) ||
+          ((doc.status === 'rejected' || doc.status === 'changes_requested') && returnedByDeputyDirector(steps));
+        if (!allowed) {
+          throw new ApiError({
+            code: 'FG-RBAC-001',
+            detail: 'Chỉ xoá được bản nháp của bạn, hoặc phiếu đã bị Phó Giám đốc trả lại',
+          });
+        }
+
+        await assertStepUp(actor.user_id, body.verify);
+
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'document.delete',
+          subject: { type: doc.kind, id: params.id, code: doc.code },
+          company_id: String(doc.company_id),
+          document_id: params.id,
+          diff_fields: { reason: body.reason, status: doc.status, amount_minor: doc.amount.minor.toString() },
+          request_id: body.request_id,
+          ip: requestCtx(req).ip,
+        });
+
+        await Models.Attachment.deleteMany({ document_id: params.id } as never).exec();
+        const r = await Models.Document.deleteOne({ _id: params.id } as never).exec();
+        if (!r.deletedCount) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy hồ sơ' });
+        return ok(reply, { data: { ok: true, deleted_id: params.id } });
+      },
+    }),
+  );
 
   app.route(
     defineRoute({
@@ -852,8 +907,5 @@ function waitingDaysOf(doc: Record<string, unknown>): number {
 
 /** entitlement theo vai trò — dùng cho `can` per hồ sơ. */
 function entitlementsForRole(role: string, extra: string[] = [], denied: string[] = []): string[] {
-  const base = new Set(permissionsForRole(role as Role));
-  for (const p of extra) base.add(p as Permission);
-  for (const p of denied) base.delete(p as Permission);
-  return [...base];
+  return effectivePermissions(role as Role, extra as Permission[], denied as Permission[]);
 }

@@ -12,6 +12,7 @@ export const PERMISSIONS = [
   'doc:create',
   'doc:update',
   'doc:submit',
+  'doc:delete',
   'approval:act',
   'approval:override',
   'payment:mark',
@@ -48,6 +49,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'doc:create',
     'doc:update',
     'doc:submit',
+    'doc:delete',
     'payment:mark',
     'bank:read',
     'debt:read',
@@ -62,6 +64,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'doc:create',
     'doc:update',
     'doc:submit',
+    'doc:delete',
     'approval:act',
     'payment:mark',
     'bank:read',
@@ -82,6 +85,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'doc:create',
     'doc:update',
     'doc:submit',
+    'doc:delete',
     'approval:act',
     'approval:override',
     'payment:mark',
@@ -189,6 +193,76 @@ export const ROLE_LABEL: Record<Role, string> = {
   admin: 'Quản trị hệ thống',
 };
 
+/** Nhãn tiếng Việt của từng quyền — dùng cho bảng phân quyền (ADM-01). */
+export const PERMISSION_LABEL: Record<Permission, string> = {
+  'doc:read': 'Xem hồ sơ',
+  'doc:create': 'Tạo phiếu thu / phiếu chi',
+  'doc:update': 'Sửa hồ sơ',
+  'doc:submit': 'Gửi duyệt',
+  'doc:delete': 'Xoá phiếu thu / phiếu chi',
+  'approval:act': 'Duyệt hồ sơ',
+  'approval:override': 'Duyệt vượt cấp / ghi đè',
+  'payment:mark': 'Ghi nhận thanh toán',
+  'bank:read': 'Xem tài khoản ngân hàng & quỹ',
+  'bank:write': 'Sửa tài khoản ngân hàng & quỹ',
+  'bank:transfer': 'Chuyển tiền',
+  'loan:read': 'Xem khoản vay',
+  'loan:write': 'Sửa khoản vay',
+  'rollover:act': 'Xử lý đáo hạn',
+  'debt:read': 'Xem công nợ',
+  'debt:write': 'Sửa công nợ',
+  'budget:read': 'Xem ngân sách',
+  'budget:write': 'Sửa ngân sách',
+  'forecast:read': 'Xem dự báo dòng tiền',
+  'report:view': 'Xem báo cáo',
+  'report:export': 'Xuất báo cáo',
+  'alert:config': 'Cấu hình cảnh báo',
+  'hr:invite': 'Quản lý nhân sự',
+  'hr:disable': 'Ngừng hoạt động nhân sự',
+  'hr:transfer': 'Chuyển nhân sự giữa công ty',
+  'admin:matrix': 'Sửa ma trận duyệt',
+  'admin:settings': 'Cấu hình hệ thống / công ty',
+  'admin:group_accounts': 'Tài khoản tập đoàn',
+  'audit:read': 'Xem audit log',
+};
+
+/** Nhóm quyền theo module — dựng bảng tick phân quyền ở màn sửa nhân sự. */
+export interface PermissionGroup {
+  key: string;
+  label: string;
+  permissions: readonly Permission[];
+}
+
+export const PERMISSION_GROUPS: readonly PermissionGroup[] = [
+  { key: 'doc', label: 'Hồ sơ & phiếu thu/chi', permissions: ['doc:read', 'doc:create', 'doc:update', 'doc:submit', 'doc:delete'] },
+  { key: 'approval', label: 'Phê duyệt', permissions: ['approval:act', 'approval:override'] },
+  { key: 'payment', label: 'Thanh toán', permissions: ['payment:mark'] },
+  { key: 'bank', label: 'Ngân hàng & quỹ', permissions: ['bank:read', 'bank:write', 'bank:transfer'] },
+  { key: 'loan', label: 'Khoản vay & đáo hạn', permissions: ['loan:read', 'loan:write', 'rollover:act'] },
+  { key: 'debt', label: 'Công nợ', permissions: ['debt:read', 'debt:write'] },
+  { key: 'budget', label: 'Ngân sách & dự báo', permissions: ['budget:read', 'budget:write', 'forecast:read'] },
+  { key: 'report', label: 'Báo cáo', permissions: ['report:view', 'report:export'] },
+  { key: 'alert', label: 'Cảnh báo', permissions: ['alert:config'] },
+  { key: 'hr', label: 'Nhân sự', permissions: ['hr:invite', 'hr:disable', 'hr:transfer'] },
+  { key: 'admin', label: 'Quản trị hệ thống', permissions: ['admin:matrix', 'admin:settings', 'admin:group_accounts'] },
+  { key: 'audit', label: 'Audit', permissions: ['audit:read'] },
+];
+
+/**
+ * Quyền hiệu lực = quyền mặc định của vai trò + quyền cấp thêm − quyền thu hồi.
+ * `extra`/`denied` là quyền riêng per người (ADM-01/ADM-03).
+ */
+export function effectivePermissions(
+  role: Role,
+  extra: readonly Permission[] = [],
+  denied: readonly Permission[] = [],
+): Permission[] {
+  const base = new Set(permissionsForRole(role));
+  for (const p of extra) base.add(p);
+  for (const p of denied) base.delete(p);
+  return [...base];
+}
+
 /** Vai trò bắt buộc 2FA (architecture §7.2). */
 export const MFA_REQUIRED_ROLES: readonly Role[] = [
   'chief_accountant',
@@ -284,10 +358,8 @@ export function buildEntitlements(input: {
   extra?: readonly Permission[];
   denied?: readonly Permission[];
 }): Entitlements {
-  const base = new Set(permissionsForRole(input.role));
-  for (const p of input.extra ?? []) base.add(p);
-  for (const p of input.denied ?? []) base.delete(p);
-  const perms = [...base];
+  const perms = effectivePermissions(input.role, input.extra, input.denied);
+  const base = new Set(perms);
   const can = (p: Permission) => base.has(p);
   return {
     role: input.role,
@@ -297,6 +369,7 @@ export function buildEntitlements(input: {
       'doc:read': can('doc:read'),
       'doc:create': can('doc:create'),
       'doc:submit': can('doc:submit'),
+      'doc:delete': can('doc:delete'),
       'approval:act': can('approval:act'),
       'approval:override': can('approval:override'),
       'payment:mark': can('payment:mark'),

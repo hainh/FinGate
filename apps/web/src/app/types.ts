@@ -277,6 +277,7 @@ export interface DocumentDetail {
     override: boolean;
     attach: boolean;
     export: boolean;
+    delete: boolean;
     over_limit: boolean;
     step_order: number | null;
     reason?: string | null;
@@ -485,6 +486,8 @@ export interface PersonnelRow {
   invite_regenerate_count: number;
   started_at: string | null;
   holding_docs: number;
+  extra_permissions: string[];
+  denied_permissions: string[];
 }
 
 /** kết quả GET/POST /personnel/:id/invite-link — admin copy link gửi tay. */

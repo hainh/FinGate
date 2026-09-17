@@ -137,8 +137,10 @@ export function AppRoutes(): ReactNode {
       <Route path="/ngan-hang/khoan-vay" element={<Shell><LoansScreen /></Shell>} /> {/* LOAN-01 */}
       <Route path="/ngan-hang/dao-han" element={<Shell><RolloversScreen /></Shell>} /> {/* RENEW-01 */}
       <Route path="/ngan-hang/dao-han/phuong-an/moi" element={<Shell><DocumentFormScreen kind="rollover" /></Shell>} /> {/* RENEW-02 */}
+      <Route path="/ngan-hang/dao-han/phuong-an/:id/sua" element={<Shell><DocumentFormScreen kind="rollover" /></Shell>} />
       <Route path="/ngan-hang/chuyen-noi-bo" element={<Shell><InternalListScreen /></Shell>} /> {/* BANK-07 */}
       <Route path="/ngan-hang/chuyen-noi-bo/moi" element={<Shell><DocumentFormScreen kind="internal" /></Shell>} /> {/* BANK-08 */}
+      <Route path="/ngan-hang/chuyen-noi-bo/:id/sua" element={<Shell><DocumentFormScreen kind="internal" /></Shell>} />
       <Route path="/cong-no/phai-thu" element={<Shell><DebtsScreen kind="receivable" title="Công nợ phải thu" /></Shell>} /> {/* DEBT-01 */}
       <Route path="/cong-no/phai-tra" element={<Shell><DebtsScreen kind="payable" title="Công nợ phải trả" /></Shell>} /> {/* DEBT-03 */}
       <Route path="/dong-tien" element={<Shell><ForecastScreen /></Shell>} /> {/* CASH-01 */}

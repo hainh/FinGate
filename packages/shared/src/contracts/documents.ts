@@ -201,6 +201,25 @@ export const transitionBody = z
 
 export type TransitionBody = z.infer<typeof transitionBody>;
 
+/**
+ * POST /documents/{id}/delete — xoá cứng phiếu thu/chi (ADM-01 phân quyền).
+ * Cho phép: (a) kế toán xoá bản nháp do chính mình tạo; (b) KTT/kế toán xoá
+ * phiếu đã bị Phó Giám đốc trả lại (từ chối / yêu cầu bổ sung).
+ */
+export const documentDeleteBody = z.object({
+  reason: z.string().trim().min(5).max(500),
+  /** step-up verify: mật khẩu HOẶC OTP (ADR-14). */
+  verify: z
+    .object({
+      method: z.enum(['password', 'otp']),
+      value: z.string().min(1).max(200),
+    })
+    .optional(),
+  request_id: uuid,
+});
+
+export type DocumentDeleteBody = z.infer<typeof documentDeleteBody>;
+
 export const opinionBody = z.object({
   body: z.string().min(1).max(2000),
   kind: z.enum(['advice', 'risk', 'discussion']).default('advice'),

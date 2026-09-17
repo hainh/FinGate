@@ -179,10 +179,21 @@ export interface DocPermissions {
   override: boolean;
   attach: boolean;
   export: boolean;
+  delete: boolean;
   reason?: string;
   amount_limit_minor: string;
   over_limit: boolean;
   step_order: number | null;
+}
+
+/**
+ * Hồ sơ đã bị Phó Giám đốc trả lại (từ chối / yêu cầu bổ sung) → KTT/kế toán
+ * được phép xoá phiếu thu/chi (yêu cầu nghiệp vụ ADM-01).
+ */
+export function returnedByDeputyDirector(
+  steps: readonly { role: Role; action?: string | null }[],
+): boolean {
+  return steps.some((s) => s.role === 'deputy_director' && (s.action === 'reject' || s.action === 'request_changes'));
 }
 
 export function documentPermissions(
@@ -191,7 +202,7 @@ export function documentPermissions(
     status: string;
     created_by: string;
     amount_minor: bigint;
-    steps: { order: number; role: Role; user_id: string | null; state: string }[];
+    steps: { order: number; role: Role; user_id: string | null; state: string; action?: string | null }[];
     evidence_missing: string[];
     company_id: string;
     actor_companies: string[];
@@ -223,6 +234,11 @@ export function documentPermissions(
     read: inScope && has('doc:read'),
     edit: editable,
     submit: (doc.status === 'draft' || doc.status === 'changes_requested') && mine && has('doc:submit'),
+    // Xoá cứng phiếu: (a) bản nháp do chính mình tạo; (b) hồ sơ đã bị Phó Giám đốc trả lại.
+    delete:
+      has('doc:delete') &&
+      ((doc.status === 'draft' && mine) ||
+        ((doc.status === 'rejected' || doc.status === 'changes_requested') && returnedByDeputyDirector(doc.steps))),
     approve: approveAllowed,
     reject: approveAllowed,
     request_changes: approveAllowed,

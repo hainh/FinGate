@@ -22,18 +22,20 @@ import {
 } from '@fingate/shared';
 import { useDecisionPack, useDocument } from '../app/queries.ts';
 import type { DocumentDetail } from '../app/types.ts';
-import { FgAlert, FgButton, FgMoney, FgStatusChip, FgText, FgTooltip } from '../components/primitives.tsx';
+import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgPassword, FgStatusChip, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
-import { FgEmptyState, FgSkeletonParagraphs, FgSkeletonTable, FgTable, FgTabs } from '../components/uitk.tsx';
+import { FgEmptyState, FgModal, FgSkeletonParagraphs, FgSkeletonTable, FgTable, FgTabs } from '../components/uitk.tsx';
 import { FgApprovalTimeline, FgDecisionPack, OwnerLine } from '../components/finance.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery } from '../components/pagekit.tsx';
 import { useAuth } from '../app/store.tsx';
 import { ApprovalConfirmModal, useTransitionRunner } from './approve-modal.tsx';
 import { AUDIT_ACTION_LABEL, ROLES_LABEL } from '../components/labels.ts';
-import { apiCall } from '../app/api.ts';
+import { ApiRequestError, apiCall } from '../app/api.ts';
 
 const KIND_PATH: Record<string, string> = { spend: 'chi', income: 'thu', rollover: 'dao-han', internal: 'noi-bo' };
+const KIND_LIST_PATH: Record<string, string> = { spend: '/chi', income: '/thu', rollover: '/ngan-hang/dao-han', internal: '/ngan-hang/chuyen-noi-bo' };
+const KIND_EDIT_PATH: Record<string, string> = { spend: '/chi', income: '/thu', rollover: '/ngan-hang/dao-han/phuong-an', internal: '/ngan-hang/chuyen-noi-bo' };
 
 export function DocumentDetailScreen(): ReactNode {
   const { id } = useParams<{ id: string }>();
@@ -43,6 +45,7 @@ export function DocumentDetailScreen(): ReactNode {
   const query = useDocument(id);
   const runner = useTransitionRunner();
   const [confirmAction, setConfirmAction] = useState<null | string>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const doc = query.data;
 
   /* shortcuts duyệt (DS §10) — chỉ khi có quyền approve */
@@ -76,6 +79,8 @@ export function DocumentDetailScreen(): ReactNode {
       {(d) => {
         const amount = moneyFromWire(d.amount)!;
         const canAct = d.can.approve || d.can.reject || d.can.request_changes || d.can.submit || d.can.pay || d.can.fast_track;
+        const canMaintain = d.can.edit || d.can.delete;
+        const showBar = canAct || canMaintain;
         return (
           <>
             {back ? (
@@ -166,12 +171,17 @@ export function DocumentDetailScreen(): ReactNode {
             />
 
             {/* action bar — hiện khi người dùng là cấp xử lý hiện tại */}
-            {canAct ? (
+            {showBar ? (
               <div className="fg-action-bar fg-no-print" role="toolbar" aria-label="Hành động phê duyệt">
                 <FgText style="bodyS" color="muted" >
-                  Bạn xử lý bước {d.can.step_order ?? ''} ·phím tắt: Alt+D duyệt, Alt+X từ chối
+                  {canAct ? `Bạn xử lý bước ${d.can.step_order ?? ''} · phím tắt: Alt+D duyệt, Alt+X từ chối` : 'Bản nháp / hồ sơ bạn được phép xử lý'}
                 </FgText>
                 <span style={{ flex: 1 }} />
+                {d.can.delete ? (
+                  <FgButton variant="danger" onClick={() => setDeleteOpen(true)}>
+                    Xoá phiếu
+                  </FgButton>
+                ) : null}
                 {d.can.request_changes ? (
                   <FgButton onClick={() => setConfirmAction('request_changes')}>{ACTION_LABEL.request_changes}</FgButton>
                 ) : null}
@@ -179,6 +189,9 @@ export function DocumentDetailScreen(): ReactNode {
                   <FgButton variant="danger" onClick={() => setConfirmAction('reject')}>
                     Từ chối
                   </FgButton>
+                ) : null}
+                {d.can.edit ? (
+                  <FgButton onClick={() => navigate(`${KIND_EDIT_PATH[d.kind] ?? '/ho-so'}/${d._id}/sua`)}>Sửa</FgButton>
                 ) : null}
                 {d.can.submit ? (
                   <FgButton variant="primary" onClick={() => setConfirmAction('submit')}>
@@ -216,6 +229,13 @@ export function DocumentDetailScreen(): ReactNode {
                   setConfirmAction(null);
                   void query.refetch();
                 }}
+              />
+            ) : null}
+            {deleteOpen && doc ? (
+              <DeleteDocumentModal
+                doc={doc}
+                onClose={() => setDeleteOpen(false)}
+                onDone={() => navigate(KIND_LIST_PATH[d.kind] ?? '/chi')}
               />
             ) : null}
             {runner.modals}
@@ -361,3 +381,105 @@ function AuditTab({ doc }: { doc: DocumentDetail }): ReactNode {
 }
 
 export { KIND_PATH };
+
+/**
+ * Modal xoá cứng phiếu thu/chi (yêu cầu ADM-01). Bắt buộc lý do; khi server đòi
+ * step-up (FG-AUTH-008) thì hiện ô mật khẩu/OTP và gửi lại kèm `verify`.
+ */
+function DeleteDocumentModal({ doc, onClose, onDone }: { doc: DocumentDetail; onClose: () => void; onDone: () => void }): ReactNode {
+  const [reason, setReason] = useState('');
+  const [needVerify, setNeedVerify] = useState(false);
+  const [method, setMethod] = useState<'password' | 'otp'>('password');
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSubmit = reason.trim().length >= 5 && (!needVerify || value.length >= 4);
+
+  const submit = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiCall(`/documents/${doc._id}/delete`, {
+        method: 'POST',
+        body: {
+          reason: reason.trim(),
+          ...(needVerify ? { verify: { method, value } } : {}),
+        },
+      });
+      onDone();
+    } catch (e) {
+      if (e instanceof ApiRequestError) {
+        const p = e.problem;
+        if ((p.code === 'FG-AUTH-008' || p.data?.need_verify === true) && !needVerify) {
+          setNeedVerify(true);
+        } else if (p.code === 'FG-AUTH-008') {
+          setError('Xác thực không đúng — thử lại.');
+        } else {
+          setError(p.detail ?? p.title);
+        }
+      } else {
+        setError('Không xoá được phiếu');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <FgModal
+      open
+      title={`Xoá phiếu ${doc.code}`}
+      onCancel={onClose}
+      footer={
+        <>
+          <FgButton onClick={onClose}>Hủy</FgButton>
+          <FgButton variant="danger" loading={busy} disabled={!canSubmit} onClick={() => void submit()}>
+            Xoá vĩnh viễn
+          </FgButton>
+        </>
+      }
+    >
+      <FgAlert
+        tone="danger"
+        title="Xoá vĩnh viễn — không thể khôi phục"
+        description="Bản ghi phiếu bị xoá khỏi hệ thống; một dòng audit vẫn được lưu lại. Chỉ xoá được bản nháp của bạn hoặc phiếu đã bị Phó Giám đốc trả lại."
+      />
+      <div style={{ marginTop: 16 }}>
+        <FgField label="Lý do xoá (bắt buộc, vào audit)" error={reason && reason.trim().length < 5 ? 'Tối thiểu 5 ký tự' : null}>
+          <FgInput autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="VD: Nhập trùng, đã tạo phiếu thay thế" />
+        </FgField>
+      </div>
+      {needVerify ? (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <FgButton size="small" variant={method === 'password' ? 'primary' : 'secondary'} onClick={() => setMethod('password')}>
+              Mật khẩu
+            </FgButton>
+            <FgButton size="small" variant={method === 'otp' ? 'primary' : 'secondary'} onClick={() => setMethod('otp')}>
+              OTP 6 số
+            </FgButton>
+          </div>
+          <FgField label={method === 'password' ? 'Mật khẩu' : 'Mã OTP'} error={error}>
+            {method === 'password' ? (
+              <FgPassword autoFocus value={value} onChange={(e) => setValue(e.target.value)} autoComplete="current-password" />
+            ) : (
+              <FgInput
+                autoFocus
+                inputMode="numeric"
+                maxLength={6}
+                value={value}
+                onChange={(e) => setValue(e.target.value.replace(/\D/g, ''))}
+                style={{ letterSpacing: 8, textAlign: 'center', fontFamily: 'var(--fg-font-mono)' }}
+              />
+            )}
+          </FgField>
+        </div>
+      ) : error ? (
+        <div style={{ marginTop: 12 }}>
+          <FgAlert tone="danger" title={error} />
+        </div>
+      ) : null}
+    </FgModal>
+  );
+}

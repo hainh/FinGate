@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 import { businessDate, idString, objectId, uuid } from './common.js';
+import { PERMISSIONS } from '../permissions/index.js';
 
 export const email = z
   .string()
@@ -226,6 +227,10 @@ export const personnelRow = z.object({
   started_at: businessDate.nullable(),
   /** số hồ sơ người này đang giữ ở bước current — quyết định có phải chỉ định người thay (§XXIX.4). */
   holding_docs: z.number().int().default(0),
+  /** quyền cấp thêm ngoài vai trò (bảng tick phân quyền ADM-01). */
+  extra_permissions: z.array(z.enum(PERMISSIONS)).default([]),
+  /** quyền thu hồi so với vai trò (bảng tick phân quyền ADM-01). */
+  denied_permissions: z.array(z.enum(PERMISSIONS)).default([]),
 });
 
 export const personnelDeactivateBody = z.object({
@@ -245,6 +250,9 @@ export const personnelUpdateBody = z.object({
   role: idString.optional(),
   department_id: objectId.nullable().optional(),
   amount_limit_minor: z.string().regex(/^\d+$/).optional(),
+  /** quyền cấp thêm / thu hồi so với vai trò — bảng tick phân quyền (ADM-01). */
+  extra_permissions: z.array(z.enum(PERMISSIONS)).optional(),
+  denied_permissions: z.array(z.enum(PERMISSIONS)).optional(),
   /** lý do sửa (audit) — tùy chọn. */
   reason: z.string().min(5).max(500).optional(),
   request_id: uuid,

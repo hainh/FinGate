@@ -17,6 +17,11 @@ import {
   ddmmyyyy,
   dateTimeLabel,
   moneyToWire,
+  PERMISSION_GROUPS,
+  PERMISSION_LABEL,
+  permissionsForRole,
+  type Permission,
+  type Role,
   type Money,
 } from '@fingate/shared';
 import { useAuditLog, useCompanies, useDepartments, useMatrix, useMatrixUpsert, usePersonnel, type DepartmentRow } from '../app/queries.ts';
@@ -575,6 +580,8 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
   const [role, setRole] = useState<string>(row.role || 'staff');
   const [deptId, setDeptId] = useState<string | undefined>(row.department_id ?? undefined);
   const [limit, setLimit] = useState<Money | null>(row.amount_limit_minor && row.amount_limit_minor !== '0' ? money(row.amount_limit_minor) : null);
+  const [extraPerms, setExtraPerms] = useState<Permission[]>((row.extra_permissions ?? []) as Permission[]);
+  const [deniedPerms, setDeniedPerms] = useState<Permission[]>((row.denied_permissions ?? []) as Permission[]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -598,6 +605,27 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
 
   const companyOptions = useMemo(() => (companies.data?.items ?? []).map((c) => ({ label: c.name, value: c._id })), [companies.data]);
 
+  const roleDefaults = useMemo(() => permissionsForRole((role || 'staff') as Role), [role]);
+
+  const permissionState = (p: Permission): { checked: boolean; override: 'extra' | 'denied' | null } => {
+    const isDefault = roleDefaults.includes(p);
+    const isChecked = isDefault ? !deniedPerms.includes(p) : extraPerms.includes(p);
+    const override = isChecked === isDefault ? null : isChecked ? 'extra' : 'denied';
+    return { checked: isChecked, override };
+  };
+
+  const togglePermission = (p: Permission): void => {
+    const isDefault = roleDefaults.includes(p);
+    const { checked } = permissionState(p);
+    if (checked) {
+      if (isDefault) setDeniedPerms((d) => [...d, p]);
+      else setExtraPerms((e) => e.filter((x) => x !== p));
+    } else {
+      if (isDefault) setDeniedPerms((d) => d.filter((x) => x !== p));
+      else setExtraPerms((e) => [...e, p]);
+    }
+  };
+
   const submit = async (): Promise<void> => {
     setBusy(true);
     setError(null);
@@ -611,6 +639,8 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
           role,
           department_id: deptId ?? null,
           amount_limit_minor: limit ? moneyToWire(limit).minor : '0',
+          extra_permissions: extraPerms,
+          denied_permissions: deniedPerms,
         },
       });
       toastOk('Đã cập nhật hồ sơ nhân sự');
@@ -627,7 +657,7 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
   };
 
   return (
-    <FgModal open title={`Sửa hồ sơ · ${row.display_name}`} onCancel={onClose} onOk={() => void submit()} okText="Lưu" confirmLoading={busy} width={520}>
+    <FgModal open title={`Sửa hồ sơ · ${row.display_name}`} onCancel={onClose} onOk={() => void submit()} okText="Lưu" confirmLoading={busy} width={640}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)', paddingTop: 8 }}>
         <FgField label="Họ tên" required error={fieldErrors.display_name ?? null}>
           <FgInput value={name} onChange={(e: { target: { value: string } }) => setName(e.target.value)} placeholder="Nguyễn Văn A" />
@@ -657,7 +687,14 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
           <FgSelect
             options={Object.entries(ROLES_LABEL).map(([value, label]) => ({ label, value }))}
             value={role}
-            onChange={(v) => setRole(v ?? 'staff')}
+            onChange={(v) => {
+              const next = v ?? 'staff';
+              if (next !== role) {
+                setExtraPerms([]);
+                setDeniedPerms([]);
+              }
+              setRole(next);
+            }}
             style={{ width: '100%' }}
           />
           {['chief_accountant', 'deputy_director', 'director', 'chairman', 'admin'].includes(role) ? (
@@ -680,6 +717,48 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
         <FgField label="Hạn mức duyệt (VND, tùy chọn)">
           <FgMoneyInput value={limit} onChange={setLimit} ariaLabel="Hạn mức duyệt" />
         </FgField>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <label style={{ fontSize: 'var(--fg-font-body-s-size)', color: 'var(--fg-text-secondary)', fontWeight: 500 }}>
+            Phân quyền chi tiết
+          </label>
+          <FgText style="caption" color="muted">
+            Tick sẵn theo vai trò. Tick thêm = cấp quyền ngoài vai trò; bỏ tick = thu hồi quyền của vai trò.
+          </FgText>
+          <div
+            style={{
+              display: 'grid',
+              gap: 'var(--fg-space-3)',
+              maxHeight: 320,
+              overflowY: 'auto',
+              border: '1px solid var(--fg-border-subtle)',
+              borderRadius: 'var(--fg-radius-md)',
+              padding: 'var(--fg-space-3)',
+              marginTop: 8,
+            }}
+          >
+            {PERMISSION_GROUPS.map((group) => (
+              <div key={group.key}>
+                <FgText style="bodyS" strong>
+                  {group.label}
+                </FgText>
+                <div style={{ display: 'grid', gap: 4, marginTop: 6 }}>
+                  {group.permissions.map((p) => {
+                    const { checked, override } = permissionState(p);
+                    return (
+                      <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <Checkbox checked={checked} onChange={() => togglePermission(p)}>
+                          <span style={{ fontSize: 'var(--fg-font-body-s-size)' }}>{PERMISSION_LABEL[p]}</span>
+                        </Checkbox>
+                        {override === 'extra' ? <FgTag tone="info">cấp thêm</FgTag> : null}
+                        {override === 'denied' ? <FgTag tone="attention">thu hồi</FgTag> : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
         {error ? <FgAlert tone="danger" title={error} /> : null}
       </div>
     </FgModal>

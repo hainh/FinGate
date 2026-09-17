@@ -21,6 +21,7 @@ import {
   debtUpsertBody,
   delegationBody,
   documentCreateBody,
+  documentDeleteBody,
   documentListQuery,
   documentUpdateBody,
   exportRequestBody,
@@ -72,6 +73,7 @@ export const documentCreateBodySchema = j(documentCreateBody);
 export const documentUpdateBodySchema = j(documentUpdateBody);
 export const documentListQuerySchema = j(documentListQuery);
 export const transitionBodySchema = j(transitionBody);
+export const documentDeleteBodySchema = j(documentDeleteBody);
 export const opinionBodySchema = j(opinionBody);
 export const attachmentPrepareBodySchema = j(attachmentPrepareBody);
 export const attachmentConfirmBodySchema = j(attachmentConfirmBody);

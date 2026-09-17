@@ -91,7 +91,7 @@ export function adminRoutes(app: FastifyInstance): void {
         // status tài khoản (invited/active/deactivated) nằm ở User, không phải Assignment
         const userStatus = q.status;
 
-        const assignments = await Models.Assignment.find(filter as never).select({ user_id: 1, company_id: 1, department_id: 1, role: 1, amount_limit_minor: 1, status: 1 }).lean();
+        const assignments = await Models.Assignment.find(filter as never).select({ user_id: 1, company_id: 1, department_id: 1, role: 1, amount_limit_minor: 1, extra_permissions: 1, denied_permissions: 1, status: 1 }).lean();
         const userIds = [...new Set(assignments.map((a) => String(a.user_id)))];
         const userFilter: Record<string, unknown> = { _id: { $in: userIds } };
         if (userStatus) userFilter.status = userStatus;
@@ -142,6 +142,8 @@ export function adminRoutes(app: FastifyInstance): void {
             invite_regenerate_count: Number(inv?.regenerate_count ?? 0),
             started_at: u.created_at ? new Date(String(u.created_at)).toISOString().slice(0, 10) : null,
             holding_docs: holdMap.get(String(u._id)) ?? 0,
+            extra_permissions: (a?.extra_permissions ?? []) as string[],
+            denied_permissions: (a?.denied_permissions ?? []) as string[],
           };
         });
       return ok(reply, { items, total: items.length }, { maxAge: 15 });
@@ -652,8 +654,16 @@ export function adminRoutes(app: FastifyInstance): void {
         if (user.status === 'deactivated') throw new ApiError({ code: 'FG-HR-001', detail: 'Tài khoản đã ngừng hoạt động — không sửa được' });
 
         const assignment = await Models.Assignment.findOne({ user_id: id, status: 'active' } as never)
-          .select({ _id: 1, company_id: 1, department_id: 1, role: 1, amount_limit_minor: 1 })
-          .lean<{ _id: unknown; company_id?: unknown; department_id?: unknown; role?: string; amount_limit_minor?: unknown } | null>();
+          .select({ _id: 1, company_id: 1, department_id: 1, role: 1, amount_limit_minor: 1, extra_permissions: 1, denied_permissions: 1 })
+          .lean<{
+            _id: unknown;
+            company_id?: unknown;
+            department_id?: unknown;
+            role?: string;
+            amount_limit_minor?: unknown;
+            extra_permissions?: string[];
+            denied_permissions?: string[];
+          } | null>();
 
         const currentCompany = assignment?.company_id ? String(assignment.company_id) : null;
         const nextCompany = body.company_id ?? currentCompany;
@@ -678,6 +688,10 @@ export function adminRoutes(app: FastifyInstance): void {
         const nextRole = String(body.role ?? assignment?.role ?? 'staff');
         const nextDept = body.department_id !== undefined ? body.department_id : assignment?.department_id ? String(assignment.department_id) : null;
         const nextLimit = body.amount_limit_minor !== undefined ? BigInt(body.amount_limit_minor) : asBigInt(assignment?.amount_limit_minor);
+        const prevExtra = (assignment?.extra_permissions ?? []) as string[];
+        const prevDenied = (assignment?.denied_permissions ?? []) as string[];
+        const nextExtra = body.extra_permissions !== undefined ? body.extra_permissions : prevExtra;
+        const nextDenied = body.denied_permissions !== undefined ? body.denied_permissions : prevDenied;
 
         const userSet: Record<string, unknown> = { updated_at: new Date(), mfa_required: MFA_REQUIRED_ROLES.includes(nextRole as Role) };
         if (body.display_name !== undefined) userSet.display_name = body.display_name;
@@ -691,14 +705,20 @@ export function adminRoutes(app: FastifyInstance): void {
         if (assignment) {
           await Models.Assignment.updateOne(
             { _id: assignment._id },
-            { $set: { company_id: nextCompany, department_id: nextDept, role: nextRole, amount_limit_minor: nextLimit } },
+            { $set: { company_id: nextCompany, department_id: nextDept, role: nextRole, amount_limit_minor: nextLimit, extra_permissions: nextExtra, denied_permissions: nextDenied } },
           ).exec();
         } else {
-          await Models.Assignment.create({ user_id: id, company_id: nextCompany, department_id: nextDept, role: nextRole, amount_limit_minor: nextLimit, status: 'active' } as never);
+          await Models.Assignment.create({ user_id: id, company_id: nextCompany, department_id: nextDept, role: nextRole, amount_limit_minor: nextLimit, extra_permissions: nextExtra, denied_permissions: nextDenied, status: 'active' } as never);
         }
 
         const roleChanged = nextRole !== String(assignment?.role ?? '');
-        if (companyChanged || roleChanged) await revokeAllUserSessions(id, 'đổi vai trò/công ty');
+        const sameSet = (a: string[], b: string[]) => {
+          const sa = [...a].sort();
+          const sb = [...b].sort();
+          return sa.length === sb.length && sa.every((v, i) => v === sb[i]);
+        };
+        const permsChanged = !sameSet(prevExtra, nextExtra) || !sameSet(prevDenied, nextDenied);
+        if (companyChanged || roleChanged || permsChanged) await revokeAllUserSessions(id, 'đổi vai trò/công ty/quyền');
 
         await mirrorAudit({
           at: new Date(),
@@ -712,6 +732,8 @@ export function adminRoutes(app: FastifyInstance): void {
             role: body.role ?? null,
             department_id: nextDept,
             amount_limit_minor: body.amount_limit_minor ?? null,
+            extra_permissions: body.extra_permissions ?? null,
+            denied_permissions: body.denied_permissions ?? null,
             reason: body.reason ?? null,
           },
           request_id: body.request_id,
