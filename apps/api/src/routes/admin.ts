@@ -926,7 +926,13 @@ export function adminRoutes(app: FastifyInstance): void {
       config: { perms: 'public', screen: 'ADM-07', summary: 'Bộ phận theo công ty' },
       handler: async (req, reply) => {
         const scope = requireScope(req);
-        const rows = await Models.Department.find(withScopeFilter(scope) as never).sort({ name: 1 }).lean();
+        const q = (req.query ?? {}) as { company_id?: string };
+        // scope_all (chairman/admin): mặc định xem MỌI công ty; truyền company_id mới lọc 1 công ty.
+        if (q.company_id && scope.companyIds !== null && !scope.companyIds.includes(q.company_id)) {
+          throw new ApiError({ code: 'FG-RBAC-002' });
+        }
+        const filter = q.company_id ? { company_id: q.company_id } : withScopeFilter(scope);
+        const rows = await Models.Department.find(filter as never).sort({ name: 1 }).lean();
         return ok(reply, { items: rows.map((d) => ({ _id: String(d._id), company_id: String(d.company_id), name: String(d.name), code: (d as { code?: string | null }).code ?? null, parent_id: (d as { parent_id?: unknown }).parent_id ? String((d as { parent_id: unknown }).parent_id) : null, active: Boolean((d as { active?: boolean }).active) })) }, { maxAge: 60 });
       },
     }),
