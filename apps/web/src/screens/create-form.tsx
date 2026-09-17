@@ -10,7 +10,7 @@ import { useNavigate, useParams } from 'react-router';
 import { DOC_KIND_LABEL, formatMoney, moneyFromWire, statusLabel, type Money } from '@fingate/shared';
 import { ApiRequestError, apiData } from '../app/api.ts';
 import { useAuth } from '../app/store.tsx';
-import { useDocument } from '../app/queries.ts';
+import { useBankAccounts, useDocument } from '../app/queries.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoneyInput, FgSelect, FgTextarea, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
@@ -57,12 +57,21 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
   const { me } = useAuth();
   const { message } = useToast();
   const existing = useDocument(id);
+  const accounts = useBankAccounts();
   const [f, setF] = useState<FormState>(initial);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [submitAsDraft, setSubmitAsDraft] = useState(true);
 
   const set = (k: keyof FormState, v: string | Money | null) => setF((s) => ({ ...s, [k]: v }));
+
+  // Nguồn tiền: chỉ tài khoản công ty mình hoặc Tập đoàn, đúng loại tiền mặt/ngân hàng.
+  const accountOptions = (accounts.data?.items ?? [])
+    .filter((a) => a.status === 'active' && a.kind === f.fund)
+    .map((a) => ({
+      value: a._id,
+      label: `${a.is_group ? 'Tập đoàn' : (a.company_name ?? '—')} · ${a.bank_name} ${a.account_number_masked}`,
+    }));
 
 
   const buildBody = () => {
@@ -167,23 +176,36 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
             <FgField label="Ngày dự kiến *" error={errors.planned_date}>
               <FgInput type="date" value={f.planned_date} onChange={(e) => set('planned_date', e.target.value)} disabled={!canEdit} />
             </FgField>
-            <FgField label="Nguồn tiền">
+            <FgField label="Nguồn tiền *">
               <FgSelect
                 options={[
                   { value: 'bank', label: 'Tài khoản ngân hàng' },
                   { value: 'cash', label: 'Quỹ tiền mặt' },
                 ]}
                 value={f.fund}
-                onChange={(v) => set('fund', v ?? 'bank')}
+                onChange={(v) => {
+                  set('fund', v ?? 'bank');
+                  set('account_id', '');
+                }}
                 style={{ width: '100%' }}
                 disabled={!canEdit}
               />
             </FgField>
-            {f.fund === 'bank' ? (
-              <FgField label="Tài khoản nguồn" help="Chọn trong Ngân hàng → Tài khoản (Bank-01)">
-                <FgInput value={f.account_id} onChange={(e) => set('account_id', e.target.value)} placeholder="id tài khoản" disabled={!canEdit} />
-              </FgField>
-            ) : null}
+            <FgField
+              label="Tài khoản nguồn *"
+              error={errors['source.account_id'] ?? null}
+              help="Chỉ tài khoản của công ty bạn và tài khoản Tập đoàn"
+            >
+              <FgSelect
+                options={accountOptions}
+                value={f.account_id}
+                onChange={(v) => set('account_id', v ?? '')}
+                placeholder={f.fund === 'cash' ? 'Chọn quỹ tiền mặt' : 'Chọn tài khoản ngân hàng'}
+                allowClear
+                style={{ width: '100%' }}
+                disabled={!canEdit}
+              />
+            </FgField>
             <FgField label="Hợp đồng / căn cứ" error={errors['contract.code']}>
               <FgInput value={f.contract_code} onChange={(e) => set('contract_code', e.target.value)} placeholder="HĐ 45/2026" disabled={!canEdit} />
             </FgField>

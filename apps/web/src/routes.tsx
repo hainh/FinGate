@@ -22,6 +22,7 @@ import {
 } from './screens/documents.tsx';
 import { DocumentDetailScreen } from './screens/document-detail.tsx';
 import { BalanceEntryScreen, BankAccountsScreen } from './screens/bank.tsx';
+import { BankAccountFormScreen } from './screens/bank-account-form.tsx';
 import { DebtsScreen, LoansScreen, RolloversScreen } from './screens/loans.tsx';
 import { ForecastScreen } from './screens/forecast.tsx';
 import { ReportLibraryScreen, ReportRunnerScreen } from './screens/reports.tsx';
@@ -131,6 +132,7 @@ export function AppRoutes(): ReactNode {
       <Route path="/thu/moi" element={<Shell><DocumentFormScreen kind="income" /></Shell>} /> {/* THU-02 */}
       <Route path="/thu/:id/sua" element={<Shell><DocumentFormScreen kind="income" /></Shell>} />
       <Route path="/ngan-hang/taikhoan" element={<Shell><BankAccountsScreen /></Shell>} /> {/* BANK-01 */}
+      <Route path="/ngan-hang/taikhoan/moi" element={<Shell><BankAccountFormScreen /></Shell>} /> {/* BANK-02 */}
       <Route path="/ngan-hang/so-du" element={<Shell><BalanceEntryScreen /></Shell>} /> {/* BANK-04 */}
       <Route path="/ngan-hang/khoan-vay" element={<Shell><LoansScreen /></Shell>} /> {/* LOAN-01 */}
       <Route path="/ngan-hang/dao-han" element={<Shell><RolloversScreen /></Shell>} /> {/* RENEW-01 */}

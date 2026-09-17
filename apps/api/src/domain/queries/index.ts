@@ -337,11 +337,23 @@ export interface AccountSnapshot {
   open_docs: number;
 }
 
-/** Số dư = bản `balances_daily` mới nhất mỗi tài khoản (không read model — §8.3). */
-export async function accountSnapshots(scope: ScopeLike, opts: { includeClosed?: boolean } = {}): Promise<AccountSnapshot[]> {
-  const accounts = await Models.BankAccount.find(
-    withScope(scopeOf(scope), opts.includeClosed ? {} : { status: { $ne: 'closed' } }) as never,
-  )
+/**
+ * Số dư = bản `balances_daily` mới nhất mỗi tài khoản (không read model — §8.3).
+ * `includeGroup`: công ty con vẫn thấy tài khoản Tập đoàn (company_id null, is_group)
+ * bên cạnh tài khoản của chính mình — dùng cho danh sách/chọn nguồn tiền.
+ */
+export async function accountSnapshots(
+  scope: ScopeLike,
+  opts: { includeClosed?: boolean; includeGroup?: boolean } = {},
+): Promise<AccountSnapshot[]> {
+  const base = opts.includeClosed ? {} : { status: { $ne: 'closed' } };
+  const filter: Record<string, unknown> =
+    scope.companyIds === null
+      ? base
+      : opts.includeGroup
+        ? { ...base, $or: [{ company_id: { $in: scope.companyIds } }, { is_group: true }] }
+        : withScope(scopeOf(scope), base);
+  const accounts = await Models.BankAccount.find(filter as never)
     .select({ company_id: 1, bank_name: 1, account_number: 1, account_name: 1, kind: 1, currency: 1, min_balance_minor: 1, is_group: 1, status: 1 })
     .lean();
   if (!accounts.length) return [];

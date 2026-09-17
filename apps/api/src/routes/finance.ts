@@ -47,7 +47,11 @@ export function financeRoutes(app: FastifyInstance): void {
         const scope = requireScope(req);
         const actor = requireActor(req);
         const showFull = actor.permissions.includes('bank:read');
-        const rows = await accountSnapshots(scope, { includeClosed: (req.query as { include_closed?: string }).include_closed === 'true' });
+        const rows = await accountSnapshots(scope, {
+          includeClosed: (req.query as { include_closed?: string }).include_closed === 'true',
+          // Công ty con thấy tài khoản Tập đoàn để chọn nguồn tiền (§VIII).
+          includeGroup: true,
+        });
         return ok(
           reply,
           {
@@ -90,12 +94,21 @@ export function financeRoutes(app: FastifyInstance): void {
       schema: { tags: ['bank'], body: bankAccountUpsertBodySchema },
       handler: async (req, reply) => {
         const actor = requireActor(req);
+        const scope = requireScope(req);
         const body = validate(bankAccountUpsertBody, req.body);
         if (body.is_group && !actor.permissions.includes('admin:group_accounts')) {
           throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ Chủ tịch HĐQT cấu hình tài khoản Tập đoàn (§VIII)' });
         }
+        // Tài khoản Tập đoàn chỉ tạo từ tầm nhìn toàn tập đoàn (chairman/admin).
+        if (body.is_group && scope.companyIds !== null) {
+          throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ cấp Tập đoàn mới tạo được tài khoản Tập đoàn' });
+        }
         const companyId = body.is_group ? null : (body.company_id ?? actor.company_id);
         if (!body.is_group && !companyId) throw new ApiError({ code: 'FG-RBAC-002', detail: 'Chưa chọn công ty' });
+        // Giám đốc chỉ tạo tài khoản cho công ty trong phạm vi của mình; Chủ tịch tạo được mọi công ty con.
+        if (companyId && scope.companyIds !== null && !scope.companyIds.includes(companyId)) {
+          throw new ApiError({ code: 'FG-RBAC-002', detail: 'Chỉ được tạo tài khoản cho công ty trong phạm vi của bạn' });
+        }
 
         const dup = await Models.BankAccount.findOne({ account_number: body.account_number, company_id: companyId }).lean();
         if (dup) throw new ApiError({ code: 'FG-VAL-001', errors: { account_number: 'Số tài khoản này đã tồn tại trong công ty' } });

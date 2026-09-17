@@ -54,6 +54,30 @@ import { attachmentKey, detectMagic, sha256hex, storage } from '../storage/index
 import { newRequestId } from '../lib/http.ts';
 
 /**
+ * Nguồn tiền chỉ được chọn từ tài khoản của công ty mình HOẶC tài khoản Tập đoàn
+ * (company_id null, is_group) — chặn ở server, không tin UI (§VIII).
+ */
+async function assertSourceAccountAllowed(companyId: string, accountId: string | null | undefined): Promise<void> {
+  if (!accountId) return;
+  const acct = await Models.BankAccount.findOne({ _id: accountId })
+    .select({ company_id: 1, is_group: 1, status: 1 })
+    .lean();
+  if (!acct || acct.status !== 'active') {
+    throw new ApiError({
+      code: 'FG-VAL-001',
+      errors: { 'source.account_id': 'Tài khoản nguồn không tồn tại hoặc đã đóng/phong tỏa' },
+    });
+  }
+  const owner = acct.company_id ? String(acct.company_id) : null;
+  if (!acct.is_group && owner !== companyId) {
+    throw new ApiError({
+      code: 'FG-RBAC-002',
+      detail: 'Tài khoản nguồn không thuộc công ty của bạn hoặc Tập đoàn',
+    });
+  }
+}
+
+/**
  * `/api/v1/documents` + `/api/v1/queue*`.
  * Kiến trúc ghi `attachments:prepare`; ở đây dùng `/attachments/prepare` vì
  * path-to-regexp coi `:` là dấu hiệu tham số — cùng hành vi, khác ký tự.
@@ -190,6 +214,7 @@ export function documentRoutes(app: FastifyInstance): void {
         if (scope.companyIds !== null && !scope.companyIds.includes(companyId)) {
           throw new ApiError({ code: 'FG-RBAC-002' });
         }
+        await assertSourceAccountAllowed(companyId, body.source.account_id);
 
         const kind = body.kind;
         const amountMinor = BigInt(body.amount.amount_minor);
@@ -302,6 +327,7 @@ export function documentRoutes(app: FastifyInstance): void {
           if (body[key] !== undefined) set[key] = body[key];
         }
         if (body.payee) set.payee = { ...doc.payee, ...body.payee };
+        if (body.source?.account_id) await assertSourceAccountAllowed(String(doc.company_id), body.source.account_id);
         if (body.source) set.source = { ...doc.source, ...body.source };
         if (body.contract) set.contract = { ...doc.contract, ...body.contract };
         if (body.budget) set.budget = { ...doc.budget, ...body.budget };

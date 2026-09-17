@@ -52,6 +52,7 @@ const PLAN: SeedPlan = {
     { company: 'HH', bank: 'Techcombank', number: '19130001234501', name: 'Công ty TNHH Dịch vụ Happy Home', balance: 900_000_000 },
     { company: 'MP', bank: 'Quỹ tiền mặt công ty', number: 'CASH-MP', name: 'Quỹ tiền mặt', balance: 350_000_000 },
     { company: null, bank: 'Vietcombank', number: '072100099887700', name: 'Tập đoàn — Tài khoản chính', balance: 30_000_000_000, is_group: true },
+    { company: null, bank: 'Quỹ tiền mặt Tập đoàn', number: 'CASH-GROUP', name: 'Quỹ tiền mặt Tập đoàn', balance: 2_000_000_000, is_group: true },
   ],
   users: [
     { email: 'chairman@fingate.local', name: 'Trần Đình Sơn', role: 'chairman', company: null, limitTy: 999_999 },

@@ -35,6 +35,27 @@ export async function ensureGroupCompany(): Promise<string> {
   return String(doc._id);
 }
 
+/** Số hiệu quỹ tiền mặt mặc định của Tập đoàn. */
+export const GROUP_CASH_ACCOUNT_NUMBER = 'CASH-GROUP';
+
+/** Tạo (nếu chưa có) quỹ tiền mặt mặc định của Tập đoàn — công ty con thấy để chọn nguồn tiền. */
+export async function ensureGroupCashAccount(): Promise<string> {
+  const existing = await Models.BankAccount.findOne({ account_number: GROUP_CASH_ACCOUNT_NUMBER, company_id: null }).lean();
+  if (existing) return String(existing._id);
+  const doc = await Models.BankAccount.create({
+    company_id: null,
+    is_group: true,
+    bank_name: 'Quỹ tiền mặt Tập đoàn',
+    account_name: 'Quỹ tiền mặt Tập đoàn',
+    account_number: GROUP_CASH_ACCOUNT_NUMBER,
+    kind: 'cash',
+    currency: 'VND',
+    min_balance_minor: 0n,
+    status: 'active',
+  } as never);
+  return String(doc._id);
+}
+
 /** Tạo tài khoản quản trị đầu tiên nếu DB chưa có người dùng nào. */
 export async function bootstrapAdminIfEmpty(log?: FastifyBaseLogger): Promise<Record<string, unknown>> {
   const users = await Models.User.countDocuments({}).exec();
@@ -47,6 +68,7 @@ export async function bootstrapAdminIfEmpty(log?: FastifyBaseLogger): Promise<Re
   const email = env.BOOTSTRAP_ADMIN_EMAIL.trim().toLowerCase();
   const password = await hashPassword(env.BOOTSTRAP_ADMIN_PASSWORD);
   const companyId = await ensureGroupCompany();
+  await ensureGroupCashAccount();
 
   const user = await Models.User.create({
     email,
