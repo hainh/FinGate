@@ -47,5 +47,8 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'hr.deactivate': 'Ngừng hoạt động nhân sự',
   'hr.transfer': 'Chuyển nhân sự',
   'matrix.upsert': 'Đổi ma trận duyệt',
+  'department.activate': 'Dùng lại bộ phận',
+  'department.deactivate': 'Ngừng dùng bộ phận',
+  'department.delete': 'Xoá bộ phận',
   'settings.update': 'Đổi cấu hình',
 };

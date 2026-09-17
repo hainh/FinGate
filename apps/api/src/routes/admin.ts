@@ -953,6 +953,108 @@ export function adminRoutes(app: FastifyInstance): void {
     }),
   );
 
+  /** ADM-07 — ngừng dùng bộ phận: ẩn khỏi danh sách chọn khi mời nhân sự, giữ nguyên hồ sơ cũ. */
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/admin/departments/:id/deactivate',
+      config: { perms: ['admin:settings'] as Permission[], screen: 'ADM-07', summary: 'Ngừng dùng bộ phận' },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const { id } = req.params as { id: string };
+        const dept = await Models.Department.findById(id).lean();
+        if (!dept) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy bộ phận' });
+        await assertCompanyAccess(req, String((dept as { company_id: unknown }).company_id));
+        await Models.Department.updateOne({ _id: id }, { $set: { active: false } } as never).exec();
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'department.deactivate',
+          subject: { type: 'department', id, code: String((dept as { name?: unknown }).name ?? '') },
+          company_id: String((dept as { company_id: unknown }).company_id),
+          ip: requestCtx(req).ip,
+        });
+        return ok(reply, { data: { ok: true } });
+      },
+    }),
+  );
+
+  /** ADM-07 — dùng lại bộ phận đã ngừng. */
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/admin/departments/:id/activate',
+      config: { perms: ['admin:settings'] as Permission[], screen: 'ADM-07', summary: 'Dùng lại bộ phận' },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const { id } = req.params as { id: string };
+        const dept = await Models.Department.findById(id).lean();
+        if (!dept) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy bộ phận' });
+        await assertCompanyAccess(req, String((dept as { company_id: unknown }).company_id));
+        await Models.Department.updateOne({ _id: id }, { $set: { active: true } } as never).exec();
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'department.activate',
+          subject: { type: 'department', id, code: String((dept as { name?: unknown }).name ?? '') },
+          company_id: String((dept as { company_id: unknown }).company_id),
+          ip: requestCtx(req).ip,
+        });
+        return ok(reply, { data: { ok: true } });
+      },
+    }),
+  );
+
+  /**
+   * ADM-07 — xoá bộ phận: chỉ xoá vật lý khi CHƯA từng được tham chiếu; nếu đã có
+   * nhân sự/hồ sơ/ngân sách/khoản định kỳ/lời mời/danh mục con thì trả FG-ORG-001 (§XXIX.4).
+   */
+  app.route(
+    defineRoute({
+      method: 'DELETE',
+      url: '/admin/departments/:id',
+      config: { perms: ['admin:settings'] as Permission[], screen: 'ADM-07', summary: 'Xoá bộ phận chưa dùng' },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const { id } = req.params as { id: string };
+        if (!mongoose.isValidObjectId(id)) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy bộ phận' });
+        const dept = await Models.Department.findById(id).lean();
+        if (!dept) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy bộ phận' });
+        const companyId = String((dept as { company_id: unknown }).company_id);
+        await assertCompanyAccess(req, companyId);
+
+        const eid = new mongoose.Types.ObjectId(id);
+        const [personnel, documents, budgets, recurring, invites, children] = await Promise.all([
+          Models.Assignment.countDocuments({ department_id: eid } as never),
+          Models.Document.countDocuments({ department_id: eid } as never),
+          Models.Budget.countDocuments({ 'lines.department_id': eid } as never),
+          Models.RecurringRule.countDocuments({ department_id: eid } as never),
+          Models.User.countDocuments({ 'invite.department_id': eid } as never),
+          Models.Department.countDocuments({ parent_id: eid } as never),
+        ]);
+        const used = personnel + documents + budgets + recurring + invites + children;
+        if (used > 0) {
+          throw new ApiError({
+            code: 'FG-ORG-001',
+            detail: 'Bộ phận đã được dùng — hãy "Ngừng dùng" thay vì xoá để bảo toàn hồ sơ cũ',
+            data: { personnel, documents, budgets, recurring, invites, children },
+          });
+        }
+
+        await Models.Department.deleteOne({ _id: id } as never).exec();
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'department.delete',
+          subject: { type: 'department', id, code: String((dept as { name?: unknown }).name ?? '') },
+          company_id: companyId,
+          ip: requestCtx(req).ip,
+        });
+        return ok(reply, { data: { ok: true } });
+      },
+    }),
+  );
+
   /** ADM-08 — danh mục + chứng từ bắt buộc theo loại (Q-04). Đang dùng cho hồ sơ → chỉ ẩn, không xóa. */
   app.route(
     defineRoute({

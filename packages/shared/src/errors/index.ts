@@ -45,6 +45,8 @@ export type ProblemCode =
   | 'FG-HR-001' // email đã tồn tại trong hệ thống
   | 'FG-HR-002' // không có quyền quản lý nhân sự công ty này
   | 'FG-HR-003' // nhân sự đang giữ hồ sơ chờ duyệt — cần chỉ định người thay thế
+  // --- tổ chức ---
+  | 'FG-ORG-001' // bộ phận đang được tham chiếu — không xoá được, chỉ ngừng dùng
   // --- hệ thống ---
   | 'FG-SYS-001' // lỗi hệ thống
   | 'FG-SYS-002' // dịch vụ đang bảo trì
@@ -98,6 +100,8 @@ export const PROBLEM_CATALOG: Record<ProblemCode, ProblemDef> = {
   'FG-HR-001': { code: 'FG-HR-001', status: 409, titleVi: 'Email đã có trong hệ thống', hint: 'none' },
   'FG-HR-002': { code: 'FG-HR-002', status: 403, titleVi: 'Bạn không quản lý nhân sự công ty này', hint: 'none' },
   'FG-HR-003': { code: 'FG-HR-003', status: 409, titleVi: 'Người này đang giữ hồ sơ chờ duyệt', hint: 'none' },
+
+  'FG-ORG-001': { code: 'FG-ORG-001', status: 409, titleVi: 'Bộ phận đang được dùng, không thể xoá', hint: 'none' },
 
   'FG-SYS-001': { code: 'FG-SYS-001', status: 500, titleVi: 'Hệ thống đang gặp sự cố. Vui lòng thử lại.', hint: 'retry' },
   'FG-SYS-002': { code: 'FG-SYS-002', status: 503, titleVi: 'Hệ thống đang bảo trì', hint: 'retry' },

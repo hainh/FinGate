@@ -18,7 +18,7 @@ import {
   moneyToWire,
   type Money,
 } from '@fingate/shared';
-import { useAuditLog, useCompanies, useDepartments, useMatrix, usePersonnel } from '../app/queries.ts';
+import { useAuditLog, useCompanies, useDepartments, useMatrix, usePersonnel, type DepartmentRow } from '../app/queries.ts';
 import { useAuth, useUi } from '../app/store.tsx';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -405,8 +405,8 @@ function InviteModal({
     let cancelled = false;
     void (async () => {
       try {
-        const r = await apiCall<{ items: { _id: string; name: string; company_id: string }[] }>('/departments', { query: { company_id: companyId } });
-        if (!cancelled) setDepts(r.items.filter((d) => String(d.company_id) === companyId).map((d) => ({ _id: d._id, name: d.name })));
+        const r = await apiCall<{ items: { _id: string; name: string; company_id: string; active?: boolean }[] }>('/departments', { query: { company_id: companyId } });
+        if (!cancelled) setDepts(r.items.filter((d) => String(d.company_id) === companyId && d.active !== false).map((d) => ({ _id: d._id, name: d.name })));
       } catch {
         if (!cancelled) setDepts([]);
       }
@@ -767,6 +767,7 @@ function DepartmentsCard({ companies }: { companies: CompanyRow[] }): ReactNode 
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const query = useDepartments(companyId);
 
@@ -791,6 +792,35 @@ function DepartmentsCard({ companies }: { companies: CompanyRow[] }): ReactNode 
       setError(e instanceof ApiRequestError ? (e.problem.detail ?? e.problem.title) : 'Không tạo được bộ phận');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const setActive = async (row: DepartmentRow, active: boolean): Promise<void> => {
+    setRowBusy(row._id);
+    setError(null);
+    try {
+      await apiCall(`/admin/departments/${row._id}/${active ? 'activate' : 'deactivate'}`, { method: 'POST' });
+      await qc.invalidateQueries({ queryKey: ['departments'] });
+      toastOk(active ? 'Đã dùng lại bộ phận' : 'Đã ngừng dùng bộ phận');
+    } catch (e) {
+      setError(e instanceof ApiRequestError ? (e.problem.detail ?? e.problem.title) : 'Không cập nhật được bộ phận');
+    } finally {
+      setRowBusy(null);
+    }
+  };
+
+  const remove = async (row: DepartmentRow): Promise<void> => {
+    if (!window.confirm(`Xoá bộ phận "${row.name}"? Chỉ xoá được khi bộ phận chưa từng được dùng.`)) return;
+    setRowBusy(row._id);
+    setError(null);
+    try {
+      await apiCall(`/admin/departments/${row._id}`, { method: 'DELETE' });
+      await qc.invalidateQueries({ queryKey: ['departments'] });
+      toastOk('Đã xoá bộ phận');
+    } catch (e) {
+      setError(e instanceof ApiRequestError ? (e.problem.detail ?? e.problem.title) : 'Không xoá được bộ phận');
+    } finally {
+      setRowBusy(null);
     }
   };
 
@@ -836,7 +866,25 @@ function DepartmentsCard({ companies }: { companies: CompanyRow[] }): ReactNode 
                   columns={[
                     { title: 'Tên', dataIndex: 'name', key: 'n', render: (v: string) => <FgText strong>{v}</FgText> },
                     { title: 'Mã', dataIndex: 'code', key: 'c', render: (v: string | null) => v ?? '—' },
-                    { title: 'Trạng thái', dataIndex: 'active', key: 'a', render: (v: boolean) => (v ? 'Đang dùng' : 'Ngừng') },
+                    { title: 'Trạng thái', dataIndex: 'active', key: 'a', render: (v: boolean | undefined) => (v === false ? 'Ngừng' : 'Đang dùng') },
+                    {
+                      title: '',
+                      key: 'act',
+                      render: (_v, r) => (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {can('admin:settings') ? (
+                            <FgButton size="small" loading={rowBusy === r._id} onClick={() => void setActive(r, r.active === false)}>
+                              {r.active === false ? 'Dùng lại' : 'Ngừng dùng'}
+                            </FgButton>
+                          ) : null}
+                          {can('admin:settings') ? (
+                            <FgButton size="small" variant="danger" loading={rowBusy === r._id} onClick={() => void remove(r)}>
+                              Xoá
+                            </FgButton>
+                          ) : null}
+                        </div>
+                      ),
+                    },
                   ]}
                 />
               </div>
