@@ -262,6 +262,7 @@ export function adminRoutes(app: FastifyInstance): void {
               email,
               // status = trạng thái LINK (khớp inviteLinkResult), không phải status tài khoản
               status: 'active' as const,
+              mode: 'activate' as const,
               invite_url: link.url,
               expires_at: link.expires_at,
               invited_at: new Date().toISOString(),
@@ -294,6 +295,7 @@ export function adminRoutes(app: FastifyInstance): void {
             user_id: id,
             email: String(user.email),
             status,
+            mode: inv && inv.seed ? (inv.mode === 'reset' ? 'reset' : 'activate') : null,
             invite_url: status === 'active' ? (link?.url ?? null) : null,
             expires_at: inv?.expires_at ? new Date(inv.expires_at).toISOString() : null,
             invited_at: inv?.sent_at ? new Date(inv.sent_at).toISOString() : null,
@@ -308,12 +310,16 @@ export function adminRoutes(app: FastifyInstance): void {
   /**
    * ADM-01 — cấp link MỚI: seed đổi ⇒ MỌI link cũ mất hiệu lực tức thì
    * (kể cả link cũ còn hạn), hạn mới tính lại từ bây giờ.
+   *
+   * Tài khoản `invited` → link kích hoạt (mode activate). Tài khoản đã `active` →
+   * quản trị nhân sự vẫn cấp được link ĐẶT LẠI MẬT KHẨU (mode reset) như lúc mới
+   * kích hoạt; dùng xong link chết, mọi phiên cũ bị thu hồi. Ngừng hoạt động thì không.
    */
   app.route(
     defineRoute({
       method: 'POST',
       url: '/personnel/:id/invite-link',
-      config: { perms: ['hr:invite'] as Permission[], screen: 'ADM-01', summary: 'Regenerate link kích hoạt (vô hiệu link cũ)' },
+      config: { perms: ['hr:invite'] as Permission[], screen: 'ADM-01', summary: 'Regenerate link kích hoạt/đổi mật khẩu (vô hiệu link cũ)' },
       schema: { tags: ['personnel'], body: inviteRegenerateBodySchema },
       handler: async (req) => {
         const actor = requireActor(req);
@@ -322,21 +328,43 @@ export function adminRoutes(app: FastifyInstance): void {
         await assertManages(req, id);
         const user = await Models.User.findById(id).select({ email: 1, status: 1, invite: 1 }).lean();
         if (!user) throw new ApiError({ code: 'FG-WF-001', status: 404 });
-        if (user.status === 'active') throw new ApiError({ code: 'FG-HR-001', detail: 'Tài khoản đã kích hoạt — không cần link mới' });
         if (user.status === 'deactivated') throw new ApiError({ code: 'FG-HR-001', detail: 'Tài khoản đã ngừng hoạt động' });
 
+        // Đã kích hoạt → đây là link đổi mật khẩu: lấy lại công ty/vai trò từ Assignment
+        // (bản ghi invite bị xoá lúc activate) để thông tin/mail vẫn đúng phạm vi.
+        const isReset = user.status === 'active';
         const inv = (user as { invite?: InviteShape }).invite ?? {};
+        let companyId = inv.company_id ?? null;
+        let role = inv.role ?? null;
+        let departmentId = inv.department_id ?? null;
+        let invitedBy = inv.invited_by ?? null;
+        if (isReset) {
+          const assignment = await Models.Assignment.findOne({ user_id: id, status: 'active' } as never)
+            .select({ company_id: 1, role: 1, department_id: 1 })
+            .lean<{ company_id?: unknown; role?: string | null; department_id?: unknown } | null>();
+          companyId = companyId ?? assignment?.company_id ?? null;
+          role = role ?? assignment?.role ?? 'staff';
+          departmentId = departmentId ?? assignment?.department_id ?? null;
+          invitedBy = invitedBy ?? actor.user_id;
+        }
+
         const seed = newInviteSeed();
         const expires = inviteExpiresAt(body.valid_days ?? DEFAULT_INVITE_DAYS);
+        const regenerateCount = Number(inv.regenerate_count ?? 0) + 1;
         await Models.User.updateOne(
           { _id: id },
           {
             $set: {
+              'invite.mode': isReset ? 'reset' : 'activate',
               'invite.seed': seed,
               'invite.expires_at': expires,
               'invite.revoked_at': null,
               'invite.sent_at': new Date(),
-              'invite.regenerate_count': Number(inv.regenerate_count ?? 0) + 1,
+              'invite.company_id': companyId,
+              'invite.role': role,
+              'invite.department_id': departmentId,
+              'invite.invited_by': invitedBy,
+              'invite.regenerate_count': regenerateCount,
               updated_at: new Date(),
             },
           },
@@ -345,18 +373,29 @@ export function adminRoutes(app: FastifyInstance): void {
         const link = currentInviteLink(id, { seed, expires_at: expires })!;
         let sendCount = Number(inv.send_count ?? 0);
         if (body.send_email) {
-          const company = await Models.Company.findById(String(inv.company_id ?? '')).select({ name: 1 }).lean();
+          const company = await Models.Company.findById(String(companyId ?? '')).select({ name: 1 }).lean();
+          const href = link.url.replace(getEnv().PUBLIC_URL.replace(/\/$/, ''), '');
+          const mail = isReset
+            ? mailTemplates.adminResetPassword({
+                name: String(user.email).split('@')[0] ?? '',
+                company: String(company?.name ?? 'FinGate'),
+                roleLabel: ROLE_LABEL[(role ?? 'staff') as Role] ?? '',
+                href,
+                inviter: actor.name,
+                days: body.valid_days ?? DEFAULT_INVITE_DAYS,
+              })
+            : mailTemplates.invite({
+                name: String(user.email).split('@')[0] ?? '',
+                company: String(company?.name ?? 'FinGate'),
+                roleLabel: ROLE_LABEL[(role ?? 'staff') as Role] ?? '',
+                href,
+                inviter: actor.name,
+                days: body.valid_days ?? DEFAULT_INVITE_DAYS,
+              });
           const sent = await sendMail({
             to: String(user.email),
-            subject: `Liên kết kích hoạt FinGate mới (link cũ đã vô hiệu)`,
-            html: mailTemplates.invite({
-              name: String(user.email).split('@')[0] ?? '',
-              company: String(company?.name ?? 'FinGate'),
-              roleLabel: ROLE_LABEL[(inv.role ?? 'staff') as Role] ?? '',
-              href: link.url.replace(getEnv().PUBLIC_URL.replace(/\/$/, ''), ''),
-              inviter: actor.name,
-              days: body.valid_days ?? DEFAULT_INVITE_DAYS,
-            }),
+            subject: isReset ? 'Liên kết đặt lại mật khẩu FinGate (link cũ đã vô hiệu)' : 'Liên kết kích hoạt FinGate mới (link cũ đã vô hiệu)',
+            html: mail,
             urgent: true,
           });
           if (sent) {
@@ -368,9 +407,9 @@ export function adminRoutes(app: FastifyInstance): void {
         await mirrorAudit({
           at: new Date(),
           actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
-          action: 'hr.invite_regenerate',
+          action: isReset ? 'hr.password_link_regenerate' : 'hr.invite_regenerate',
           subject: { type: 'user', id, code: maskEmail(String(user.email)) },
-          company_id: inv.company_id ? String(inv.company_id) : null,
+          company_id: companyId ? String(companyId) : null,
           ip: requestCtx(req).ip,
         });
         return {
@@ -378,10 +417,11 @@ export function adminRoutes(app: FastifyInstance): void {
             user_id: id,
             email: String(user.email),
             status: 'active' as const,
+            mode: isReset ? ('reset' as const) : ('activate' as const),
             invite_url: link.url,
             expires_at: link.expires_at,
             invited_at: new Date().toISOString(),
-            regenerate_count: Number(inv.regenerate_count ?? 0) + 1,
+            regenerate_count: regenerateCount,
             send_count: sendCount,
           },
         };
@@ -401,8 +441,10 @@ export function adminRoutes(app: FastifyInstance): void {
         await assertManages(req, id);
         const user = await Models.User.findById(id).select({ email: 1, status: 1, invite: 1 }).lean();
         if (!user) throw new ApiError({ code: 'FG-WF-001', status: 404 });
-        if (user.status !== 'invited') throw new ApiError({ code: 'FG-HR-001', detail: 'Chỉ thu hồi được link của tài khoản đang chờ kích hoạt' });
         const inv = (user as { invite?: InviteShape }).invite ?? {};
+        // thu hồi được link kích hoạt (invited) hoặc link đổi mật khẩu do quản trị cấp (active)
+        const canRevoke = user.status === 'invited' || (user.status === 'active' && Boolean(inv.seed));
+        if (!canRevoke) throw new ApiError({ code: 'FG-HR-001', detail: 'Chỉ thu hồi được link kích hoạt/đổi mật khẩu đang tồn tại' });
         if (!inv.seed) throw new ApiError({ code: 'FG-HR-001', detail: 'Tài khoản chưa có liên kết để thu hồi' });
 
         await Models.User.updateOne(
@@ -419,12 +461,12 @@ export function adminRoutes(app: FastifyInstance): void {
         await mirrorAudit({
           at: new Date(),
           actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
-          action: 'hr.invite_revoke',
+          action: inv.mode === 'reset' ? 'hr.password_link_revoke' : 'hr.invite_revoke',
           subject: { type: 'user', id, code: maskEmail(String(user.email)) },
           company_id: inv.company_id ? String(inv.company_id) : null,
           ip: requestCtx(req).ip,
         });
-        return { data: { user_id: id, status: 'revoked' as const, invite_url: null, expires_at: inv.expires_at ? new Date(String(inv.expires_at)).toISOString() : null, invited_at: inv.sent_at ? new Date(String(inv.sent_at)).toISOString() : null, regenerate_count: Number(inv.regenerate_count ?? 0), send_count: Number(inv.send_count ?? 0), email: String(user.email) } };
+        return { data: { user_id: id, status: 'revoked' as const, mode: inv.mode === 'reset' ? ('reset' as const) : ('activate' as const), invite_url: null, expires_at: inv.expires_at ? new Date(String(inv.expires_at)).toISOString() : null, invited_at: inv.sent_at ? new Date(String(inv.sent_at)).toISOString() : null, regenerate_count: Number(inv.regenerate_count ?? 0), send_count: Number(inv.send_count ?? 0), email: String(user.email) } };
       },
     }),
   );

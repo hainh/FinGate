@@ -140,6 +140,18 @@ Người lập: ${input.actorName} · Trạng thái: ${input.statusLabel}</p>
       ctaHref: input.href,
     });
   },
+  /** Quản trị nhân sự cấp link đổi mật khẩu cho tài khoản đã kích hoạt. */
+  adminResetPassword(input: { name: string; company: string; roleLabel: string; href: string; inviter: string; days: number }) {
+    return layout({
+      title: 'Đặt lại mật khẩu FinGate',
+      body: `<p>Xin chào ${input.name},</p>
+<p>${input.inviter} đã cấp cho bạn liên kết đặt lại mật khẩu để truy cập <strong>${input.company}</strong> với chức danh <strong>${input.roleLabel}</strong>.</p>
+<p>Liên kết có hiệu lực ${input.days} ngày và chỉ dùng được một lần. Sau khi đặt mật khẩu mới, mọi phiên đăng nhập cũ sẽ bị thu hồi.</p>
+<p>Nếu không phải bạn, hãy bỏ qua email này và liên hệ quản trị.</p>`,
+      ctaLabel: 'Đặt lại mật khẩu',
+      ctaHref: input.href,
+    });
+  },
   digest(input: { name: string; body: string; href: string }) {
     return layout({ title: `Bản tin tài chính ngày ${new Date().toLocaleDateString('vi-VN')}`, body: input.body, ctaLabel: 'Đọc bản tin', ctaHref: input.href });
   },

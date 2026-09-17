@@ -35,7 +35,7 @@ import {
 import { generateRecoveryCodes, hashToken, hashPassword, randomToken, verifyPassword } from '../lib/password.ts';
 import { decryptField, encryptField } from '../lib/crypto.ts';
 import { newTotpSecret, otpauthUrl, verifyTotp } from '../lib/totp.ts';
-import { inviteLinkStatus, seedMatches, verifyInviteToken, type InviteShape } from '../lib/invite.ts';
+import { inviteLinkStatus, seedMatches, verifyInviteToken, type InviteMode, type InviteShape } from '../lib/invite.ts';
 import { mirrorAudit } from '../domain/audit/index.ts';
 import { resolveIdentity } from '../domain/entitlement/index.ts';
 import { mailTemplates, sendMail } from '../mail/sender.ts';
@@ -270,6 +270,7 @@ export function authRoutes(app: FastifyInstance): void {
   /**
    * AUTH-05 (public) — xác minh chữ ký link và trả thông tin lời mời để màn
    * kích hoạt hiển thị "bạn được mời vào công ty X, chức danh Y" trước khi đặt mật khẩu.
+   * Cùng endpoint phục vụ cả link đổi mật khẩu (mode reset) cho tài khoản đã hoạt động.
    */
   app.route(
     defineRoute({
@@ -283,7 +284,14 @@ export function authRoutes(app: FastifyInstance): void {
           .select({ email: 1, display_name: 1, status: 1, invite: 1 })
           .lean<{ _id: unknown; email: string; display_name?: string | null; status: string; invite?: InviteShape } | null>();
         if (!user || !seedMatches(user.invite?.seed, payload.seed)) throw new ApiError({ code: 'FG-AUTH-009' });
-        if (user.status !== 'invited') throw new ApiError({ code: 'FG-AUTH-009', detail: 'Tài khoản đã được kích hoạt' });
+        if (inviteLinkStatus(String(user.status), user.invite) !== 'active') {
+          throw new ApiError({ code: 'FG-AUTH-009', detail: 'Liên kết không còn hiệu lực' });
+        }
+
+        const mode: InviteMode = user.invite?.mode === 'reset' ? 'reset' : 'activate';
+        // link kích hoạt chỉ dành cho tài khoản đang chờ; link đổi mật khẩu chỉ cho tài khoản đã hoạt động
+        if (mode === 'activate' && user.status !== 'invited') throw new ApiError({ code: 'FG-AUTH-009', detail: 'Tài khoản đã được kích hoạt' });
+        if (mode === 'reset' && user.status !== 'active') throw new ApiError({ code: 'FG-AUTH-009' });
 
         const inv = user.invite ?? {};
         const company = inv.company_id ? await Models.Company.findById(inv.company_id).select({ name: 1 }).lean() : null;
@@ -292,6 +300,7 @@ export function authRoutes(app: FastifyInstance): void {
         const role = (inv.role ?? 'staff') as Role;
         return {
           data: {
+            mode,
             email: String(user.email),
             display_name: user.display_name ?? null,
             company_name: String(company?.name ?? ''),
@@ -311,13 +320,16 @@ export function authRoutes(app: FastifyInstance): void {
    * AUTH-05 — người nhận link ĐẶT MẬT KHẨU + họ tên → kích hoạt (một bước).
    * Công ty/chức danh đã gắn sẵn từ lúc mời (§XXIX.3) — link chỉ để chứng minh
    * "đúng người được admin cấp" và để giao mật khẩu.
+   *
+   * Cùng endpoint phục vụ link đổi mật khẩu (mode reset) do quản trị nhân sự cấp
+   * cho tài khoản đã hoạt động: giữ nguyên công ty/vai trò, thu hồi mọi phiên cũ.
    * Vai trò bắt buộc 2FA: người dùng tự bật trong Cài đặt (PREF-01) sau khi đăng nhập.
    */
   app.route(
     defineRoute({
       method: 'POST',
       url: '/activate',
-      config: { perms: 'public', screen: 'AUTH-05', summary: 'Kích hoạt tài khoản (đặt mật khẩu)' },
+      config: { perms: 'public', screen: 'AUTH-05', summary: 'Kích hoạt/đổi mật khẩu qua link (đặt mật khẩu)' },
       schema: { tags: ['auth'], body: activateBodySchema },
       handler: async (req, reply) => {
         const body = validate(activateBody, req.body);
@@ -327,11 +339,29 @@ export function authRoutes(app: FastifyInstance): void {
         const inv = (user as { invite?: InviteShape } | null)?.invite;
         if (!user || !seedMatches(inv?.seed, payload.seed)) throw new ApiError({ code: 'FG-AUTH-009' });
         if (inviteLinkStatus(String(user.status), inv) !== 'active') throw new ApiError({ code: 'FG-AUTH-009' });
-        if (user.status === 'active') throw new ApiError({ code: 'FG-HR-001', detail: 'Tài khoản đã được kích hoạt' });
         if (user.status === 'deactivated') throw new ApiError({ code: 'FG-AUTH-004' });
 
-        const pw = await hashPassword(body.password);
         const role = (inv?.role ?? 'staff') as Role;
+        const isReset = user.status === 'active' && inv?.mode === 'reset';
+        if (user.status === 'active' && !isReset) throw new ApiError({ code: 'FG-HR-001', detail: 'Tài khoản đã được kích hoạt' });
+
+        const pw = await hashPassword(body.password);
+
+        if (isReset) {
+          // giữ họ tên hiện có (Người dùng có thể đổi ở PREF-01), chỉ thay mật khẩu
+          const displayName = String(user.display_name ?? body.display_name ?? String(user.email).split('@')[0]);
+          await Models.User.updateOne(
+            { _id: user._id },
+            { $set: { display_name: displayName, password: pw, mfa_required: MFA_REQUIRED_ROLES.includes(role), invite: null, updated_at: new Date() } },
+          ).exec();
+          const done = await finishPasswordReset({ _id: user._id, email: user.email, display_name: displayName }, role, {
+            ip: requestCtx(req).ip,
+            ua: requestCtx(req).ua,
+          });
+          reply.header('set-cookie', cookieHeader(done.raw, { persistent: true }));
+          return { data: { ok: true, user_id: done.user_id, mfa_suggested: MFA_REQUIRED_ROLES.includes(role) } };
+        }
+
         await Models.User.updateOne(
           { _id: user._id },
           {
@@ -673,6 +703,40 @@ async function finishActivation(
     active_company_id: scopeIds[0] ?? null,
     // kích hoạt tài khoản là lần đăng nhập chủ động → giữ phiên dài như "ghi nhớ"
     persistent: true,
+    ip: ctx.ip,
+    ua: ctx.ua,
+  });
+  return { raw, user_id: String(user._id) };
+}
+
+/**
+ * Kết thúc ĐẶT LẠI MẬT KHẨU qua link quản trị (mode reset): thu hồi MỌI phiên cũ
+ * rồi mở phiên mới cho người dùng — cùng trải nghiệm "một bước" như kích hoạt.
+ * Công ty/vai trò giữ nguyên; seed đã bị xoá ở handler trước khi gọi hàm này.
+ */
+async function finishPasswordReset(
+  user: { _id: unknown; email: unknown; display_name?: string | null },
+  role: Role,
+  ctx: { ip: string | null; ua: string | null },
+): Promise<{ raw: string; user_id: string }> {
+  await revokeAllUserSessions(String(user._id), 'đặt lại mật khẩu qua link quản trị');
+  const identity = await resolveIdentity(String(user._id), {});
+  const scopeIds = identity?.assignments.map((a) => a.company_id) ?? [];
+  const { raw } = await createSession({
+    user_id: String(user._id),
+    company_scope: scopeIds,
+    active_company_id: identity?.company_id ?? scopeIds[0] ?? null,
+    // đổi mật khẩu xong coi như đăng nhập lại → giữ phiên dài như "ghi nhớ"
+    persistent: true,
+    ip: ctx.ip,
+    ua: ctx.ua,
+  });
+  await mirrorAudit({
+    at: new Date(),
+    actor: { user_id: String(user._id), name: String(user.display_name ?? user.email), role },
+    action: 'auth.password_reset_by_admin',
+    subject: { type: 'user', id: String(user._id), code: String(user.email) },
+    company_id: identity?.company_id ?? null,
     ip: ctx.ip,
     ua: ctx.ua,
   });

@@ -288,6 +288,8 @@ export function ActivateScreen(): ReactNode {
   const [busy, setBusy] = useState(false);
   const [mfaSuggested, setMfaSuggested] = useState(false);
   const [doneName, setDoneName] = useState<string | null>(null);
+  /** link quản trị cấp để ĐẶT LẠI mật khẩu (tài khoản đã hoạt động) hay kích hoạt lần đầu. */
+  const isReset = info?.mode === 'reset';
 
   useEffect(() => {
     if (!token) {
@@ -317,19 +319,23 @@ export function ActivateScreen(): ReactNode {
   const submit = async (e?: React.FormEvent): Promise<void> => {
     e?.preventDefault();
     setErr(null);
-    if (name.trim().length < 2) return setErr('Vui lòng nhập họ tên của bạn.');
+    // link đổi mật khẩu giữ nguyên họ tên hiện có — không hỏi lại
+    const nameToSend = isReset
+      ? info?.display_name?.trim() || info?.email?.split('@')[0] || 'Người dùng'
+      : name.trim();
+    if (!isReset && nameToSend.length < 2) return setErr('Vui lòng nhập họ tên của bạn.');
     if (pw.length < 12) return setErr('Mật khẩu tối thiểu 12 ký tự.');
     if (pw !== pw2) return setErr('Mật khẩu nhập lại không khớp.');
     setBusy(true);
     try {
       const r = await apiCall<{ data: { ok: boolean; user_id?: string; mfa_suggested?: boolean } }>('/activate', {
         method: 'POST',
-        body: { token, password: pw, display_name: name.trim() },
+        body: { token, password: pw, display_name: nameToSend },
       });
       setMfaSuggested(Boolean(r.data.mfa_suggested));
       markSignedOut(false);
       await refreshMe();
-      setDoneName(name.trim() || String(info?.email ?? ''));
+      setDoneName(nameToSend || String(info?.email ?? ''));
     } catch (e2) {
       const p = e2 instanceof ApiRequestError ? e2.problem : null;
       if (p?.code === 'FG-AUTH-009') setInfoError('Liên kết không còn hiệu lực. Xin Quản trị tạo link mới.');
@@ -341,8 +347,12 @@ export function ActivateScreen(): ReactNode {
 
   if (doneName) {
     return (
-      <AuthFrame title="Kích hoạt thành công">
-        <FgAlert tone="success" title={`Chào ${doneName}, bạn đã vào hệ thống.`} description="Mật khẩu và quyền đã được kích hoạt đúng công ty được chỉ định." />
+      <AuthFrame title={isReset ? 'Đổi mật khẩu thành công' : 'Kích hoạt thành công'}>
+        <FgAlert
+          tone="success"
+          title={`Chào ${doneName}, bạn đã vào hệ thống.`}
+          description={isReset ? 'Mật khẩu mới đã được thiết lập và mọi phiên đăng nhập cũ đã bị thu hồi.' : 'Mật khẩu và quyền đã được kích hoạt đúng công ty được chỉ định.'}
+        />
         {mfaSuggested ? (
           <div style={{ marginTop: 'var(--fg-space-3)' }}>
             <FgAlert tone="info" title="Vai trò của bạn thuộc nhóm bắt buộc 2FA" description="Vào Cài đặt cá nhân → Xác thực 2 lớp để bật ngay sau khi đăng nhập lần đầu." />
@@ -381,10 +391,12 @@ export function ActivateScreen(): ReactNode {
   const strength = pw.length >= 16 ? { label: 'Mạnh', tone: 'success' } : pw.length >= 12 ? { label: 'Đạt yêu cầu', tone: 'info' } : { label: 'Tối thiểu 12 ký tự', tone: pw ? 'danger' : 'neutral' };
 
   return (
-    <AuthFrame title="Đặt mật khẩu kích hoạt">
+    <AuthFrame title={isReset ? 'Đặt lại mật khẩu' : 'Đặt mật khẩu kích hoạt'}>
       <div style={{ marginBottom: 'var(--fg-space-4)', padding: '10px 12px', border: '1px solid var(--fg-border-subtle)', borderRadius: 8 }}>
         <FgText style="bodyS" color="muted">
-          {info.invited_by_name ? `${info.invited_by_name} mời` : 'Bạn được mời'} tham gia <strong>{info.company_name || 'công ty'}</strong>
+          {isReset
+            ? <>{info.invited_by_name ? `${info.invited_by_name} cấp liên kết` : 'Quản trị cấp liên kết'} đặt lại mật khẩu cho <strong>{info.company_name || 'công ty'}</strong></>
+            : <>{info.invited_by_name ? `${info.invited_by_name} mời` : 'Bạn được mời'} tham gia <strong>{info.company_name || 'công ty'}</strong></>}
           {info.department_name ? ` · ${info.department_name}` : ''}
         </FgText>
         <div>
@@ -394,9 +406,11 @@ export function ActivateScreen(): ReactNode {
         </div>
       </div>
       <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)' }} noValidate>
-        <FgField label="Họ tên của bạn" required labelFor="act-name">
-          <FgInput id="act-name" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Nguyễn Văn A" />
-        </FgField>
+        {isReset ? null : (
+          <FgField label="Họ tên của bạn" required labelFor="act-name">
+            <FgInput id="act-name" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Nguyễn Văn A" />
+          </FgField>
+        )}
         <FgField label="Mật khẩu mới" required labelFor="act-pw" help={<FgText style="caption" color="muted">{strength.label}</FgText>}>
           <FgPassword id="act-pw" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} />
         </FgField>
@@ -404,8 +418,8 @@ export function ActivateScreen(): ReactNode {
           <FgPassword id="act-pw2" autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)} />
         </FgField>
         {err ? <FgAlert tone="danger" title={err} /> : null}
-        <FgButton variant="primary" htmlType="submit" block loading={busy} disabled={!name.trim() || pw.length < 8 || !pw2}>
-          Kích hoạt tài khoản
+        <FgButton variant="primary" htmlType="submit" block loading={busy} disabled={(isReset ? false : !name.trim()) || pw.length < 8 || !pw2}>
+          {isReset ? 'Đặt lại mật khẩu' : 'Kích hoạt tài khoản'}
         </FgButton>
         {info.mfa_required ? (
           <FgText style="caption" color="muted">
@@ -413,7 +427,9 @@ export function ActivateScreen(): ReactNode {
           </FgText>
         ) : null}
         <FgText style="caption" color="muted">
-          Liên kết chỉ dùng một lần. Sau khi kích hoạt, mật khẩu là chìa khóa duy nhất — link cũ không còn giá trị.
+          {isReset
+            ? 'Liên kết chỉ dùng một lần. Sau khi đặt lại, mọi phiên đăng nhập cũ bị thu hồi — hãy đăng nhập lại bằng mật khẩu mới.'
+            : 'Liên kết chỉ dùng một lần. Sau khi kích hoạt, mật khẩu là chìa khóa duy nhất — link cũ không còn giá trị.'}
         </FgText>
       </form>
     </AuthFrame>

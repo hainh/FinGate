@@ -959,6 +959,12 @@ Hệ thống:
 * Trạng thái chuyển **Chờ kích hoạt → Đang hoạt động**; hệ thống thông báo cho người mời.
 * Email đã tồn tại trong hệ thống → báo lỗi trùng, không tạo bản ghi thứ hai.
 
+## 3b. Quản trị cấp lại link đổi mật khẩu cho tài khoản đã kích hoạt
+
+* Quản trị nhân sự (quyền `hr:invite`) sinh được link có chữ ký cho **tài khoản đã hoạt động** — cùng cơ chế và màn `/kich-hoat` như link kích hoạt (phân biệt bằng `mode = reset`).
+* Người nhận mở link → chỉ đặt mật khẩu mới; hệ thống **thu hồi mọi phiên đăng nhập cũ**, **giữ nguyên công ty/chức danh**; link chết sau một lần dùng.
+* Cấp mới link sẽ vô hiệu link cũ tức thì; admin cũng thu hồi được link đang tồn tại. Mọi thao tác ghi audit log (mục XIX).
+
 ## 4. Xóa / điều chỉnh nhân sự
 
 * Xóa tài khoản = **Ngừng hoạt động** (khóa đăng nhập, thu hồi quyền ngay lập tức) — **không xóa vật lý**, bảo toàn audit log theo mục XIX.

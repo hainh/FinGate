@@ -144,6 +144,11 @@ export const personnelInviteBody = z
 export const inviteLinkResult = z.object({
   user_id: objectId,
   email: z.string(),
+  /**
+   * mục đích link: `activate` = kích hoạt lần đầu · `reset` = quản trị cấp cho
+   * tài khoản đã hoạt động để đặt lại mật khẩu · null = chưa/không còn link.
+   */
+  mode: z.enum(['activate', 'reset']).nullable().default(null),
   /** link tuyệt đối {PUBLIC_URL}/kich-hoat?token=… — null khi used/revoked/none. */
   invite_url: z.string().nullable(),
   status: z.enum(['active', 'expired', 'revoked', 'used', 'none']),
@@ -165,6 +170,8 @@ export const inviteRegenerateBody = z
 
 /** Thông tin lời mời hiển thị trên màn kích hoạt (public — đọc từ link đã ký). */
 export const inviteInfoResult = z.object({
+  /** activate = kích hoạt lần đầu · reset = đặt lại mật khẩu cho tài khoản đã hoạt động. */
+  mode: z.enum(['activate', 'reset']).default('activate'),
   email: z.string(),
   display_name: z.string().nullable(),
   company_name: z.string(),

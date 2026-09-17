@@ -525,7 +525,7 @@ GET  /v1/debts?kind=receivable|payable · /v1/cashflow/forecast?horizon=30|90
 GET  /v1/reports/{preset} · POST /v1/exports · GET /v1/exports/{job_id}
 GET  /v1/newsletter/daily?date= · /v1/alerts · PATCH /v1/alerts/{id}/ack
 GET|POST /v1/notifications · GET /v1/notifications/unread-count
-GET|POST /v1/personnel · /v1/personnel/invite · /v1/personnel/{id}/deactivate|transfer|resend
+GET|POST /v1/personnel · /v1/personnel/invite · /v1/personnel/{id}/invite-link (GET|POST|DELETE — link kích hoạt/đổi mật khẩu) · /v1/personnel/{id}/deactivate|transfer|resend
 GET|POST /v1/admin/{matrix,categories,budgets,companies,settings,db-stats} · GET /v1/audit-log
 GET  /v1/search?q=                            POST /v1/tasks/:name (server-to-GH-Actions only)
 GET  /api/v1/openapi.json

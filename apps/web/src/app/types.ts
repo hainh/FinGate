@@ -478,8 +478,8 @@ export interface PersonnelRow {
   mfa_enabled: boolean;
   last_login_at: string | null;
   invited_at: string | null;
-  /** trạng thái link kích hoạt đã ký (chỉ có nghĩa khi status = invited). */
-  invite_status: 'active' | 'expired' | 'revoked' | 'none';
+  /** trạng thái link đã ký (invited = kích hoạt; active = link đổi mật khẩu do quản trị cấp). */
+  invite_status: 'active' | 'expired' | 'revoked' | 'used' | 'none';
   invite_expires_at: string | null;
   invite_regenerate_count: number;
   started_at: string | null;
@@ -490,6 +490,8 @@ export interface PersonnelRow {
 export interface InviteLinkResult {
   user_id: string;
   email: string;
+  /** activate = kích hoạt · reset = đặt lại mật khẩu cho tài khoản đã hoạt động · null = chưa có link. */
+  mode: 'activate' | 'reset' | null;
   status: 'active' | 'expired' | 'revoked' | 'used' | 'none';
   invite_url: string | null;
   expires_at: string | null;
@@ -500,6 +502,8 @@ export interface InviteLinkResult {
 
 /** thông tin lời mời cho màn /kich-hoat (public). */
 export interface InviteInfo {
+  /** activate = kích hoạt lần đầu · reset = đặt lại mật khẩu. */
+  mode: 'activate' | 'reset';
   email: string;
   display_name: string | null;
   company_name: string;

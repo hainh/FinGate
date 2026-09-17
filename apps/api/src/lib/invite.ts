@@ -7,8 +7,12 @@
  * - `exp` nằm trong payload đã ký → đổi hạn mức phải ký lại (= regenerate).
  * - Thu hồi tức thì: DB lưu `invite.seed`; mỗi lần activate server so seed,
  *   regenerate đổi seed làm MỌI link cũ chết ngay, revoke xoá seed là link chết.
- * - Seed lưu thuận (invite.seed) để endpoint GET trả lại đúng link cho admin copy;
- *   token không còn giá trị sau khi tài khoản active (seed bị xoá ở /activate).
+ * - Seed lưu thuận (invite.seed) để endpoint GET trả lại đúng link cho admin copy.
+ *
+ * `invite.mode` phân biệt mục đích link (cùng chung cơ chế ký):
+ * - `activate` (mặc định) — tài khoản `invited`, mở link để đặt mật khẩu lần đầu + kích hoạt.
+ * - `reset` — tài khoản đã `active`; quản trị nhân sự cấp lại link để người dùng
+ *   đặt mật khẩu mới. Dùng xong seed bị xoá như link kích hoạt.
  */
 
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -103,6 +107,9 @@ export function seedMatches(storedSeed: string | null | undefined, given: string
   return timingSafeEqual(a, b);
 }
 
+/** Mục đích link: kích hoạt lần đầu hay đặt lại mật khẩu cho tài khoản đã hoạt động. */
+export type InviteMode = 'activate' | 'reset';
+
 /** dáng `user.invite` đọc từ DB (lean) — đủ cho tính trạng thái link. */
 export interface InviteShape {
   seed?: string | null;
@@ -111,6 +118,8 @@ export interface InviteShape {
   sent_at?: Date | null;
   send_count?: number;
   regenerate_count?: number;
+  /** 'activate' | 'reset'; undefined = activate (tương thích bản ghi cũ). */
+  mode?: string | null;
   company_id?: unknown;
   role?: string | null;
   department_id?: unknown;
@@ -119,11 +128,16 @@ export interface InviteShape {
 
 export type InviteLinkStatus = 'active' | 'expired' | 'revoked' | 'used' | 'none';
 
-/** Trạng thái link của một user (status tài khoản + seed + hạn + revoke). */
+/**
+ * Trạng thái link của một user (status tài khoản + seed + hạn + revoke).
+ * - Tài khoản `active` KHÔNG còn seed ⇒ 'used' (link kích hoạt đã tiêu thụ).
+ * - Tài khoản `active` còn seed ⇒ link `reset` do quản trị cấp → 'active'/'expired'/'revoked'.
+ * - Tài khoản `deactivated`: link còn seed cũng không dùng được → 'revoked'.
+ */
 export function inviteLinkStatus(userStatus: string, inv: InviteShape | undefined, now = new Date()): InviteLinkStatus {
-  if (userStatus === 'active') return 'used';
+  if (userStatus === 'deactivated') return inv?.seed ? 'revoked' : 'none';
   if (inv?.revoked_at) return 'revoked';
-  if (!inv?.seed) return 'none';
+  if (!inv?.seed) return userStatus === 'active' ? 'used' : 'none';
   if (!inv.expires_at || new Date(inv.expires_at) <= now) return 'expired';
   return 'active';
 }

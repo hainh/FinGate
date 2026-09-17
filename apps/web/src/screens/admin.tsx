@@ -122,13 +122,13 @@ export function PersonnelScreen(): ReactNode {
                     return (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         <FgTag tone={def.tone}>{`${def.glyph} ${def.labelVi}`}</FgTag>
-                        {r.status === 'invited' ? (
+                        {r.status === 'invited' || (r.status === 'active' && r.invite_status !== 'none' && r.invite_status !== 'used') ? (
                           r.invite_status === 'active' ? (
                             <FgTooltip title={`Link hết hạn ${dateTimeLabel(r.invite_expires_at ?? '')}`}>
-                              <FgTag tone="info">link còn hạn</FgTag>
+                              <FgTag tone="info">{r.status === 'active' ? 'link đổi mật khẩu còn hạn' : 'link còn hạn'}</FgTag>
                             </FgTooltip>
                           ) : r.invite_status === 'expired' ? (
-                            <FgTag tone="warning">link hết hạn</FgTag>
+                            <FgTag tone="warning">{r.status === 'active' ? 'link đổi mật khẩu hết hạn' : 'link hết hạn'}</FgTag>
                           ) : r.invite_status === 'revoked' ? (
                             <FgTag tone="neutral">link đã thu hồi</FgTag>
                           ) : null
@@ -148,9 +148,9 @@ export function PersonnelScreen(): ReactNode {
                   key: 'act',
                   render: (_v, r) => (
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {can('hr:invite') && r.status === 'invited' ? (
+                      {can('hr:invite') && (r.status === 'invited' || r.status === 'active') ? (
                         <FgButton size="small" onClick={() => setLinkTarget(r)}>
-                          Link kích hoạt
+                          {r.status === 'active' ? 'Link đổi mật khẩu' : 'Link kích hoạt'}
                         </FgButton>
                       ) : null}
                       {can('hr:disable') && r.status === 'active' ? (
@@ -213,6 +213,7 @@ export function PersonnelScreen(): ReactNode {
 type LinkSeed = InviteLinkResult;
 
 function InviteLinkBanner({ link }: { link: LinkSeed }): ReactNode {
+  const isReset = link.mode === 'reset';
   const [copied, setCopied] = useState(false);
   const copy = async (): Promise<void> => {
     if (!link.invite_url) return;
@@ -237,11 +238,11 @@ function InviteLinkBanner({ link }: { link: LinkSeed }): ReactNode {
         tone={link.status === 'active' ? 'success' : link.status === 'used' ? 'info' : 'warning'}
         title={
           link.status === 'active'
-            ? `Liên kết còn hiệu lực tới ${dateTimeLabel(link.expires_at ?? '')}`
+            ? `${isReset ? 'Liên kết đổi mật khẩu' : 'Liên kết'} còn hiệu lực tới ${dateTimeLabel(link.expires_at ?? '')}`
             : link.status === 'used'
-              ? 'Tài khoản đã kích hoạt — liên kết không còn dùng được'
+              ? 'Chưa có liên kết đang hiệu lực — bấm "Tạo link mới" để cấp'
               : link.status === 'expired'
-                ? 'Liên kết đã hết hạn — tạo liên kết mới'
+                ? `${isReset ? 'Liên kết đổi mật khẩu' : 'Liên kết'} đã hết hạn — tạo liên kết mới`
                 : link.status === 'revoked'
                   ? 'Liên kết đã bị thu hồi — tạo liên kết mới'
                   : 'Chưa có liên kết'
@@ -259,7 +260,10 @@ function InviteLinkBanner({ link }: { link: LinkSeed }): ReactNode {
         </FgButton>
       </div>
       <FgText style="caption" color="muted">
-        Người nhận mở liên kết sẽ tự đặt mật khẩu (tối thiểu 12 ký tự). Link mang chữ ký server, sửa bất kỳ đâu sẽ bị từ chối.
+        {isReset
+          ? 'Người nhận mở liên kết sẽ đặt lại mật khẩu (tối thiểu 12 ký tự); mọi phiên đăng nhập cũ bị thu hồi. '
+          : 'Người nhận mở liên kết sẽ tự đặt mật khẩu (tối thiểu 12 ký tự). '}
+        Link mang chữ ký server, sửa bất kỳ đâu sẽ bị từ chối.
         {link.regenerate_count > 0 ? ` Đã cấp lại ${link.regenerate_count} lần.` : ''}
       </FgText>
     </div>
@@ -309,7 +313,7 @@ function InviteLinkModal({
       const r = await apiCall<{ data: LinkSeed }>(`/personnel/${data?.user_id ?? row?.user_id}/invite-link`, { method: 'POST', body: { valid_days: 1 } });
       setData(r.data);
       onChanged();
-      toastOk('Đã tạo liên kết mới — liên kết cũ không còn hiệu lực');
+      toastOk(r.data.mode === 'reset' ? 'Đã tạo liên kết đổi mật khẩu — liên kết cũ không còn hiệu lực' : 'Đã tạo liên kết mới — liên kết cũ không còn hiệu lực');
     } catch (e) {
       setError(e instanceof ApiRequestError ? `${e.problem.title}${e.problem.detail ? ` — ${e.problem.detail}` : ''}` : 'Không tạo được liên kết');
     } finally {
@@ -334,16 +338,19 @@ function InviteLinkModal({
   };
 
   const target = row?.display_name || row?.email || data?.email || '';
+  // tài khoản đã hoạt động → link cấp mới là link ĐỔI MẬT KHẨU (mode reset)
+  const accountActive = row?.status === 'active' || data?.mode === 'reset';
+  const isReset = data?.mode === 'reset' || (!data && row?.status === 'active');
   return (
     <FgModal
       open
-      title={`Liên kết kích hoạt · ${target}`}
+      title={`${isReset ? 'Liên kết đổi mật khẩu' : 'Liên kết kích hoạt'} · ${target}`}
       onCancel={onClose}
       footer={
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
           <div style={{ display: 'flex', gap: 8 }}>
-            <FgButton loading={busy === 'regen'} onClick={() => void regenerate()} disabled={!data || data.status === 'used'}>
-              Tạo link mới (vô hiệu link cũ)
+            <FgButton loading={busy === 'regen'} onClick={() => void regenerate()} disabled={!data || (data.status === 'used' && !accountActive)}>
+              {isReset ? 'Tạo link đổi mật khẩu mới' : 'Tạo link mới (vô hiệu link cũ)'}
             </FgButton>
             <FgButton
               variant="danger"
@@ -440,6 +447,7 @@ function InviteModal({
           onDone({
             user_id: String(d.user_id),
             email: email.trim(),
+            mode: 'activate',
             status: d.invite_url ? 'active' : 'expired',
             invite_url: (d.invite_url as string | null) ?? null,
             expires_at: (d.expires_at as string | null) ?? null,

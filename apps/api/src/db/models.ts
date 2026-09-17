@@ -135,8 +135,12 @@ export const UserSchema = new Schema(
       /**
        * Link mời là token TỰ CHỨA CÓ CHỮ KÝ HMAC (lib/invite.ts) — admin copy gửi,
        * không cần SMTP. DB chỉ giữ seed đối chiếu: regenerate đổi seed ⇒ mọi link
-       * cũ chết ngay; revoke xoá seed ⇒ link chết. Seed chỉ tồn tại khi `invited`.
+       * cũ chết ngay; revoke xoá seed ⇒ link chết. Seed tồn tại khi `invited`
+       * (mode activate) hoặc khi quản trị cấp link đổi mật khẩu cho tài khoản
+       * `active` (mode reset); dùng xong (activate/reset) seed bị xoá.
        */
+      /** 'activate' = đặt mật khẩu lần đầu; 'reset' = quản trị cấp lại link đổi mật khẩu. */
+      mode: { type: String, enum: ['activate', 'reset'], default: 'activate' },
       seed: { type: String, default: null },
       expires_at: { type: Date, default: null },
       invited_by: { type: Schema.Types.ObjectId, default: null },
