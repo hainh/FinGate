@@ -1,12 +1,22 @@
+# FinGate — hạ tầng Docker (xem docs/04_architecture.md §12.6, docs/runbook.md §7).
+#
+#   Dev  (chỉ MongoDB):      docker compose -f deploy/compose.yml up -d
+#   Server thật (Profile O): docker compose -f deploy/compose.yml --profile onprem up -d --build
+#   Kèm HTTPS qua Caddy:     docker compose -f deploy/compose.yml --profile onprem --profile tls up -d
+#
+# `pnpm infra:up` / `pnpm infra:down` chỉ tác động service `mongo` (dev local).
+
 services:
   mongo:
     image: mongo:8.0
     container_name: fingate-mongo
     command: ['--replSet', 'rs0', '--bind_ip_all']
     ports:
-      - '27017:27017'
+      # chỉ mở trên loopback: dev trên host vẫn vào được, không lộ DB ra ngoài
+      - '127.0.0.1:27017:27017'
     volumes:
       - ./data/mongo:/data/db
+    restart: unless-stopped
     healthcheck:
       test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
       interval: 5s
@@ -33,3 +43,73 @@ services:
         catch (e) {
           rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }] })
         }
+
+  # ---------------------------------------------------------------------------
+  # Profile O — application (API + SPA same-origin, 1 process)
+  # ---------------------------------------------------------------------------
+  fingate:
+    profiles: ['onprem']
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: fingate:latest
+    container_name: fingate-app
+    init: true
+    depends_on:
+      mongo:
+        condition: service_healthy
+    env_file:
+      - ./fingate.env
+    environment:
+      # ghi đè env_file: các giá trị phụ thuộc mạng Docker
+      NODE_ENV: production
+      PROFILE: onprem
+      PORT: '8080'
+      HOST: 0.0.0.0
+      STORAGE_DRIVER: fs
+      UPLOAD_DIR: /data/uploads
+      WEB_DIST: apps/web/dist
+      # Membership của RS quảng bá `localhost:27017` (để dev trên host vẫn dùng
+      # `?replicaSet=rs0`), nên app trong container kết nối thẳng thay vì đi theo topology.
+      MONGODB_URI: mongodb://mongo:27017/fingate?directConnection=true
+    ports:
+      - '8080:8080'
+    volumes:
+      - fingate-uploads:/data/uploads
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # TLS ngược dòng — tuỳ chọn: `--profile tls` (cần FINGATE_DOMAIN trong fingate.env)
+  # ---------------------------------------------------------------------------
+  caddy:
+    profiles: ['tls']
+    image: caddy:2-alpine
+    container_name: fingate-caddy
+    depends_on:
+      - fingate
+    env_file:
+      - ./fingate.env
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  fingate-uploads:
+  caddy-data:
+  caddy-config:

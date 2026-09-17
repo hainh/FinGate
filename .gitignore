@@ -5,6 +5,8 @@ coverage/
 .env
 .env.*
 !.env.example
+deploy/fingate.env
+deploy/backups/
 .vite/
 playwright-report/
 test-results/

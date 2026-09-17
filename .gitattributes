@@ -1,0 +1,2 @@
+# Script chạy trong container Linux — luôn giữ LF để shebang/`sh` không lỗi.
+*.sh text eol=lf

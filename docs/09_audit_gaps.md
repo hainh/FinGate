@@ -55,7 +55,7 @@ Các khoảng trống còn lại tập trung vào **kiểm thử (§15)**, **art
 | `docs/adr/0001-*.md … 0018-*.md` (§18) | **Thư mục rỗng** |
 | `docs/05_data_dictionary.md` (§8) | Thiếu |
 | `docs/06_er_diagram.md` (Mermaid, 16 collection) | Thiếu |
-| `docs/runbook.md` (cài mới · deploy · backup/restore · 8 sự cố §13) | Thiếu |
+| `docs/runbook.md` (cài mới · deploy · backup/restore · 8 sự cố §13) | **Đã có** — §7 đã bổ sung deploy Profile O bằng Docker (Dockerfile/compose/Caddy/cron/backup); **restore drill vẫn chưa chạy** |
 | `docs/07_uat_scripts.md` | Thiếu |
 | `docs/08_permission_matrix.xlsx` | Thiếu |
 | `NOTICE.md` (license, MongoDB SSPL cho Profile O) | Thiếu |

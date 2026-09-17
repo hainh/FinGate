@@ -1,0 +1,32 @@
+# Build context cho deploy/Dockerfile (root repo).
+# Bỏ mọi thứ không cần để build: giảm dung lượng gửi lên daemon và tránh copy nhầm.
+
+.git
+.github
+
+**/node_modules
+**/dist
+**/.vite
+**/*.tsbuildinfo
+
+# dữ liệu runtime — TUYỆT ĐỐI không đưa vào image
+deploy/data
+deploy/backups
+data
+.tmpapi
+*.log
+frontend-session.log
+
+# tài liệu & test artifacts
+docs
+coverage
+playwright-report
+test-results
+blob-report
+
+# secret
+.env
+.env.*
+!.env.example
+deploy/fingate.env
+**/.DS_Store

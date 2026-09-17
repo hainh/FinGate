@@ -1,0 +1,20 @@
+# Caddy — TLS + reverse proxy cho FinGate (Profile O). Xem docs/runbook.md §7.4.
+#
+# FINGATE_DOMAIN khai trong deploy/fingate.env. PUBLIC_URL phải trùng domain này
+# (cookie Secure + URL chứng từ dựng từ PUBLIC_URL).
+#
+# Domain thật đã trỏ DNS về server → Caddy tự xin chứng chỉ Let's Encrypt.
+# Chạy nội bộ không có DNS công khai → thay dòng site bằng `tls internal` và cài
+# root CA của Caddy (`docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt .`)
+# trên máy client.
+
+{$FINGATE_DOMAIN:fingate.company.com} {
+	encode zstd gzip
+	reverse_proxy fingate:8080 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+	}
+	log {
+		output file /data/access.log
+	}
+}

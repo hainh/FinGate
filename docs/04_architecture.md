@@ -199,7 +199,7 @@ fingate/
 │  └─ api/   src/{server.ts,db,lib,domain,routes,jobs,mail,storage}
 ├─ packages/shared/src/{status,money,contracts,permissions,errors,text,api-types,ui}
 ├─ db/         models · migrations/NNNN-*.js · indexes.js · seed/ · scripts/
-├─ deploy/     compose.yml · Dockerfile · Caddyfile · nginx.conf   # ★ CHỈ cho Profile O
+├─ deploy/     compose.yml · Dockerfile · Caddyfile · backup.sh · fingate.env.example   # ★ CHỈ cho Profile O
 └─ docs/       01→04 · adr/ · runbook.md
 ```
 
@@ -640,8 +640,10 @@ Push `main` → Render build (≈3–5 phút) → `preDeployCommand` migrate →
 → **Kiến trúc không đổi trong cả 4 phương án.** Chỉ đổi `plan`, `STORAGE_DRIVER`, `MONGODB_URI`. Đó là lý do K-4/K-7/K-8 tồn tại.
 
 ### 12.6 Profile O (on-prem / VPS) — `deploy/`
-`compose.yml` đúng 2 service (`mongo` có `--replSet rs0`, `fingate`), `Dockerfile` multi-stage (pnpm → node:24-slim, uid 10001), `Caddyfile` TLS nội bộ, `STORAGE_DRIVER=fs` → `./data/uploads`, cron bằng `setInterval` trong `jobs/scheduler.ts` (bật khi `PROFILE=onprem`), `mongodump` + `rsync` bằng cron hệ thống, `check:tie` nightly.
+`compose.yml`: service `mongo` (`--replSet rs0`, mặc định) + `fingate` (profile `onprem`) + `caddy` (profile `tls`); `Dockerfile` multi-stage (build pnpm → runtime node:24-slim, chỉ prodDeps của `@fingate/api`, uid 10001); `Caddyfile` TLS/Let's Encrypt; `STORAGE_DRIVER=fs` → volume `fingate-uploads` (`UPLOAD_DIR=/data/uploads`); job nền bằng **cron hệ thống** gọi `/api/v1/tasks/:name` (không có cron trong tiến trình — K-7); `backup.sh` (`mongodump` gzip, giữ 14 bản). Chi tiết từng bước: `docs/runbook.md` §7.2–7.3.
 Profile O bật lại được **transaction** nhưng code vẫn đi đường CAS → thống nhất, không phân nhánh.
+> Dev trên host vẫn dùng `?replicaSet=rs0`; app trong container dùng `?directConnection=true`
+> vì member của RS quảng bá `localhost:27017`.
 
 ---
 

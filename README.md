@@ -66,6 +66,15 @@ Sau khi sửa `.mcp.json`, chạy `/reload` trong pi (hoặc khởi động lạ
 
 Connection string Mongo local nằm trong env `MDB_MCP_CONNECTION_STRING` của `.mcp.json`. Muốn cho phép ghi thì bỏ `--readOnly`. Đổi sang Atlas thì sửa env đó (đừng commit chuỗi có mật khẩu).
 
-## Deploy (Profile C — Render free)
+## Deploy
 
-`render.yaml` đã khai web service + env + health check. Cần điền secret trong Render dashboard: `MONGODB_URI`, `FIELD_KEY`, `TASK_TOKEN`, `R2_*`, `SMTP_URL`.
+- **Profile C — Render free**: `render.yaml` đã khai web service + env + health check. Cần điền secret trong Render dashboard: `MONGODB_URI`, `FIELD_KEY`, `TASK_TOKEN`, `R2_*`, `SMTP_URL`.
+- **Profile O — server thật bằng Docker** (VPS/VM nội bộ): `deploy/Dockerfile` + `deploy/compose.yml`.
+
+```bash
+cp deploy/fingate.env.example deploy/fingate.env   # điền secret + PUBLIC_URL
+pnpm infra:prod                                    # = docker compose --profile onprem up -d --build
+curl -s http://localhost:8080/healthz              # db: up
+```
+
+Chi tiết (HTTPS qua Caddy, job cron, backup/restore): `docs/runbook.md` §7.

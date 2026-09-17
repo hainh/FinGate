@@ -111,7 +111,9 @@ pnpm db:archive               # lưu trữ dữ liệu cũ
 pnpm check:tie                # kiểm tra cân đối
 pnpm mail:test                # thử gửi mail (SMTP_URL)
 pnpm api:types                # sinh types từ OpenAPI (⚠ xem §6)
+pnpm infra:up                 # bật MongoDB local
 pnpm infra:down               # tắt MongoDB local
+pnpm infra:prod               # build + chạy app + Mongo bằng Docker (Profile O — §7)
 ```
 
 ## 6. Sự cố thường gặp
@@ -129,8 +131,83 @@ pnpm infra:down               # tắt MongoDB local
 
 ## 7. Deploy / Backup / Restore
 
-> Chưa hoàn thiện — xem `docs/09_audit_gaps.md` §3 (thiếu `runbook` đầy đủ theo §19.3).
+### 7.1 Profile C — cloud (Render free)
 
-- Deploy: `render.yaml` (Profile C — Render free). Điền secret trong dashboard: `MONGODB_URI`, `FIELD_KEY`, `TASK_TOKEN`, `R2_*`, `SMTP_URL`.
-- GitOps jobs: `.github/workflows/{ci,tasks,backup}.yml`.
-- **Restore drill chưa chạy** → theo §13, chưa test restore = coi như chưa có backup.
+`render.yaml` (build Node trực tiếp, **không Docker** — Render free không hỗ trợ Dockerfile).
+Điền secret trong dashboard: `MONGODB_URI`, `FIELD_KEY`, `TASK_TOKEN`, `R2_*`, `SMTP_URL`.
+GitOps jobs: `.github/workflows/{ci,tasks,backup}.yml`.
+
+### 7.2 Profile O — server thật bằng Docker (VPS / VM nội bộ)
+
+**Chuẩn bị**: Docker 24+ + Compose v2, ≥ 2 GB RAM, đĩa bền cho MongoDB/chứng từ,
+domain (nếu muốn HTTPS).
+
+```bash
+git clone <repo> /opt/fingate && cd /opt/fingate
+git checkout main
+
+# 1) Cấu hình — KHÔNG commit file fingate.env
+cp deploy/fingate.env.example deploy/fingate.env
+openssl rand -hex 32   # → SESSION_SECRET
+openssl rand -hex 32   # → FIELD_KEY
+openssl rand -hex 16   # → TASK_TOKEN
+#   sửa PUBLIC_URL (https://fingate.company.com) + BOOTSTRAP_ADMIN_* trong deploy/fingate.env
+
+# 2) Build image + chạy app + MongoDB (single-node replica set rs0)
+docker compose -f deploy/compose.yml --profile onprem up -d --build
+#    hoặc: pnpm infra:prod
+
+# 3) Kiểm tra
+curl -s http://localhost:8080/healthz    # {"status":"ok",...,"db":"up","profile":"onprem"}
+```
+
+Mở `http://<server>:8080` → đăng nhập bằng `BOOTSTRAP_ADMIN_*` (tài khoản quản trị đầu
+tiên tự tạo khi DB rỗng) → **đổi mật khẩu ngay**. Muốn có dữ liệu demo:
+
+```bash
+docker compose -f deploy/compose.yml exec fingate node db/seed.js
+```
+
+**HTTPS (tuỳ chọn)**: đặt `FINGATE_DOMAIN` trong `deploy/fingate.env` (DNS trỏ về server),
+`PUBLIC_URL` phải trùng domain đó rồi:
+
+```bash
+docker compose -f deploy/compose.yml --profile onprem --profile tls up -d
+# Caddy tự xin Let's Encrypt. Chạy nội bộ không có DNS công khai: xem deploy/Caddyfile
+```
+
+**Cập nhật / rollback**: `git pull` rồi `pnpm infra:prod` (build lại image). Migration chạy
+tự động khi container khởi động (`deploy/docker-entrypoint.sh` → `db/migrate.js`), sau đó
+server tự apply index + bootstrap. Rollback = checkout commit cũ rồi build lại — migration
+phải tương thích lùi (thêm trước, bỏ sau).
+
+**Job nền**: Profile O **không có cron trong tiến trình** (K-7) — dùng cron hệ thống gọi
+endpoint idempotent (arch §12.3):
+
+```cron
+*/15 * * * * curl -fsS -X POST http://localhost:8080/api/v1/tasks/sla-scan -H "x-task-token: $TASK_TOKEN"
+30 6 * * *   curl -fsS -X POST http://localhost:8080/api/v1/tasks/newsletter -H "x-task-token: $TASK_TOKEN"
+```
+
+> `MONGODB_URI` của app trong compose là `mongodb://mongo:27017/fingate?directConnection=true`:
+> replica set quảng bá member `localhost:27017` (để dev trên host vẫn dùng `?replicaSet=rs0`),
+> nên app kết nối thẳng thay vì đi theo topology. App không dùng transaction → an toàn.
+
+### 7.3 Backup / Restore (Profile O)
+
+```bash
+deploy/backup.sh          # mongodump --gzip → deploy/backups/ (giữ 14 bản)
+# cron: 0 2 * * * /opt/fingate/deploy/backup.sh >> /var/log/fingate-backup.log 2>&1
+```
+
+Restore (drill mỗi quý — chưa test restore = coi như chưa có backup, §13):
+
+```bash
+gunzip -c deploy/backups/fingate-<stamp>.archive.gz \
+  | docker compose -f deploy/compose.yml exec -T mongo \
+      mongorestore --uri="mongodb://localhost:27017" --archive --gzip --drop \
+      --nsFrom='fingate.*' --nsTo='fingate_restore.*'
+```
+
+Sau restore: `pnpm check:tie` + mở 5 hồ sơ ngẫu nhiên.
+
