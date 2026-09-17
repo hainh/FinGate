@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
+import { Checkbox } from 'antd';
 import {
   accountStatusFor,
   formatMoney,
@@ -1183,7 +1184,7 @@ function MatrixModal({
 }): ReactNode {
   const save = useMatrixUpsert();
   const [companyId, setCompanyId] = useState('');
-  const [docKind, setDocKind] = useState<DocKind>('spend');
+  const [docKinds, setDocKinds] = useState<DocKind[]>(['spend']);
   const [amountMin, setAmountMin] = useState<Money | null>(null);
   const [amountMax, setAmountMax] = useState<Money | null>(null);
   const [effectiveFrom, setEffectiveFrom] = useState(todayISO());
@@ -1195,7 +1196,7 @@ function MatrixModal({
   useEffect(() => {
     if (!open) return;
     setCompanyId(editing?.company_id ?? '');
-    setDocKind((editing?.doc_kind as DocKind) ?? 'spend');
+    setDocKinds(editing ? [editing.doc_kind as DocKind] : ['spend']);
     setAmountMin(editing ? money(editing.amount_min_minor) : null);
     setAmountMax(editing?.amount_max_minor ? money(editing.amount_max_minor) : null);
     setEffectiveFrom(editing?.effective_from ? editing.effective_from.slice(0, 10) : todayISO());
@@ -1223,6 +1224,10 @@ function MatrixModal({
   const submit = async (): Promise<void> => {
     setError(null);
     setFieldErrors({});
+    if (!editing && !docKinds.length) {
+      setError('Chọn ít nhất một loại phiếu');
+      return;
+    }
     if (!steps.length) {
       setError('Quy trình phải có ít nhất một cấp duyệt');
       return;
@@ -1237,17 +1242,20 @@ function MatrixModal({
       setFieldErrors({ amount_max_minor: 'Ngưỡng trên phải lớn hơn ngưỡng dưới' });
       return;
     }
+    const kinds: DocKind[] = editing ? [editing.doc_kind as DocKind] : docKinds;
+    const body = {
+      company_id: companyId || null,
+      amount_min_minor: minMinor,
+      amount_max_minor: maxMinor,
+      steps: steps.map((s, i) => ({ order: i + 1, role: s.role, sla_hours: s.sla_hours, mandatory: true })),
+      effective_from: effectiveFrom,
+    };
     setBusy(true);
     try {
-      await save.mutateAsync({
-        company_id: companyId || null,
-        doc_kind: docKind,
-        amount_min_minor: minMinor,
-        amount_max_minor: maxMinor,
-        steps: steps.map((s, i) => ({ order: i + 1, role: s.role, sla_hours: s.sla_hours, mandatory: true })),
-        effective_from: effectiveFrom,
-      });
-      toastOk(editing ? 'Đã cập nhật ma trận duyệt' : 'Đã tạo ma trận duyệt');
+      for (const doc_kind of kinds) {
+        await save.mutateAsync({ ...body, doc_kind });
+      }
+      toastOk(editing ? 'Đã cập nhật ma trận duyệt' : `Đã tạo ${kinds.length} quy trình`);
       onClose();
     } catch (e) {
       if (e instanceof ApiRequestError) {
@@ -1280,13 +1288,29 @@ function MatrixModal({
             style={{ width: '100%' }}
           />
         </FgField>
-        <FgField label="Loại phiếu" required>
-          <FgSelect
-            options={DOC_KINDS.map((k) => ({ label: DOC_KIND_LABEL[k], value: k }))}
-            value={docKind}
-            onChange={(v) => setDocKind((v as DocKind) ?? 'spend')}
-            style={{ width: '100%' }}
-          />
+        <FgField
+          label="Loại phiếu"
+          required
+          error={fieldErrors.doc_kind ?? null}
+          help={editing ? 'Loại phiếu không đổi khi sửa — tạo quy trình mới nếu cần đổi.' : 'Chọn một hoặc nhiều loại — mỗi loại tạo một dòng ma trận.'}
+        >
+          {editing ? (
+            <FgText strong>{DOC_KIND_LABEL[editing.doc_kind as DocKind] ?? editing.doc_kind}</FgText>
+          ) : (
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              {DOC_KINDS.map((k) => (
+                <Checkbox
+                  key={k}
+                  checked={docKinds.includes(k)}
+                  onChange={(e) =>
+                    setDocKinds(e.target.checked ? [...docKinds, k] : docKinds.filter((x) => x !== k))
+                  }
+                >
+                  {DOC_KIND_LABEL[k]}
+                </Checkbox>
+              ))}
+            </div>
+          )}
         </FgField>
         <div style={{ display: 'flex', gap: 12 }}>
           <div style={{ flex: 1 }}>
