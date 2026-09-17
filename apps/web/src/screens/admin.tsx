@@ -18,7 +18,7 @@ import {
   moneyToWire,
   type Money,
 } from '@fingate/shared';
-import { useAuditLog, useCompanies, useDepartments, useMatrix, usePersonnel, type DepartmentRow } from '../app/queries.ts';
+import { useAuditLog, useCompanies, useDepartments, useMatrix, useMatrixUpsert, usePersonnel, type DepartmentRow } from '../app/queries.ts';
 import { useAuth, useUi } from '../app/store.tsx';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -28,8 +28,8 @@ import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, toastOk } from '../components/pagekit.tsx';
 import { AUDIT_ACTION_LABEL, ROLES_LABEL } from '../components/labels.ts';
 import { ApiRequestError, apiCall } from '../app/api.ts';
-import { DOC_KIND_LABEL } from '@fingate/shared';
-import type { CompanyRow, InviteLinkResult, PersonnelRow } from '../app/types.ts';
+import { APPROVAL_ORDER, DOC_KIND_LABEL, DOC_KINDS, type DocKind } from '@fingate/shared';
+import type { CompanyRow, InviteLinkResult, MatrixEntry, PersonnelRow } from '../app/types.ts';
 
 /* ================= Khu Quản trị — điều hướng chung ================= */
 
@@ -898,18 +898,46 @@ function DepartmentsCard({ companies }: { companies: CompanyRow[] }): ReactNode 
 
 /* ================= ADM-04 ================= */
 
+/** Cấp duyệt hợp lệ trong ma trận (bỏ `staff`/`admin` — không phải cấp duyệt). */
+const MATRIX_ROLE_OPTIONS = APPROVAL_ORDER.map((r) => ({ value: r, label: ROLES_LABEL[r] ?? r }));
+
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export function MatrixScreen(): ReactNode {
+  const { can } = useAuth();
   const query = useMatrix();
+  const companies = useCompanies();
   const [preview, setPreview] = useState<string | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<MatrixEntry | null>(null);
+  const canEdit = can('admin:matrix');
+  const openNew = (): void => {
+    setEditing(null);
+    setModalOpen(true);
+  };
   return (
     <>
       <AdminNav />
-      <FgPageHeader title="Ma trận duyệt" meta="Ngưỡng tiền → chuỗi cấp duyệt — cấu hình được, thay đổi luôn vào audit" />
+      <FgPageHeader
+        title="Ma trận duyệt"
+        meta="Ngưỡng tiền → chuỗi cấp duyệt — cấu hình được, thay đổi luôn vào audit"
+        actions={canEdit ? <FgButton variant="primary" onClick={openNew}>+ Thêm quy trình</FgButton> : null}
+      />
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={5} />}>
         {(data) =>
           !data.items.length ? (
             <div className="fg-card">
-              <FgEmptyState glyph="◇" title="Chưa cấu hình quy trình nào" description="Bạn không có quyền admin:matrix hoặc hệ thống chưa có ma trận — liên hệ Quản trị." />
+              <FgEmptyState
+                glyph="◇"
+                title="Chưa cấu hình quy trình nào"
+                description={
+                  canEdit
+                    ? 'Thêm một dải ngưỡng tiền → chuỗi cấp duyệt. Khi không cấu hình, hệ thống dùng quy trình mặc định.'
+                    : 'Bạn không có quyền admin:matrix — liên hệ Quản trị.'
+                }
+              />
             </div>
           ) : (
             <div className="fg-card" style={{ padding: 0 }}>
@@ -956,9 +984,23 @@ export function MatrixScreen(): ReactNode {
                     title: '',
                     key: 'p',
                     render: (_v, r) => (
-                      <FgButton size="small" onClick={() => setPreview(preview === r._id ? null : r._id)}>
-                        {preview === r._id ? 'Đóng' : 'Xem trước'}
-                      </FgButton>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <FgButton size="small" onClick={() => setPreview(preview === r._id ? null : r._id)}>
+                          {preview === r._id ? 'Đóng' : 'Xem trước'}
+                        </FgButton>
+                        {canEdit ? (
+                          <FgButton
+                            size="small"
+                            variant="primary"
+                            onClick={() => {
+                              setEditing(r);
+                              setModalOpen(true);
+                            }}
+                          >
+                            Sửa
+                          </FgButton>
+                        ) : null}
+                      </div>
                     ),
                   },
                   { title: 'Hiệu lực từ', dataIndex: 'effective_from', key: 'ef' },
@@ -991,7 +1033,192 @@ export function MatrixScreen(): ReactNode {
           )
         }
       </FgQuery>
+      <MatrixModal open={modalOpen} editing={editing} companies={companies.data?.items ?? []} onClose={() => setModalOpen(false)} />
     </>
+  );
+}
+
+/** ADM-04 — thêm/sửa một dải ngưỡng tiền → chuỗi cấp duyệt (upsert theo công ty + loại phiếu + ngưỡng dưới). */
+function MatrixModal({
+  open,
+  editing,
+  companies,
+  onClose,
+}: {
+  open: boolean;
+  editing: MatrixEntry | null;
+  companies: CompanyRow[];
+  onClose: () => void;
+}): ReactNode {
+  const save = useMatrixUpsert();
+  const [companyId, setCompanyId] = useState('');
+  const [docKind, setDocKind] = useState<DocKind>('spend');
+  const [amountMin, setAmountMin] = useState<Money | null>(null);
+  const [amountMax, setAmountMax] = useState<Money | null>(null);
+  const [effectiveFrom, setEffectiveFrom] = useState(todayISO());
+  const [steps, setSteps] = useState<{ role: string; sla_hours: number }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!open) return;
+    setCompanyId(editing?.company_id ?? '');
+    setDocKind((editing?.doc_kind as DocKind) ?? 'spend');
+    setAmountMin(editing ? money(editing.amount_min_minor) : null);
+    setAmountMax(editing?.amount_max_minor ? money(editing.amount_max_minor) : null);
+    setEffectiveFrom(editing?.effective_from ? editing.effective_from.slice(0, 10) : todayISO());
+    setSteps(
+      editing
+        ? editing.steps.map((s) => ({ role: s.role, sla_hours: s.sla_hours }))
+        : [
+            { role: 'accountant', sla_hours: 24 },
+            { role: 'chief_accountant', sla_hours: 24 },
+          ],
+    );
+    setError(null);
+    setFieldErrors({});
+  }, [open, editing]);
+
+  const usedRoles = steps.map((s) => s.role);
+  const addStep = (): void => {
+    const next = APPROVAL_ORDER.find((r) => !usedRoles.includes(r));
+    if (next) setSteps([...steps, { role: next, sla_hours: 24 }]);
+  };
+  const removeStep = (i: number): void => setSteps(steps.filter((_s, idx) => idx !== i));
+  const setStep = (i: number, patch: Partial<{ role: string; sla_hours: number }>): void =>
+    setSteps(steps.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+
+  const submit = async (): Promise<void> => {
+    setError(null);
+    setFieldErrors({});
+    if (!steps.length) {
+      setError('Quy trình phải có ít nhất một cấp duyệt');
+      return;
+    }
+    if (new Set(usedRoles).size !== usedRoles.length) {
+      setError('Mỗi cấp chỉ được xuất hiện một lần trong quy trình');
+      return;
+    }
+    const minMinor = amountMin ? moneyToWire(amountMin).minor : '0';
+    const maxMinor = amountMax ? moneyToWire(amountMax).minor : undefined;
+    if (maxMinor && BigInt(maxMinor) <= BigInt(minMinor)) {
+      setFieldErrors({ amount_max_minor: 'Ngưỡng trên phải lớn hơn ngưỡng dưới' });
+      return;
+    }
+    setBusy(true);
+    try {
+      await save.mutateAsync({
+        company_id: companyId || null,
+        doc_kind: docKind,
+        amount_min_minor: minMinor,
+        amount_max_minor: maxMinor,
+        steps: steps.map((s, i) => ({ order: i + 1, role: s.role, sla_hours: s.sla_hours, mandatory: true })),
+        effective_from: effectiveFrom,
+      });
+      toastOk(editing ? 'Đã cập nhật ma trận duyệt' : 'Đã tạo ma trận duyệt');
+      onClose();
+    } catch (e) {
+      if (e instanceof ApiRequestError) {
+        setError(e.problem.detail ?? e.problem.title);
+        setFieldErrors(e.problem.errors ?? {});
+      } else setError('Không lưu được ma trận duyệt');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <FgModal
+      open={open}
+      title={editing ? 'Sửa quy trình duyệt' : 'Thêm quy trình duyệt'}
+      onCancel={onClose}
+      onOk={() => void submit()}
+      okText={editing ? 'Lưu' : 'Tạo quy trình'}
+      confirmLoading={busy}
+      width={640}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)', paddingTop: 8 }}>
+        <FgField label="Áp dụng cho" hint="Để trống = áp dụng toàn tập đoàn">
+          <FgSelect
+            options={companies.map((c) => ({ label: `${c.code} · ${c.name}`, value: c._id }))}
+            value={companyId || undefined}
+            onChange={(v) => setCompanyId(v ?? '')}
+            placeholder="Toàn tập đoàn"
+            allowClear
+            style={{ width: '100%' }}
+          />
+        </FgField>
+        <FgField label="Loại phiếu" required>
+          <FgSelect
+            options={DOC_KINDS.map((k) => ({ label: DOC_KIND_LABEL[k], value: k }))}
+            value={docKind}
+            onChange={(v) => setDocKind((v as DocKind) ?? 'spend')}
+            style={{ width: '100%' }}
+          />
+        </FgField>
+        <div style={{ display: 'flex', gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <FgField label="Ngưỡng dưới (VND)" hint="Từ mức này trở lên">
+              <FgMoneyInput value={amountMin} onChange={setAmountMin} ariaLabel="Ngưỡng dưới" />
+            </FgField>
+          </div>
+          <div style={{ flex: 1 }}>
+            <FgField label="Ngưỡng trên (VND)" error={fieldErrors.amount_max_minor ?? null} hint="Bỏ trống = không chặn trên">
+              <FgMoneyInput value={amountMax} onChange={setAmountMax} ariaLabel="Ngưỡng trên" />
+            </FgField>
+          </div>
+        </div>
+        <FgField label="Hiệu lực từ" required>
+          <FgInput
+            type="date"
+            value={effectiveFrom}
+            onChange={(e: { target: { value: string } }) => setEffectiveFrom(e.target.value)}
+            style={{ width: 200 }}
+          />
+        </FgField>
+        <FgField
+          label="Chuỗi cấp duyệt"
+          required
+          error={fieldErrors.steps ?? null}
+          help="Từ cấp thấp đến cấp cao — hai bước KT nội bộ (lập → kiểm tra) luôn có sẵn ở mọi quy trình."
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {steps.map((s, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span className="fg-muted" style={{ width: 18, textAlign: 'right' }}>
+                  {i + 1}.
+                </span>
+                <FgSelect
+                  options={MATRIX_ROLE_OPTIONS}
+                  value={s.role}
+                  onChange={(v) => setStep(i, { role: v ?? s.role })}
+                  style={{ flex: 1 }}
+                />
+                <FgInput
+                  type="number"
+                  min={1}
+                  max={720}
+                  value={String(s.sla_hours)}
+                  onChange={(e: { target: { value: string } }) => setStep(i, { sla_hours: Math.max(1, Number(e.target.value) || 1) })}
+                  style={{ width: 100 }}
+                  addonAfter="giờ"
+                />
+                <FgButton size="small" variant="danger" disabled={steps.length <= 1} onClick={() => removeStep(i)}>
+                  Xoá
+                </FgButton>
+              </div>
+            ))}
+            <div>
+              <FgButton size="small" disabled={steps.length >= APPROVAL_ORDER.length} onClick={addStep}>
+                + Thêm cấp
+              </FgButton>
+            </div>
+          </div>
+        </FgField>
+        {error ? <FgAlert tone="danger" title={error} /> : null}
+      </div>
+    </FgModal>
   );
 }
 

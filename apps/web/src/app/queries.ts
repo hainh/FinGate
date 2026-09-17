@@ -239,6 +239,27 @@ export function useMatrix() {
   });
 }
 
+export interface MatrixUpsertInput {
+  company_id: string | null;
+  doc_kind: string;
+  amount_min_minor: string;
+  amount_max_minor?: string;
+  steps: { order: number; role: string; sla_hours: number; mandatory: boolean }[];
+  effective_from: string;
+}
+
+/** Lưu ma trận duyệt (ADM-04) — server upsert theo (công ty, loại phiếu, ngưỡng dưới) + version++. */
+export function useMatrixUpsert() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: MatrixUpsertInput) =>
+      apiData('/admin/matrix', { method: 'POST', body: { currency: 'VND', ...body } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['matrix'] });
+    },
+  });
+}
+
 export function usePersonnel(page = 1) {
   const { scope } = useAuth();
   return useQuery({
