@@ -593,6 +593,44 @@ export function adminRoutes(app: FastifyInstance): void {
     }),
   );
 
+  /** Kích hoạt lại tài khoản đã ngừng hoạt động — mở lại phân công gần nhất, thu hồi phiên cũ đã chết sẵn (§XXIX.4). */
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/personnel/:id/activate',
+      config: { perms: ['hr:disable'] as Permission[], screen: 'ADM-01', stepUp: true, summary: 'Kích hoạt lại nhân sự' },
+      handler: async (req) => {
+        const actor = requireActor(req);
+        const { id } = req.params as { id: string };
+        await assertManages(req, id);
+        const user = await Models.User.findById(id).select({ email: 1, status: 1 }).lean();
+        if (!user) throw new ApiError({ code: 'FG-WF-001', status: 404 });
+        if (user.status !== 'deactivated') throw new ApiError({ code: 'FG-HR-001', detail: 'Tài khoản không ở trạng thái ngừng hoạt động' });
+
+        const assignment = await Models.Assignment.findOne({ user_id: id } as never)
+          .sort({ valid_from: -1, created_at: -1 })
+          .select({ _id: 1, company_id: 1 })
+          .lean<{ _id: unknown; company_id?: unknown } | null>();
+        if (!assignment) throw new ApiError({ code: 'FG-HR-002', detail: 'Không tìm thấy phân công cũ để kích hoạt lại' });
+
+        await Models.User.updateOne(
+          { _id: id },
+          { $set: { status: 'active', deactivated_at: null, deactivated_reason: null, updated_at: new Date() } },
+        ).exec();
+        await Models.Assignment.updateOne({ _id: assignment._id }, { $set: { status: 'active', valid_to: null } }).exec();
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'hr.reactivate',
+          subject: { type: 'user', id, code: maskEmail(String(user.email)) },
+          company_id: assignment.company_id ? String(assignment.company_id) : actor.company_id,
+          ip: requestCtx(req).ip,
+        });
+        return { data: { ok: true } };
+      },
+    }),
+  );
+
   /**
    * ADM-01 — sửa hồ sơ tài khoản (họ tên, công ty/bộ phận, vai trò, hạn mức duyệt).
    * Đổi công ty = hành động chuyển (đòi `hr:transfer`); đổi vai trò/công ty thu hồi phiên ngay.

@@ -45,6 +45,7 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'hr.activate': 'Kích hoạt tài khoản',
   'auth.password_reset_by_admin': 'Đặt lại mật khẩu qua link quản trị',
   'hr.deactivate': 'Ngừng hoạt động nhân sự',
+  'hr.reactivate': 'Kích hoạt lại nhân sự',
   'hr.update': 'Cập nhật hồ sơ nhân sự',
   'hr.transfer': 'Chuyển nhân sự',
   'matrix.upsert': 'Đổi ma trận duyệt',

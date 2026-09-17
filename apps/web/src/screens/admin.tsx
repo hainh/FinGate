@@ -186,6 +186,26 @@ export function PersonnelScreen(): ReactNode {
                           Ngừng hoạt động
                         </FgButton>
                       ) : null}
+                      {can('hr:disable') && r.status === 'deactivated' ? (
+                        <FgButton
+                          size="small"
+                          loading={busy === r.user_id}
+                          onClick={async () => {
+                            if (!window.confirm(`Kích hoạt lại tài khoản ${r.display_name}?`)) return;
+                            setBusy(r.user_id);
+                            try {
+                              await apiCall(`/personnel/${r.user_id}/activate`, { method: 'POST' });
+                              void query.refetch();
+                            } catch (e) {
+                              window.alert((e as { problem?: { title: string } }).problem?.title ?? 'Không thực hiện được');
+                            } finally {
+                              setBusy(null);
+                            }
+                          }}
+                        >
+                          Kích hoạt lại
+                        </FgButton>
+                      ) : null}
                     </div>
                   ),
                 },
