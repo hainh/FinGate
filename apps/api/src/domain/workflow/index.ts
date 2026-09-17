@@ -133,7 +133,7 @@ export async function submitDocument(input: {
       detail: `Hồ sơ đang ở trạng thái ${statusLabel(doc.status)}, không gửi lại được`,
     });
   }
-  if (doc.created_by !== actor.user_id) {
+  if (String(doc.created_by) !== actor.user_id) {
     throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ người lập mới gửi được hồ sơ' });
   }
 

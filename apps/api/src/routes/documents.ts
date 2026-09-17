@@ -312,7 +312,7 @@ export function documentRoutes(app: FastifyInstance): void {
         const params = req.params as { id: string };
         const body = validate(documentUpdateBody, req.body);
         const doc = await loadDoc(params.id);
-        if (doc.created_by !== actor.user_id && !actor.permissions.includes('approval:override')) {
+        if (String(doc.created_by) !== actor.user_id && !actor.permissions.includes('approval:override')) {
           throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ người lập mới sửa được hồ sơ' });
         }
         if (!['draft', 'changes_requested'].includes(doc.status)) {
