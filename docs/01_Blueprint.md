@@ -157,6 +157,7 @@ Cấp phê duyệt cao nhất, áp dụng cho các hồ sơ vượt ngưỡng c�
 * Nhận thông báo khi có hồ sơ thuộc ngưỡng HĐQT được đẩy lên
 * **Quản lý nhân sự toàn hệ thống**: thêm/xóa tài khoản nhân sự của các công ty con bằng email (xem mục XXIX)
 * **Cấu hình tài khoản ngân hàng của Tập đoàn** (nhiều tài khoản — xem mục VIII); mọi phiếu thu/chi dùng nguồn tiền tập đoàn phải chỉ rõ tài khoản tập đoàn nào phụ trách
+* **Cấu hình Approval Matrix** (ngưỡng tiền → chuỗi cấp duyệt) cho toàn hệ thống/công ty con
 
 Chủ tịch HĐQT **không nhập liệu/tạo phiếu**, chỉ phê duyệt và giám sát.
 

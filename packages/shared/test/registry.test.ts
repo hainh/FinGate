@@ -152,17 +152,19 @@ describe('entitlements — server trả quyền, UI chỉ ẩn nút (§19.5-4)',
     expect(e.actions['approval:act']).toBe(false);
   });
 
-  it('chủ tịch HĐQT không nhập liệu nhưng quản lý nhân sự + tài khoản tập đoàn', () => {
+  it('chủ tịch HĐQT không nhập liệu nhưng quản lý nhân sự + tài khoản tập đoàn + ma trận duyệt', () => {
     const e = buildEntitlements({ role: 'chairman', company_id: 'a'.repeat(24) });
     expect(e.permissions).not.toContain('doc:create');
     expect(e.permissions).toContain('hr:disable');
     expect(e.permissions).toContain('admin:group_accounts');
+    expect(e.permissions).toContain('admin:matrix');
     expect(e.scope_all).toBe(true);
   });
 
-  it('kế toán trưởng không có quyền quản trị matrix; giám đốc có', () => {
+  it('kế toán trưởng không có quyền quản trị matrix; giám đốc và chủ tịch có', () => {
     expect(buildEntitlements({ role: 'chief_accountant', company_id: 'a'.repeat(24) }).actions['admin:matrix']).toBe(false);
     expect(buildEntitlements({ role: 'director', company_id: 'a'.repeat(24) }).actions['admin:matrix']).toBe(true);
+    expect(buildEntitlements({ role: 'chairman', company_id: 'a'.repeat(24) }).actions['admin:matrix']).toBe(true);
   });
 
   it('cột nhạy cảm ẩn kèm lý do khi không có quyền', () => {

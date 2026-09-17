@@ -138,8 +138,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'audit:read',
     'admin:matrix',
   ],
-  // Chủ tịch HĐQT: phê duyệt + giám sát toàn hệ thống + nhân sự + cấu hình/tài khoản tập đoàn.
-  // Có `admin:settings` để tự tạo công ty con (ADM-06) — KHÔNG nhập liệu hồ sơ.
+  // Chủ tịch HĐQT: phê duyệt + giám sát toàn hệ thống + nhân sự + cấu hình/tài khoản tập đoàn
+  // + ma trận duyệt. Có `admin:settings` để tự tạo công ty con (ADM-06) — KHÔNG nhập liệu hồ sơ.
   chairman: [
     'doc:read',
     'approval:act',
@@ -157,6 +157,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'hr:invite',
     'hr:disable',
     'hr:transfer',
+    'admin:matrix',
     'admin:settings',
     'admin:group_accounts',
     'audit:read',
