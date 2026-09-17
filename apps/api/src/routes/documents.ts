@@ -660,7 +660,7 @@ export function documentRoutes(app: FastifyInstance): void {
         const key = (req.query as { key?: string }).key ?? '';
         if (!/^uploads\/[\w./-]+$/.test(key)) throw new ApiError({ code: 'FG-VAL-001' });
         const url = await storage().presignGet(key, 60);
-        return reply.code(302).header('location', url).send();
+        return reply.code(302).header('location', url).header('cache-control', 'private, no-store').send();
       },
     }),
   );

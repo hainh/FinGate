@@ -114,6 +114,8 @@ export async function apiCall<T = unknown>(path: string, opts: ApiOptions = {}):
         headers,
         body: payload,
         credentials: 'same-origin',
+        // Cache HTTP tắt toàn hệ thống: mọi GET đọc tươi, không dùng bản lưu của browser.
+        cache: 'no-store',
         signal: opts.signal,
       });
     } catch (e) {

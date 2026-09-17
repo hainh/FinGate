@@ -3,8 +3,9 @@
  *
  * - `jsonSafe`: BigInt → string. Tiền trên wire LUÔN là string (§8.5) — hàm này là chỗ
  *   duy nhất chuyển đổi, để không có route nào quên và làm sập JSON.stringify.
- * - `ok`: gắn ETag + `Cache-Control: private, max-age=N` cho endpoint đọc nặng
- *   (dashboard `max-age=15`, report `max-age=60`) — ETag để 304, chống sập 0.1 CPU.
+ * - `ok`: LUÔN `Cache-Control: private, no-store` — cache HTTP bị TẮT toàn hệ thống để
+ *   mọi màn hình đọc dữ liệu tươi ngay sau thao tác (tạo/sửa/xoá). Các option `maxAge`/
+ *   `etag`/`staleWhileRevalidate` vẫn nhận cho tương thích nhưng KHÔNG còn tác dụng.
  * - `noValidator`: JSON Schema chỉ dùng cho OpenAPI; validation thật do zod đảm nhận
  *   (một nguồn schema — ADR-08).
  */
@@ -31,33 +32,23 @@ export function jsonSafe<T>(value: T, seen = new WeakSet<object>()): unknown {
 }
 
 export interface OkOptions {
-  /** ETag = version của hồ sơ với route mutation; hash nhẹ cho route đọc. */
+  /** @deprecated Cache HTTP đã tắt toàn hệ thống — không còn tác dụng. */
   etag?: string | number;
+  /** @deprecated Cache HTTP đã tắt toàn hệ thống — không còn tác dụng. */
   maxAge?: number;
   status?: number;
-  /** cho phép client dùng If-None-Match → 304. */
+  /** @deprecated Cache HTTP đã tắt toàn hệ thống — không còn tác dụng. */
   staleWhileRevalidate?: number;
 }
 
 export function ok(reply: FastifyReply, data: unknown, opts: OkOptions = {}): FastifyReply {
-  if (opts.etag !== undefined) reply.header('ETag', etagOf(opts.etag));
-  if (opts.maxAge !== undefined) {
-    const directives = [`private`, `max-age=${opts.maxAge}`];
-    if (opts.staleWhileRevalidate) directives.push(`stale-while-revalidate=${opts.staleWhileRevalidate}`);
-    reply.header('Cache-Control', directives.join(', '));
-  } else {
-    // mọi API là private — không cho CDN cache số liệu tài chính
-    reply.header('Cache-Control', 'private, no-store');
-  }
+  // Cache HTTP TẮT toàn hệ thống: không để browser/proxy giữ dữ liệu tài chính cũ.
+  reply.header('Cache-Control', 'private, no-store');
   return reply.code(opts.status ?? 200).send(jsonSafe(data));
 }
 
-export function etagOf(v: string | number): string {
-  return `"${typeof v === 'number' ? `W/${v}` : v}"`;
-}
-
 export function problem(reply: FastifyReply, problem: ProblemJson): FastifyReply {
-  return reply.code(problem.status).type('application/problem+json').send(problem);
+  return reply.header('Cache-Control', 'private, no-store').code(problem.status).type('application/problem+json').send(problem);
 }
 
 /** So `If-Match` với version hiện tại; thiếu header → 428-style 409 theo arch §6. */

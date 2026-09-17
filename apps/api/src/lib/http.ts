@@ -351,7 +351,7 @@ export function installHttpLayer(app: FastifyInstance): void {
       req.log.error({ err }, 'lỗi chưa xử lý');
       problem = toProblem(new ApiError({ code: 'FG-SYS-001' }), traceId);
     }
-    void reply.code(problem.status).type('application/problem+json').send(problem);
+    void reply.header('Cache-Control', 'private, no-store').code(problem.status).type('application/problem+json').send(problem);
   });
 }
 

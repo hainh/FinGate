@@ -284,7 +284,7 @@ export async function build() {
 
 - **Không DI.** Một domain = `{ schema.ts, service.ts, routes.ts }`; service nhận deps qua tham số → test truyền fake dễ hơn mock decorator.
 - **1 request:** `cookie → session → scope → perms → zod validate → service → CAS update (1 doc) → mirror audit → email best-effort → response → 1 dòng log`.
-- **Envelope:** OK = resource + `ETag`; lỗi = `application/problem+json` (`type,title,status,code,detail,trace_id`), `code` bắt buộc có trong `shared/errors.ts` (`FG-WF-007`…).
+- **Envelope:** OK = resource (không cache HTTP, §8.3.1); lỗi = `application/problem+json` (`type,title,status,code,detail,trace_id`), `code` bắt buộc có trong `shared/errors.ts` (`FG-WF-007`…).
 - **Concurrency = CAS, không transaction:** mọi mutation kèm `If-Match` (version) → `updateOne({_id, version}, {..., $inc:{version:1}})`; `matchedCount === 0` → `409 FG-WF-011` "hồ sơ đã thay đổi".
 - **Idempotency:** mutation từ UI gửi kèm `request_id` (UUID); `audit`/`history` lưu `request_id` unique-ish → double-click/retry không tạo 2 bước duyệt.
 - **Tiền trên wire là string** `"2500000000"`, FE parse `parseMoney()`. Cấm `Number` arithmetic cho tiền ở mọi tầng.
@@ -337,7 +337,7 @@ Permission  (registry): doc:read doc:create doc:submit approval:act approval:ove
 Thứ tự cứng cho mọi mutation quan trọng:
 
 ```text
-1. validate (perms, ngưỡng tiền, bằng chứng bắt buộc, ETag/version)
+1. validate (perms, ngưỡng tiền, bằng chứng bắt buộc, version/If-Match)
 2. CAS MỘT document: { status, approval.steps[i], history:[...push audit entry], version+1, updated_at }
    └─ matchedCount 0 → 409, không có side effect nào đã xảy ra
 3. best-effort (sau khi commit, await nhưng swallow error + ghi jobs):
@@ -376,7 +376,7 @@ Gộp chủ đích: **một** `documents` cho mọi loại phiếu (`kind: spend
 
 ```js
 { _id, code:"PC-2026-00123", kind:"spend", company_id, department_id, created_by,
-  status:"pending.gd", version:12,                 // → ETag, dùng cho CAS
+  status:"pending.gd", version:12,                 // → If-Match, dùng cho CAS
   title, purpose, category_id,
   payee:{ name, tax_code, counterparty_id, is_internal },
   amount:{ minor: Long("2500000000"), currency:"VND", decimals:0 },
@@ -401,13 +401,19 @@ Gộp chủ đích: **một** `documents` cho mọi loại phiếu (`kind: spend
 | Nhu cầu | Cách làm (không read model phức tạp) |
 | --- | --- |
 | Badge "chờ tôi duyệt" | `countDocuments({'approval.steps':{$elemMatch:{user_id, state:'current'}}})` + covering index; **cache in-memory 60s per user** |
-| `GET /v1/dashboard/overview` | 1 endpoint gộp (4 số dư + thu/chi hôm nay + chờ duyệt + đáo hạn + quá hạn), mỗi mục 1 query có index, chạy `Promise.all`, response `Cache-Control: private, max-age=15` + `ETag` |
+| `GET /v1/dashboard/overview` | 1 endpoint gộp (4 số dư + thu/chi hôm nay + chờ duyệt + đáo hạn + quá hạn), mỗi mục 1 query có index, chạy `Promise.all` |
 | Dòng tiền theo ngày / forecast | `balances_daily { company_id, account_id, date, opening, planned_in, planned_out, closing, min_balance, breach }` — **CAS theo doc ngày** khi submit/payment/import sao kê; `forecast` đọc từ collection này; rebuild = `pnpm db:rebuild-balances` (idempotent) |
 | Đáo hạn 4 bucket (RENEW-01) | query `loans` index `{company_id:1,next_due_date:1}` + group theo `days_to_due` (vài trăm doc) |
 | Công nợ aging | aggregation trên `debt_items` (vài nghìn doc) |
 | Báo cáo | aggregation trực tiếp `documents` với index + `$match` **trước** `$group`; > 3s → chạy như `jobs`, trả qua export |
 
-Chỉ khi **đo thấy chậm** mới thêm lớp cache/read model (§20). Trần CPU 0.1 nhân khiến "tính khi đọc" phải có `max-age` và `ETag` — đây là cơ chế chính để app free không bị đánh sập khi 20 người cùng mở Dashboard.
+Chỉ khi **đo thấy chậm** mới thêm lớp cache/read model (§20).
+
+### 8.3.1 Cache HTTP — **TẮT toàn hệ thống** (no-store)
+
+Mọi response `ok(...)` đều gắn `Cache-Control: private, no-store`; client `fetch` cũng đặt `cache: 'no-store'`. **Không** dùng `max-age`/`ETag`/304 cho API nữa: browser/proxy không được giữ số liệu tài chính, để mọi màn hình đọc tươi ngay sau thao tác (tạo/sửa/xoá) — tránh UI kẹt dữ liệu cũ. Các option `maxAge`/`etag`/`staleWhileRevalidate` trong `OkOptions` chỉ còn để tương thích, không có tác dụng.
+
+Bù lại hiệu năng, vẫn giữ **cache in-memory TTL 60s** (K-6) cho session/badge/dashboard — cache này **vô hiệu hoá sau mutation** (`cacheInvalidate`) nên không gây stale. Trần CPU 0.1 nhân: "tính khi đọc" dựa vào index + `Promise.all`, không dựa vào HTTP cache.
 
 ### 8.4 Index (tập trung ở `db/indexes.js`, apply bằng script)
 
@@ -492,7 +498,7 @@ draft → pending.kt → pending.cv → pending.ktt → pending.pgd → pending.
 
 | Loại | Cách |
 | --- | --- |
-| 14 preset báo cáo | 1 route + 1 zod schema + 1 aggregation + 1 `columns()` dùng `FgTable`/`FgCashFlowTable`/`FgMaturityTable`; cache `max-age=60` + ETag |
+| 14 preset báo cáo | 1 route + 1 zod schema + 1 aggregation + 1 `columns()` dùng `FgTable`/`FgCashFlowTable`/`FgMaturityTable` |
 | Excel | `exceljs` stream (`report:export` check **server-side**), watermark "Xuất bởi {user} · {time} · {company}", limit 50k dòng → CSV |
 | PDF / bản in | route `/in/ban-tin/:date`, `/in/ho-so/:id`, `/in/bao-cao/:preset` — HTML + print CSS (DS §13.5 P4), user `Ctrl+P` / "In" trên Chrome. **Không** render service |
 | Bản tin 06:30 | GH Actions cron `23:30 UTC` → `POST /v1/tasks/newsletter` (header `x-task-token`) → dựng `settings` doc `newsletter:{date}:{company}` + email link `/ban-tin/ngay?date=` cho GĐ/PGĐ/KTT. Chạy muộn do instance ngủ **không sao**: task cũng tự rebuild khi có người mở `/ban-tin` mà cache thiếu ("tính khi đọc") |
@@ -505,12 +511,12 @@ draft → pending.kt → pending.cv → pending.ktt → pending.pgd → pending.
 
 ## 10. API
 
-`/api/v1` · REST · resource số nhiều · cursor pagination cho danh sách, offset cho báo cáo · `problem+json` · money string · ngày nghiệp vụ `YYYY-MM-DD` (giờ VN) ≠ `*_at` UTC · `ETag`/`If-Match` cho hồ sơ · version trong path, giữ `/v1` ≥ 6 tháng khi breaking change.
+`/api/v1` · REST · resource số nhiều · cursor pagination cho danh sách, offset cho báo cáo · `problem+json` · money string · ngày nghiệp vụ `YYYY-MM-DD` (giờ VN) ≠ `*_at` UTC · `If-Match` (version) cho CAS hồ sơ · version trong path, giữ `/v1` ≥ 6 tháng khi breaking change.
 
 ```http
 POST /v1/auth/login · /v1/auth/2fa · /v1/auth/logout · POST /v1/auth/password-reset · POST /v1/activate
 GET  /v1/me · /v1/me/entitlements · /v1/companies
-GET  /v1/dashboard/overview?scope=            # compound + max-age=15 + ETag
+GET  /v1/dashboard/overview?scope=            # compound (no-store)
 GET  /v1/queue · /v1/queue/processed · /v1/needs-attention
 GET|POST /v1/documents · GET|PATCH /v1/documents/{id}
 POST /v1/documents/{id}/transition            # submit|approve|reject|changes_requested|fast_track|pay|cancel
@@ -658,7 +664,7 @@ Sự cố & cách xử lý (runbook): Render build fail (xoá cache `--frozen-lo
 
 | Chỉ số | Mục tiêu | Cách đạt |
 | --- | --- | --- |
-| `GET /v1/dashboard/overview` | p95 ≤ 1.5 s (ấm) | covering index + `Promise.all` + `max-age=15` + ETag + cache in-memory 60s |
+| `GET /v1/dashboard/overview` | p95 ≤ 1.5 s (ấm) | covering index + `Promise.all` + cache in-memory 60s |
 | Danh sách 50 dòng | ≤ 500 ms | projection, cursor, không trả field dài |
 | `POST /transition` | ≤ 700 ms | 1 CAS update, email/side-effect async |
 | Báo cáo tháng × 5 công ty | ≤ 5 s | `$match` index trước `$group`; > 5 s → `jobs` |
@@ -666,7 +672,7 @@ Sự cố & cách xử lý (runbook): Render build fail (xoá cache `--frozen-lo
 | Web initial load | ≤ 3 s (LAN/4G) | 1 bundle ≤ 350 KB gzip, font subset, lazy `report/`, `admin/` |
 | Memory của process | ≤ 350 MB | `maxPoolSize 10`, không load cả collection, export stream, `--max-old-space-size=384` |
 
-Quy tắc: mọi query có `company_id` + index · mọi list có `limit` + `projection` · `EXPLAIN` trong PR nếu thêm query mới · không aggregate lớn trên request path · bảng > 200 dòng dùng virtual scroll (`FgTable` DS §7.10) · ETag để 304.
+Quy tắc: mọi query có `company_id` + index · mọi list có `limit` + `projection` · `EXPLAIN` trong PR nếu thêm query mới · không aggregate lớn trên request path · bảng > 200 dòng dùng virtual scroll (`FgTable` DS §7.10) · API trả `no-store` (không cache HTTP, §8.3.1).
 
 ---
 
