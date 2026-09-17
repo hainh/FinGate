@@ -340,11 +340,11 @@ Không animate: số tiền, thứ tự dòng bảng, trạng thái approval (ch
 --fg-z-table-sticky   10   cột cố định + header table
 --fg-z-header         100  app header sticky
 --fg-z-sidebar        200  rail + mobile nav
+--fg-z-approval-bar   500  action bar treo dưới mobile (dưới overlay, không đè modal)
 --fg-z-dropdown       900  select, menu, datepicker
 --fg-z-drawer        1000
 --fg-z-modal         1100
 --fg-z-toast         1200
---fg-z-approval-bar  1300  action bar treo dưới mobile
 ```
 
 ---

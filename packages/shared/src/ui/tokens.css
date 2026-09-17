@@ -246,7 +246,9 @@
   --fg-z-drawer: 1000;
   --fg-z-modal: 1100;
   --fg-z-toast: 1200;
-  --fg-z-approval-bar: 1300;
+  /* thanh hành động dính đáy: nằm trên nội dung nhưng DƯỚI dropdown/drawer/modal
+     để không đè lên hộp thoại xác nhận duyệt/hủy */
+  --fg-z-approval-bar: 500;
 
   /* ---------- LAYOUT ---------- */
   --fg-density: comfortable;
