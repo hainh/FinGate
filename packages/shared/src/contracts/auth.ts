@@ -210,6 +210,7 @@ export const personnelRow = z.object({
   email_masked: z.boolean().default(false),
   company_id: objectId,
   company_name: z.string(),
+  department_id: objectId.nullable().default(null),
   department_name: z.string().nullable(),
   role: idString,
   role_label: z.string(),
@@ -231,6 +232,21 @@ export const personnelDeactivateBody = z.object({
   /** người được chỉ định tiếp nhận các hồ sơ đang giữ. */
   replacement_user_id: objectId.optional(),
   reason: z.string().min(5).max(500),
+  request_id: uuid,
+});
+
+/**
+ * ADM-01 — sửa hồ sơ tài khoản đã có (không đổi email — email là danh tính đăng nhập).
+ * Chỉ gửi trường muốn đổi; `company_id` khác công ty hiện tại đòi quyền `hr:transfer`.
+ */
+export const personnelUpdateBody = z.object({
+  display_name: z.string().trim().min(1).max(120).optional(),
+  company_id: objectId.optional(),
+  role: idString.optional(),
+  department_id: objectId.nullable().optional(),
+  amount_limit_minor: z.string().regex(/^\d+$/).optional(),
+  /** lý do sửa (audit) — tùy chọn. */
+  reason: z.string().min(5).max(500).optional(),
   request_id: uuid,
 });
 

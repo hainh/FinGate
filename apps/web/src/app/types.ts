@@ -470,6 +470,7 @@ export interface PersonnelRow {
   email_masked: boolean;
   company_id: string;
   company_name: string;
+  department_id: string | null;
   department_name: string | null;
   role: string;
   role_label: string;

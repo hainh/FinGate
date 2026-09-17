@@ -18,7 +18,7 @@ import {
   type Role,
 } from '@fingate/shared';
 import { Models } from '../db/models.ts';
-import { defineRoute, requestCtx, requireActor, requireScope, validate, revokeAllUserSessions } from '../lib/http.ts';
+import { defineRoute, requestCtx, requireActor, requirePerm, requireScope, validate, revokeAllUserSessions } from '../lib/http.ts';
 import { ok, jsonSafe } from '../lib/serialize.ts';
 import {
   companyUpsertBody,
@@ -28,6 +28,7 @@ import {
   matrixUpsertBody,
   personnelDeactivateBody,
   personnelInviteBody,
+  personnelUpdateBody,
   personnelTransferBody,
   recurringUpsertBody,
   settingUpsertBody,
@@ -45,6 +46,7 @@ import {
   matrixUpsertBodySchema,
   personnelDeactivateBodySchema,
   personnelInviteBodySchema,
+  personnelUpdateBodySchema,
   personnelTransferBodySchema,
   recurringUpsertBodySchema,
   settingUpsertBodySchema,
@@ -126,6 +128,7 @@ export function adminRoutes(app: FastifyInstance): void {
             email_masked: !showEmail,
             company_id: a ? String(a.company_id) : '',
             company_name: a ? (cmap.get(String(a.company_id)) ?? '') : '',
+            department_id: a?.department_id ? String(a.department_id) : null,
             department_name: a?.department_id ? (dmap.get(String(a.department_id)) ?? null) : null,
             role: String(a?.role ?? 'staff'),
             role_label: ROLE_LABEL[String(a?.role ?? 'staff') as Role] ?? '',
@@ -586,6 +589,97 @@ export function adminRoutes(app: FastifyInstance): void {
           ip: requestCtx(req).ip,
         });
         return { data: { ok: true, reassigned_documents: held } };
+      },
+    }),
+  );
+
+  /**
+   * ADM-01 — sửa hồ sơ tài khoản (họ tên, công ty/bộ phận, vai trò, hạn mức duyệt).
+   * Đổi công ty = hành động chuyển (đòi `hr:transfer`); đổi vai trò/công ty thu hồi phiên ngay.
+   * Không đổi email (danh tính đăng nhập) và không sửa tài khoản đã ngừng hoạt động.
+   */
+  app.route(
+    defineRoute({
+      method: 'PATCH',
+      url: '/personnel/:id',
+      config: { perms: ['hr:invite'] as Permission[], screen: 'ADM-01', summary: 'Sửa hồ sơ nhân sự' },
+      schema: { tags: ['personnel'], body: personnelUpdateBodySchema },
+      handler: async (req) => {
+        const actor = requireActor(req);
+        const body = validate(personnelUpdateBody, req.body);
+        const { id } = req.params as { id: string };
+        await assertManages(req, id);
+        const user = await Models.User.findById(id).select({ email: 1, status: 1, invite: 1 }).lean();
+        if (!user) throw new ApiError({ code: 'FG-WF-001', status: 404 });
+        if (user.status === 'deactivated') throw new ApiError({ code: 'FG-HR-001', detail: 'Tài khoản đã ngừng hoạt động — không sửa được' });
+
+        const assignment = await Models.Assignment.findOne({ user_id: id, status: 'active' } as never)
+          .select({ _id: 1, company_id: 1, department_id: 1, role: 1, amount_limit_minor: 1 })
+          .lean<{ _id: unknown; company_id?: unknown; department_id?: unknown; role?: string; amount_limit_minor?: unknown } | null>();
+
+        const currentCompany = assignment?.company_id ? String(assignment.company_id) : null;
+        const nextCompany = body.company_id ?? currentCompany;
+        if (!nextCompany) throw new ApiError({ code: 'FG-HR-002', detail: 'Chưa xác định công ty' });
+        const companyChanged = Boolean(body.company_id && body.company_id !== currentCompany);
+        if (companyChanged) {
+          requirePerm(req, 'hr:transfer');
+          if (!actor.scope_all) throw new ApiError({ code: 'FG-HR-002', detail: 'Chỉ quản trị cấp Tập đoàn được đổi công ty' });
+          const held = await Models.Document.countDocuments({
+            status: { $in: [...DECISION_STATUSES] },
+            'approval.steps': { $elemMatch: { user_id: id, state: { $in: ['current', 'waiting'] } } },
+          } as never);
+          if (held > 0) {
+            throw new ApiError({
+              code: 'FG-HR-003',
+              detail: `${held} hồ sơ đang chờ người này — chuyển bàn xử lý trước khi đổi công ty`,
+              data: { holding_docs: held },
+            });
+          }
+        }
+
+        const nextRole = String(body.role ?? assignment?.role ?? 'staff');
+        const nextDept = body.department_id !== undefined ? body.department_id : assignment?.department_id ? String(assignment.department_id) : null;
+        const nextLimit = body.amount_limit_minor !== undefined ? BigInt(body.amount_limit_minor) : asBigInt(assignment?.amount_limit_minor);
+
+        const userSet: Record<string, unknown> = { updated_at: new Date(), mfa_required: MFA_REQUIRED_ROLES.includes(nextRole as Role) };
+        if (body.display_name !== undefined) userSet.display_name = body.display_name;
+        // tài khoản còn lời mời: đồng bộ cấu hình để lúc kích hoạt vào đúng công ty/vai trò mới.
+        const inv = (user as { invite?: InviteShape }).invite;
+        if (user.status === 'invited' && inv?.seed) {
+          userSet.invite = { ...inv, company_id: nextCompany, role: nextRole, department_id: nextDept };
+        }
+        await Models.User.updateOne({ _id: id }, { $set: userSet }).exec();
+
+        if (assignment) {
+          await Models.Assignment.updateOne(
+            { _id: assignment._id },
+            { $set: { company_id: nextCompany, department_id: nextDept, role: nextRole, amount_limit_minor: nextLimit } },
+          ).exec();
+        } else {
+          await Models.Assignment.create({ user_id: id, company_id: nextCompany, department_id: nextDept, role: nextRole, amount_limit_minor: nextLimit, status: 'active' } as never);
+        }
+
+        const roleChanged = nextRole !== String(assignment?.role ?? '');
+        if (companyChanged || roleChanged) await revokeAllUserSessions(id, 'đổi vai trò/công ty');
+
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'hr.update',
+          subject: { type: 'user', id, code: maskEmail(String(user.email)) },
+          company_id: nextCompany,
+          diff_fields: {
+            display_name: body.display_name ?? null,
+            company_id: companyChanged ? nextCompany : null,
+            role: body.role ?? null,
+            department_id: nextDept,
+            amount_limit_minor: body.amount_limit_minor ?? null,
+            reason: body.reason ?? null,
+          },
+          request_id: body.request_id,
+          ip: requestCtx(req).ip,
+        });
+        return { data: { ok: true, user_id: id } };
       },
     }),
   );

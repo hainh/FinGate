@@ -70,6 +70,7 @@ export function PersonnelScreen(): ReactNode {
   const [busy, setBusy] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [linkTarget, setLinkTarget] = useState<PersonnelRow | null>(null);
+  const [editTarget, setEditTarget] = useState<PersonnelRow | null>(null);
   const [linkResult, setLinkResult] = useState<LinkSeed | null>(null);
   return (
     <>
@@ -148,6 +149,11 @@ export function PersonnelScreen(): ReactNode {
                   key: 'act',
                   render: (_v, r) => (
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {can('hr:invite') && r.status !== 'deactivated' ? (
+                        <FgButton size="small" onClick={() => setEditTarget(r)}>
+                          Sửa
+                        </FgButton>
+                      ) : null}
                       {can('hr:invite') && (r.status === 'invited' || r.status === 'active') ? (
                         <FgButton size="small" onClick={() => setLinkTarget(r)}>
                           {r.status === 'active' ? 'Link đổi mật khẩu' : 'Link kích hoạt'}
@@ -205,6 +211,7 @@ export function PersonnelScreen(): ReactNode {
         />
       ) : null}
       {linkResult ? <InviteLinkModal link={linkResult} onClose={() => setLinkResult(null)} onChanged={() => void query.refetch()} /> : null}
+      {editTarget ? <EditPersonnelModal row={editTarget} onClose={() => setEditTarget(null)} onDone={() => void query.refetch()} /> : null}
     </>
   );
 }
@@ -528,6 +535,130 @@ function InviteModal({
           <FgSelect options={VALID_DAY_OPTIONS} value={validDays} onChange={(v) => setValidDays(v ?? '1')} style={{ width: 160 }} />
         </FgField>
         {!can('hr:invite') ? <FgAlert tone="warning" title="Bạn không có quyền mời nhân sự" /> : null}
+        {error ? <FgAlert tone="danger" title={error} /> : null}
+      </div>
+    </FgModal>
+  );
+}
+
+/**
+ * ADM-01 — sửa hồ sơ tài khoản: họ tên · công ty/bộ phận · vai trò · hạn mức duyệt.
+ * Email là danh tính đăng nhập nên không đổi được. Đổi công ty cần quyền `hr:transfer`.
+ */
+function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClose: () => void; onDone: () => void }): ReactNode {
+  const { can } = useAuth();
+  const companies = useCompanies();
+  const canMoveCompany = can('hr:transfer');
+  const [name, setName] = useState(row.display_name);
+  const [companyId, setCompanyId] = useState<string | undefined>(row.company_id || undefined);
+  const [role, setRole] = useState<string>(row.role || 'staff');
+  const [deptId, setDeptId] = useState<string | undefined>(row.department_id ?? undefined);
+  const [limit, setLimit] = useState<Money | null>(row.amount_limit_minor && row.amount_limit_minor !== '0' ? money(row.amount_limit_minor) : null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [depts, setDepts] = useState<{ _id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    if (!companyId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await apiCall<{ items: { _id: string; name: string; company_id: string; active?: boolean }[] }>('/departments', { query: { company_id: companyId } });
+        if (!cancelled) setDepts(r.items.filter((d) => String(d.company_id) === companyId && d.active !== false).map((d) => ({ _id: d._id, name: d.name })));
+      } catch {
+        if (!cancelled) setDepts([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId]);
+
+  const companyOptions = useMemo(() => (companies.data?.items ?? []).map((c) => ({ label: c.name, value: c._id })), [companies.data]);
+
+  const submit = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    setFieldErrors({});
+    try {
+      await apiCall(`/personnel/${row.user_id}`, {
+        method: 'PATCH',
+        body: {
+          display_name: name.trim(),
+          company_id: companyId,
+          role,
+          department_id: deptId ?? null,
+          amount_limit_minor: limit ? moneyToWire(limit).minor : '0',
+        },
+      });
+      toastOk('Đã cập nhật hồ sơ nhân sự');
+      onDone();
+      onClose();
+    } catch (e) {
+      if (e instanceof ApiRequestError) {
+        setError(e.problem.detail ?? e.problem.title);
+        setFieldErrors(e.problem.errors ?? {});
+      } else setError('Không lưu được hồ sơ');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <FgModal open title={`Sửa hồ sơ · ${row.display_name}`} onCancel={onClose} onOk={() => void submit()} okText="Lưu" confirmLoading={busy} width={520}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)', paddingTop: 8 }}>
+        <FgField label="Họ tên" required error={fieldErrors.display_name ?? null}>
+          <FgInput value={name} onChange={(e: { target: { value: string } }) => setName(e.target.value)} placeholder="Nguyễn Văn A" />
+        </FgField>
+        <FgField label="Email (định danh đăng nhập — không đổi được)">
+          <FgInput value={row.email} readOnly disabled />
+        </FgField>
+        <FgField label="Công ty" required error={fieldErrors.company_id ?? null}>
+          <FgSelect
+            options={companyOptions}
+            value={companyId}
+            onChange={(v) => {
+              if (v !== companyId) setDeptId(undefined);
+              setCompanyId(v);
+            }}
+            placeholder="Chọn công ty"
+            disabled={!canMoveCompany}
+            style={{ width: '100%' }}
+          />
+          {!canMoveCompany ? (
+            <FgText style="caption" color="muted">
+              Bạn không có quyền chuyển công ty — liên hệ Chủ tịch/Quản trị hệ thống
+            </FgText>
+          ) : null}
+        </FgField>
+        <FgField label="Vai trò (phân quyền)" required>
+          <FgSelect
+            options={Object.entries(ROLES_LABEL).map(([value, label]) => ({ label, value }))}
+            value={role}
+            onChange={(v) => setRole(v ?? 'staff')}
+            style={{ width: '100%' }}
+          />
+          {['chief_accountant', 'deputy_director', 'director', 'chairman', 'admin'].includes(role) ? (
+            <FgText style="caption" color="muted">
+              Vai trò này thuộc nhóm bắt buộc 2FA — người dùng tự bật Xác thực 2 lớp trong Cài đặt.
+            </FgText>
+          ) : null}
+        </FgField>
+        <FgField label="Bộ phận (tùy chọn)">
+          <FgSelect
+            options={depts.map((d) => ({ label: d.name, value: d._id }))}
+            value={deptId}
+            onChange={setDeptId}
+            placeholder={companyId ? 'Chọn bộ phận' : 'Chọn công ty trước'}
+            allowClear
+            disabled={!companyId}
+            style={{ width: '100%' }}
+          />
+        </FgField>
+        <FgField label="Hạn mức duyệt (VND, tùy chọn)">
+          <FgMoneyInput value={limit} onChange={setLimit} ariaLabel="Hạn mức duyệt" />
+        </FgField>
         {error ? <FgAlert tone="danger" title={error} /> : null}
       </div>
     </FgModal>

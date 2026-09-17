@@ -35,6 +35,7 @@ import {
   personnelDeactivateBody,
   personnelInviteBody,
   inviteRegenerateBody,
+  personnelUpdateBody,
   personnelTransferBody,
   prefsUpdateBody,
   recurringUpsertBody,
@@ -88,6 +89,7 @@ export const auditLogQuerySchema = j(auditLogQuery);
 export const personnelInviteBodySchema = j(personnelInviteBody);
 export const inviteRegenerateBodySchema = j(inviteRegenerateBody);
 export const personnelDeactivateBodySchema = j(personnelDeactivateBody);
+export const personnelUpdateBodySchema = j(personnelUpdateBody);
 export const personnelTransferBodySchema = j(personnelTransferBody);
 export const delegationBodySchema = j(delegationBody);
 
