@@ -60,7 +60,6 @@ const PLAN: SeedPlan = {
     { email: 'giám đốc.mp@fingate.local', name: 'Nguyễn Văn Minh', role: 'director', company: 'MP', limitTy: 50 },
     { email: 'pgd.mp@fingate.local', name: 'Lê Thị Hương', role: 'deputy_director', company: 'MP', limitTy: 20 },
     { email: 'ktt.mp@fingate.local', name: 'Phạm Quang Đức', role: 'chief_accountant', company: 'MP', limitTy: 10 },
-    { email: 'cv.mp@fingate.local', name: 'Võ Thị Lan', role: 'accountant', company: 'MP', limitTy: 0 },
     { email: 'kt.mp@fingate.local', name: 'Hoàng Văn Tuấn', role: 'staff', company: 'MP', limitTy: 0 },
     { email: 'director.ap@fingate.local', name: 'Đặng Quốc Bảo', role: 'director', company: 'AP', limitTy: 50 },
     { email: 'ktt.ap@fingate.local', name: 'Bùi Ngọc Hà', role: 'chief_accountant', company: 'AP', limitTy: 10 },
@@ -106,7 +105,7 @@ const PLAN: SeedPlan = {
     { company: 'MP', kind: 'spend', title: 'Thanh toán NCC Thành Trung đợt 2', purpose: 'Thanh toán giai đoạn 2 hợp đồng cung cấp vật liệu theo biên bản nghiệm thu 24/2026', payee: 'Công ty VLXD Thành Trung', amountTy: 2.5, status: 'pending.gd', plannedOffset: 1, category: 'Mua hàng / nguyên vật liệu' },
     { company: 'MP', kind: 'spend', title: 'Chi phí thi công hạng mục móng', purpose: 'Thuê đội thi công cọc khoan nhồi đại trà', payee: 'Công ty CP Ep cọc nền móng Trường Phát', amountTy: 4.8, status: 'pending.pgd', plannedOffset: 2, category: 'Xây dựng' },
     { company: 'AP', kind: 'spend', title: 'Lương tháng 8 bộ phận kinh doanh', purpose: 'Chi trả lương và phụ cấp tháng 8 cho 32 nhân sự', payee: 'Phòng Kế toán — bảng lương T8', amountTy: 1.5, status: 'pending.ktt', plannedOffset: 0, category: 'Lương' },
-    { company: 'HH', kind: 'spend', title: 'Điện nước tháng 8', purpose: 'Thanh toán hóa đơn điện nước tòa nhà VP', payee: 'EVN TP.HCM', amountTy: 0.042, status: 'pending.kt', plannedOffset: 3, category: 'Điện nước' },
+    { company: 'HH', kind: 'spend', title: 'Điện nước tháng 8', purpose: 'Thanh toán hóa đơn điện nước tòa nhà VP', payee: 'EVN TP.HCM', amountTy: 0.042, status: 'pending.ktt', plannedOffset: 3, category: 'Điện nước' },
     { company: 'MP', kind: 'spend', title: 'Mua thiết bị văn phòng', purpose: 'Mua 6 máy tính cho phòng kỹ thuật theo báo giá 03/2026', payee: 'Công ty CP Tin học Hoa Sua', amountTy: 0.18, status: 'draft', plannedOffset: 7, category: 'Máy móc thiết bị' },
     { company: 'AP', kind: 'spend', title: 'Thanh toán hợp đồng quảng cáo', purpose: 'Giải ngân đợt 1 gói truyền thông ra mắt sản phẩm mới', payee: 'Công ty Media Bright', amountTy: 6.2, status: 'pending.chairman', plannedOffset: 5, category: 'Chi phí quản lý' },
     { company: 'MP', kind: 'spend', title: 'Trả gốc vay BIDV HĐTD/2024/MP-01', purpose: 'Trả nợ gốc theo kỳ của hợp đồng tín dụng', payee: 'BIDV Chi nhánh TP.HCM', amountTy: 5, status: 'approved', plannedOffset: 0, category: 'Trả gốc vay' },
@@ -232,9 +231,9 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
   for (const code of companyIds.keys()) {
     const id = companyIds.get(code) as string;
     const tiers = [
-      { min: 0, max: moneyMinor(0.05), steps: ['accountant', 'chief_accountant', 'deputy_director'] },
-      { min: moneyMinor(0.05), max: moneyMinor(5), steps: ['accountant', 'chief_accountant', 'deputy_director', 'director'] },
-      { min: moneyMinor(5), max: null, steps: ['accountant', 'chief_accountant', 'deputy_director', 'director'] },
+      { min: 0, max: moneyMinor(0.05), steps: ['chief_accountant', 'deputy_director'] },
+      { min: moneyMinor(0.05), max: moneyMinor(5), steps: ['chief_accountant', 'deputy_director', 'director'] },
+      { min: moneyMinor(5), max: null, steps: ['chief_accountant', 'deputy_director', 'director'] },
     ];
     for (const t of tiers) {
       await Models.ApprovalMatrix.create({
@@ -255,13 +254,12 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
       doc_kind: 'income',
       amount_min_minor: 0n,
       steps: [
-        { order: 1, role: 'accountant', sla_hours: 24, mandatory: true },
-        { order: 2, role: 'chief_accountant', sla_hours: 24, mandatory: true },
-        { order: 3, role: 'director', sla_hours: 48, mandatory: true },
+        { order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true },
+        { order: 2, role: 'director', sla_hours: 48, mandatory: true },
       ],
       version: 1,
       effective_from: new Date('2026-01-01T00:00:00Z'),
-      label: 'Khoản thu — KT → KTT → GĐ',
+      label: 'Khoản thu — KTT → GĐ',
       active: true,
     } as never);
     await Models.ApprovalMatrix.create({
@@ -367,11 +365,10 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
   /* documents — phủ nhiều trạng thái để test hàng chờ + fast-track */
   const statusStepState: Record<string, number> = {
     draft: 0,
-    'pending.kt': 1,
-    'pending.ktt': 2,
-    'pending.pgd': 3,
-    'pending.gd': 4,
-    'pending.chairman': 5,
+    'pending.ktt': 1,
+    'pending.pgd': 2,
+    'pending.gd': 3,
+    'pending.chairman': 4,
     processing: 99,
     approved: 99,
     paid: 99,
@@ -461,7 +458,7 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
     if (!company) continue;
     const kind = (i % 7 === 0 ? 'income' : 'spend') as 'spend' | 'income';
     const amountTy = 0.05 + ((i * 37) % 900) / 100;
-    const statusPool = ['draft', 'pending.kt', 'pending.ktt', 'pending.pgd', 'pending.gd', 'approved', 'processing', 'paid', 'changes_requested'];
+    const statusPool = ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'approved', 'processing', 'paid', 'changes_requested'];
     const status = statusPool[i % statusPool.length] as string;
     const matrix = await resolveMatrix({ company_id: company, kind, amount_minor: moneyMinor(amountTy) });
     const creator = pick('staff', companyCode) ?? anyUser;

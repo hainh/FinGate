@@ -3,7 +3,7 @@
 Mục tiêu là mỗi ngày chỉ cần mở web là biết:
 
 * Hôm nay **có khoản thu/chi nào cần duyệt**
-* Ai đã lập → kế toán kiểm tra → Kế toán trưởng duyệt → Phó TGĐ/GĐ phụ trách duyệt → **Giám đốc duyệt cuối**
+* Ai đã lập → Kế toán trưởng kiểm tra/duyệt → Phó TGĐ/GĐ phụ trách duyệt → **Giám đốc duyệt cuối**
 * Công ty đang có **bao nhiêu tiền ở từng ngân hàng**
 * Hôm nay/ngày tới có **khoản ngân hàng nào đến hạn đảo**
 * Dòng tiền 7/30 ngày tới như thế nào
@@ -53,7 +53,6 @@ Hình thức quản lý: **1 Tập đoàn → nhiều công ty con**. Mỗi côn
 Mỗi công ty có bộ nhân sự riêng:
 
 * Nhân viên kế toán
-* Chuyên viên kế toán
 * Kế toán trưởng
 * Phó Giám đốc/Giám đốc phụ trách
 * Giám đốc/Tổng Giám đốc
@@ -82,20 +81,7 @@ Không có quyền:
 
 ---
 
-## 2. Chuyên viên kế toán
-
-Ngoài quyền của nhân viên kế toán:
-
-* Kiểm tra hồ sơ
-* Kiểm tra chứng từ
-* Kiểm tra số dư ngân hàng
-* Đối chiếu công nợ
-* Đề xuất phương án thanh toán
-* Gửi hồ sơ sang Kế toán trưởng.
-
----
-
-## 3. Kế toán trưởng
+## 2. Kế toán trưởng
 
 Có quyền:
 
@@ -114,7 +100,7 @@ Kế toán trưởng **không được tự động bỏ qua các cấp phê duy
 
 ---
 
-## 4. Phó Giám đốc/Giám đốc phụ trách
+## 3. Phó Giám đốc/Giám đốc phụ trách
 
 Có quyền:
 
@@ -127,7 +113,7 @@ Có quyền:
 
 ---
 
-## 5. Giám đốc/Tổng Giám đốc
+## 4. Giám đốc/Tổng Giám đốc
 
 Có quyền cao nhất trong phạm vi điều hành:
 
@@ -145,7 +131,7 @@ Có quyền cao nhất trong phạm vi điều hành:
 
 ---
 
-## 6. Chủ tịch HĐQT
+## 5. Chủ tịch HĐQT
 
 Cấp phê duyệt cao nhất, áp dụng cho các hồ sơ vượt ngưỡng của Approval Matrix (mặc định: khoản > 5 tỷ, cấu hình được):
 
@@ -173,11 +159,7 @@ Quy trình mặc định:
 
 ↓
 
-**Chuyên viên kế toán kiểm tra**
-
-↓
-
-**Kế toán trưởng duyệt**
+**Kế toán trưởng kiểm tra & duyệt**
 
 ↓
 
@@ -214,7 +196,6 @@ Quy trình mặc định:
 Hệ thống phải có trạng thái rõ ràng:
 
 * Nháp
-* Chờ kế toán kiểm tra
 * Chờ Kế toán trưởng
 * Chờ Phó Giám đốc
 * Chờ Giám đốc
@@ -686,15 +667,15 @@ Ví dụ:
 
 | Giá trị khoản chi | Quy trình                               |
 | ----------------- | --------------------------------------- |
-| < 50 triệu        | KT → KTT → PGĐ                          |
-| 50 triệu – 5 tỷ   | KT → KTT → PGĐ → GĐ                     |
-| > 5 tỷ            | KT → KTT → PGĐ → GĐ → **Chủ tịch HĐQT** + cảnh báo đặc biệt |
+| < 50 triệu        | KTT → PGĐ                               |
+| 50 triệu – 5 tỷ   | KTT → PGĐ → GĐ                          |
+| > 5 tỷ            | KTT → PGĐ → GĐ → **Chủ tịch HĐQT** + cảnh báo đặc biệt |
 
 Các ngưỡng này phải **cấu hình được trên hệ thống**, không hard-code.
 
 Lưu ý:
 
-* `KT` trong matrix bao gồm 2 bước luôn luôn có ở mọi quy trình: **Nhân viên kế toán lập → Chuyên viên kế toán kiểm tra**; matrix chỉ định nghĩa từ cấp duyệt trở lên.
+* Matrix định nghĩa các cấp duyệt; hồ sơ luôn do **Nhân viên kế toán lập**, **Kế toán trưởng là cấp kiểm tra & duyệt đầu tiên**.
 * Theo cơ chế fast-track (mục IV), mọi cấp trong quy trình đều thấy phiếu và có thể duyệt ngay từ đầu; thứ tự trên chỉ xác định **cấp cao nhất bắt buộc** để hồ sơ được coi là đã duyệt.
 
 ---

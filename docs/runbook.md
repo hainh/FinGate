@@ -69,7 +69,6 @@ Dữ liệu demo ẩn danh (BA-11), 3 công ty: **MP** (Minh Phúc), **AP** (An 
 | `giám đốc.mp@fingate.local` | Giám đốc | MP |
 | `pgd.mp@fingate.local` | Phó giám đốc | MP |
 | `ktt.mp@fingate.local` | Kế toán trưởng | MP |
-| `cv.mp@fingate.local` | Chuyên viên kế toán | MP |
 | `kt.mp@fingate.local` | Nhân viên | MP |
 | `director.ap@fingate.local` | Giám đốc | AP |
 | `ktt.ap@fingate.local` | Kế toán trưởng | AP |

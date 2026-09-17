@@ -161,7 +161,7 @@ export function financeRoutes(app: FastifyInstance): void {
         if (acct.is_group && !actor.permissions.includes('admin:group_accounts')) throw new ApiError({ code: 'FG-RBAC-001' });
         if (status !== 'active') {
           const referencing = await Models.Document.countDocuments({
-            status: { $in: ['draft', 'pending.kt', 'pending.cv', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.chairman', 'approved', 'processing'] },
+            status: { $in: ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.chairman', 'approved', 'processing'] },
             $or: [{ 'source.account_id': id }, { 'source.group_account_id': id }],
           } as never);
           if (referencing > 0) {

@@ -182,7 +182,7 @@ export async function submitDocument(input: {
     steps.find((s) => s.order === first.order)!.sla_deadline = slaDeadline(now, ms?.sla_hours ?? 24, cal);
   }
 
-  const status = statusForStep(first?.role ?? 'accountant', doc.kind) ?? FIRST_NODE[doc.kind];
+  const status = statusForStep(first?.role ?? 'chief_accountant') ?? FIRST_NODE[doc.kind];
 
   const history = buildHistoryEntry({
     action: 'submit',
@@ -451,11 +451,11 @@ export async function transition(input: {
 
     if (action === 'approve_with_reason') {
       // fast-track: cấp cao hơn duyệt trước — status vẫn theo cấp thấp nhất chưa duyệt
-      nextStatus = recalcStatusFromSteps(nextSteps as StepState[], doc.kind);
+      nextStatus = recalcStatusFromSteps(nextSteps as StepState[]);
       const s = nextSteps.find((x) => x.order === myStep.order);
       if (s) s.fast_tracked = true;
     } else if (decision === 'approve') {
-      nextStatus = finished ? 'approved' : recalcStatusFromSteps(nextSteps as StepState[], doc.kind);
+      nextStatus = finished ? 'approved' : recalcStatusFromSteps(nextSteps as StepState[]);
     } else if (decision === 'reject') {
       nextStatus = 'rejected';
     } else {

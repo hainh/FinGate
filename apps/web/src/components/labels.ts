@@ -6,7 +6,6 @@ import { ACTION_LABEL, EVIDENCE_LABEL, type Action, type EvidenceType } from '@f
 
 export const ROLES_LABEL: Record<string, string> = {
   staff: 'Nhân viên kế toán',
-  accountant: 'Chuyên viên kế toán',
   chief_accountant: 'Kế toán trưởng',
   deputy_director: 'Phó Giám đốc',
   director: 'Giám đốc / Tổng Giám đốc',

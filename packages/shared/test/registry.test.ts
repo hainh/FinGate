@@ -25,7 +25,6 @@ describe('status/registry — nguồn duy nhất cho API · UI · Excel · email
   it('có đủ các key theo DS §3.1 + workflow arch §9.1', () => {
     for (const k of [
       'draft',
-      'pending.kt',
       'pending.ktt',
       'pending.pgd',
       'pending.gd',

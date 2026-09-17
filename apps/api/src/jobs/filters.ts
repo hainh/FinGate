@@ -2,7 +2,7 @@
 
 export function queueFilterForSla(now: Date): Record<string, unknown> {
   return {
-    status: { $in: ['pending.kt', 'pending.cv', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.chairman'] },
+    status: { $in: ['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.chairman'] },
     'approval.steps.sla_deadline': { $ne: null, $lt: now },
     archived_at: null,
   };

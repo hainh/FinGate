@@ -46,13 +46,13 @@
 | ID | `{MODULE}-{NN}`, dùng làm mã ticket / tên frame Figma / tên route file |
 | Màn hình | Tên hiển thị trên page header (đúng ngôn ngữ UI §11, không TitleCase giữa câu) |
 | Route | URL thật; là source of truth cho filter (§7.11) → deep-link được từ notification |
-| Vai trò | KT = nhân viên kế toán · CV = chuyên viên · KTT = kế toán trưởng · PGĐ · GĐ/TGĐ · QT = quản trị |
+| Vai trò | KT = nhân viên kế toán · KTT = kế toán trưởng · PGĐ · GĐ/TGĐ · QT = quản trị |
 | Component | `Fg*` phải có (§6–7 design system) |
 | St | Các trạng thái dữ liệu/bắt buộc phải xử lý (§7.10/§7.20) |
 | Ph | Phase P0–P4 (§22) |
 | Nền | `D` desktop ≥1024 · `T` tablet · `M` mobile · `Web` responsive mặc định |
 
-Status workflow dùng **exact key** của §3.1 (`draft`, `pending.kt`, `pending.ktt`, `pending.pgd`, `pending.gd`, `approved`, `processing`, `paid`, `rejected`, `changes_requested`, `cancelled`, `overdue`). Không tự đặt status mới cho bất kỳ màn hình nào.
+Status workflow dùng **exact key** của §3.1 (`draft`, `pending.ktt`, `pending.pgd`, `pending.gd`, `approved`, `processing`, `paid`, `rejected`, `changes_requested`, `cancelled`, `overdue`). Không tự đặt status mới cho bất kỳ màn hình nào.
 
 ---
 

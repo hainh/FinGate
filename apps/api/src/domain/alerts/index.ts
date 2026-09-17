@@ -184,7 +184,7 @@ export async function evaluateAlerts(): Promise<Record<string, unknown>> {
   if (on('missing_evidence')) {
     const rows = await Models.Document.find({
       'evidence.missing.0': { $exists: true },
-      status: { $in: ['draft', 'pending.kt', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.chairman'] },
+      status: { $in: ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.chairman'] },
     } as never)
       .select({ code: 1, company_id: 1 })
       .limit(200)

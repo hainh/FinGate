@@ -1,10 +1,10 @@
 /**
  * Máy trạng thái hồ sơ — CHỖ DUY NHẤT được đổi `status` (K-16, ADR-11).
  *
- *   draft → pending.kt → pending.cv → pending.ktt → pending.pgd → pending.gd → pending.chairman
- *                        ↓ changes_requested (resubmit → node đầu)
- *                        ↓ rejected · cancelled · expired
- *                                              payment_queued → paid
+ *   draft → pending.ktt → pending.pgd → pending.gd → pending.chairman
+ *             ↓ changes_requested (resubmit → node đầu)
+ *             ↓ rejected · cancelled · expired
+ *                                   payment_queued → paid
  *
  * Fast-track (blueprint §IV): mọi cấp trong quy trình đều thấy và duyệt ngay được;
  * thứ tự chỉ xác định cấp CAO NHẤT BẮT BUỘC. Status luôn phản ánh cấp thấp nhất chưa duyệt.
@@ -14,9 +14,7 @@ import type { Action, DocKind, Role, StatusKey } from '@fingate/shared';
 
 /** đồ thị chuyển trạng thái — test mọi cạnh (arch §15 unit). */
 export const TRANSITIONS: Record<StatusKey, Partial<Record<Action, StatusKey>>> = {
-  draft: { submit: 'pending.kt', cancel: 'cancelled' },
-  'pending.kt': { check: 'pending.ktt', reject: 'rejected', request_changes: 'changes_requested', cancel: 'cancelled' },
-  'pending.cv': { check: 'pending.ktt', reject: 'rejected', request_changes: 'changes_requested', cancel: 'cancelled' },
+  draft: { submit: 'pending.ktt', cancel: 'cancelled' },
   'pending.ktt': {
     approve: 'pending.pgd',
     approve_with_reason: 'pending.pgd',
@@ -44,17 +42,17 @@ export const TRANSITIONS: Record<StatusKey, Partial<Record<Action, StatusKey>>> 
   approved: { queue_payment: 'processing', cancel: 'cancelled' },
   processing: { pay: 'paid', request_changes: 'changes_requested' },
   paid: {},
-  rejected: { submit: 'pending.kt' },
-  changes_requested: { submit: 'pending.kt', cancel: 'cancelled' },
+  rejected: { submit: 'pending.ktt' },
+  changes_requested: { submit: 'pending.ktt', cancel: 'cancelled' },
   cancelled: {},
-  expired: { submit: 'pending.kt' },
+  expired: { submit: 'pending.ktt' },
   overdue: {},
 };
 
 /** loại hồ sơ → node đầu sau khi submit */
 export const FIRST_NODE: Record<DocKind, StatusKey> = {
-  spend: 'pending.kt',
-  income: 'pending.kt',
+  spend: 'pending.ktt',
+  income: 'pending.ktt',
   rollover: 'pending.ktt',
   internal: 'pending.ktt',
 };
@@ -66,8 +64,6 @@ export const EDITABLE_STATUSES: StatusKey[] = ['draft', 'changes_requested'];
 
 /** trạng thái đã "khóa" với người tạo — chỉ cấp duyệt/có quyền override mới xử lý được */
 export const LOCKED_STATUSES: StatusKey[] = [
-  'pending.kt',
-  'pending.cv',
   'pending.ktt',
   'pending.pgd',
   'pending.gd',
@@ -87,17 +83,15 @@ export function canTransition(from: StatusKey, action: Action): StatusKey | null
  * Trạng thái "đang ở bàn ai" = cấp THẤP NHẤT chưa duyệt (blueprint §IV).
  * `steps` đã snapshot theo matrix; mỗi step có `state` waiting|current|done|skipped|rejected.
  */
-export function recalcStatusFromSteps(steps: StepState[], kind: DocKind, allApprovedStatus: StatusKey = 'approved'): StatusKey {
+export function recalcStatusFromSteps(steps: StepState[], allApprovedStatus: StatusKey = 'approved'): StatusKey {
   const lowest = steps.filter((s) => s.state === 'current' || s.state === 'waiting').sort((a, b) => a.order - b.order)[0];
   if (!lowest) return allApprovedStatus;
-  return statusForStep(lowest.role, kind);
+  return statusForStep(lowest.role);
 }
 
 /** role duyệt → status key hiển thị (DS §3.1). */
-export function statusForStep(role: Role, kind: DocKind = 'spend'): StatusKey {
+export function statusForStep(role: Role): StatusKey {
   switch (role) {
-    case 'accountant':
-      return kind === 'rollover' || kind === 'internal' ? 'pending.ktt' : 'pending.kt';
     case 'chief_accountant':
       return 'pending.ktt';
     case 'deputy_director':

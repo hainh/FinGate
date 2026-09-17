@@ -3,8 +3,8 @@
  * resolve lúc `submit` và SNAPSHOT vào hồ sơ → đổi cấu hình ADM-04 không làm lệch
  * hồ sơ đang đi dở (§19.5-7).
  *
- * `KT` trong blueprint §XX = 2 bước luôn có ở mọi quy trình (Nhân viên kế toán lập →
- * Chuyên viên kế toán kiểm tra); matrix chỉ định nghĩa từ cấp duyệt trở lên.
+ * `KT` trong blueprint §XX = bước đầu luôn có ở mọi quy trình (Nhân viên kế toán lập →
+ * Kế toán trưởng kiểm tra); matrix định nghĩa từ cấp duyệt trở lên.
  */
 
 import {
@@ -54,21 +54,19 @@ function big(v: unknown): bigint {
 export const DEFAULT_STEPS: Record<DocKind, { amount: string; steps: MatrixStep[]; label: string }> = {
   spend: {
     amount: '0',
-    label: 'Mặc định: KT → KTT → PGĐ → GĐ',
+    label: 'Mặc định: KTT → PGĐ → GĐ',
     steps: [
-      { order: 1, role: 'accountant', sla_hours: 24, mandatory: true },
-      { order: 2, role: 'chief_accountant', sla_hours: 24, mandatory: true },
-      { order: 3, role: 'deputy_director', sla_hours: 24, mandatory: true },
-      { order: 4, role: 'director', sla_hours: 48, mandatory: true },
+      { order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true },
+      { order: 2, role: 'deputy_director', sla_hours: 24, mandatory: true },
+      { order: 3, role: 'director', sla_hours: 48, mandatory: true },
     ],
   },
   income: {
     amount: '0',
-    label: 'Mặc định: KT → KTT → GĐ',
+    label: 'Mặc định: KTT → GĐ',
     steps: [
-      { order: 1, role: 'accountant', sla_hours: 24, mandatory: true },
-      { order: 2, role: 'chief_accountant', sla_hours: 24, mandatory: true },
-      { order: 3, role: 'director', sla_hours: 48, mandatory: true },
+      { order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true },
+      { order: 2, role: 'director', sla_hours: 48, mandatory: true },
     ],
   },
   rollover: {

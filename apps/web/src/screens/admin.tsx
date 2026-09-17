@@ -1303,8 +1303,8 @@ function MatrixModal({
       editing
         ? editing.steps.map((s) => ({ role: s.role, sla_hours: s.sla_hours }))
         : [
-            { role: 'accountant', sla_hours: 24 },
             { role: 'chief_accountant', sla_hours: 24 },
+            { role: 'deputy_director', sla_hours: 24 },
           ],
     );
     setError(null);

@@ -58,28 +58,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'forecast:read',
     'report:view',
   ],
-  // Chuyên viên kế toán: kiểm tra hồ sơ, đối chiếu, đề xuất → gửi KTT.
-  accountant: [
-    'doc:read',
-    'doc:create',
-    'doc:update',
-    'doc:submit',
-    'doc:delete',
-    'approval:act',
-    'payment:mark',
-    'bank:read',
-    'bank:write',
-    'bank:transfer',
-    'loan:read',
-    'rollover:act',
-    'debt:read',
-    'debt:write',
-    'budget:read',
-    'budget:write',
-    'forecast:read',
-    'report:view',
-    'report:export',
-  ],
+  // Kế toán trưởng: kiểm tra hồ sơ, đối chiếu, duyệt kế toán → gửi cấp trên.
   chief_accountant: [
     'doc:read',
     'doc:create',
@@ -185,7 +164,6 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
 
 export const ROLE_LABEL: Record<Role, string> = {
   staff: 'Nhân viên kế toán',
-  accountant: 'Chuyên viên kế toán',
   chief_accountant: 'Kế toán trưởng',
   deputy_director: 'Phó Giám đốc phụ trách',
   director: 'Giám đốc / Tổng Giám đốc',
@@ -274,7 +252,6 @@ export const MFA_REQUIRED_ROLES: readonly Role[] = [
 
 /** Vai trò được duyệt hồ sơ (có mặt trong Approval Matrix). */
 export const APPROVER_ROLES: readonly Role[] = [
-  'accountant',
   'chief_accountant',
   'deputy_director',
   'director',
@@ -310,7 +287,6 @@ export function isSensitiveAction(p: Permission): boolean {
  */
 export const DEFAULT_AMOUNT_LIMIT_MINOR: Record<Role, string> = {
   staff: '0',
-  accountant: '50000000000', // bước kiểm tra, không chặn theo tiền
   chief_accountant: '50000000000',
   deputy_director: '50000000000',
   director: '50000000000',

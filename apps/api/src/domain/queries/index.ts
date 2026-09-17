@@ -36,8 +36,6 @@ export interface WireAmount {
 }
 
 export const DECISION_STATUSES = [
-  'pending.kt',
-  'pending.cv',
   'pending.ktt',
   'pending.pgd',
   'pending.gd',

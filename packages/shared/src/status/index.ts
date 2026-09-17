@@ -15,12 +15,11 @@ export type Tone = 'neutral' | 'info' | 'success' | 'warning' | 'attention' | 'd
 
 export const TONES = ['neutral', 'info', 'success', 'warning', 'attention', 'danger'] as const;
 
-/** Vai trò (blueprint §III). `KT`/`CV` là 2 bước luôn có ở mọi quy trình (blueprint §XX). */
-export type Role = 'staff' | 'accountant' | 'chief_accountant' | 'deputy_director' | 'director' | 'chairman' | 'admin';
+/** Vai trò (blueprint §III). `KTT` là bước kiểm tra đầu tiên ở mọi quy trình (blueprint §XX). */
+export type Role = 'staff' | 'chief_accountant' | 'deputy_director' | 'director' | 'chairman' | 'admin';
 
 export const ROLES: readonly Role[] = [
   'staff',
-  'accountant',
   'chief_accountant',
   'deputy_director',
   'director',
@@ -28,9 +27,8 @@ export const ROLES: readonly Role[] = [
   'admin',
 ] as const;
 
-/** Cấp duyệt theo thứ tự quy trình (bước KT/CV kiểm tra nằm đầu, xem matrix resolver). */
+/** Cấp duyệt theo thứ tự quy trình (bước KTT kiểm tra nằm đầu, xem matrix resolver). */
 export const APPROVAL_ORDER: readonly Role[] = [
-  'accountant',
   'chief_accountant',
   'deputy_director',
   'director',
@@ -39,8 +37,6 @@ export const APPROVAL_ORDER: readonly Role[] = [
 
 export type StatusKey =
   | 'draft'
-  | 'pending.kt'
-  | 'pending.cv'
   | 'pending.ktt'
   | 'pending.pgd'
   | 'pending.gd'
@@ -72,24 +68,6 @@ export interface StatusDef {
 /** exact literal theo DS §3.1 + workflow (architecture §9.1). */
 export const STATUS_REGISTRY: Record<StatusKey, StatusDef> = {
   draft: { key: 'draft', labelVi: 'Nháp', glyph: '○', tone: 'neutral', terminal: false },
-  'pending.kt': {
-    key: 'pending.kt',
-    labelVi: 'Chờ kế toán kiểm tra',
-    glyph: '◍',
-    tone: 'info',
-    ownerRole: 'accountant',
-    terminal: false,
-    pending: true,
-  },
-  'pending.cv': {
-    key: 'pending.cv',
-    labelVi: 'Chờ chuyên viên kiểm tra',
-    glyph: '◍',
-    tone: 'info',
-    ownerRole: 'accountant',
-    terminal: false,
-    pending: true,
-  },
   'pending.ktt': {
     key: 'pending.ktt',
     labelVi: 'Chờ Kế toán trưởng',
@@ -132,7 +110,7 @@ export const STATUS_REGISTRY: Record<StatusKey, StatusDef> = {
     labelVi: 'Đang thanh toán',
     glyph: '↻',
     tone: 'info',
-    ownerRole: 'accountant',
+    ownerRole: 'staff',
     terminal: false,
     pending: true,
   },
@@ -190,8 +168,6 @@ export function statusChipLabel(key: string, opts: { withOwner?: boolean; waitin
 /** pending.* theo cấp duyệt → status key (workflow §9.1). */
 export function pendingStatusForRole(role: Role): StatusKey | undefined {
   switch (role) {
-    case 'accountant':
-      return 'pending.ktt';
     case 'chief_accountant':
       return 'pending.ktt';
     case 'deputy_director':

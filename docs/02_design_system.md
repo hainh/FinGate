@@ -360,7 +360,7 @@ Không animate: số tiền, thứ tự dòng bảng, trạng thái approval (ch
 --fg-bp-2xl   ≥1920     phòng điều hành: cho phép dark mode + font +1 nấc
 ```
 
-`--fg-density`: `comfortable` (mặc định, row 44px) | `compact` (row 34px, font 13). Density lưu theo người dùng, ưu tiên `compact` cho Kế toán/Chuyên viên (nhập liệu nhiều), `comfortable` cho Giám đốc.
+`--fg-density`: `comfortable` (mặc định, row 44px) | `compact` (row 34px, font 13). Density lưu theo người dùng, ưu tiên `compact` cho Kế toán (nhập liệu nhiều), `comfortable` cho Giám đốc.
 
 ---
 
@@ -377,7 +377,6 @@ Không animate: số tiền, thứ tự dòng bảng, trạng thái approval (ch
 | Key | Nhãn vi | Icon | Status token | Dùng |
 | --- | --- | --- | --- | --- |
 | `draft` | Nháp | `○` | neutral | chưa gửi |
-| `pending.kt` | Chờ kế toán kiểm tra | `◍` | info | đang ở bàn KT |
 | `pending.ktt` | Chờ Kế toán trưởng | `◍` | info | |
 | `pending.pgd` | Chờ Phó Giám đốc | `◍` | warning | đang chờ cấp phê duyệt |
 | `pending.gd` | Chờ Giám đốc | `◍` | warning | |
@@ -392,7 +391,7 @@ Không animate: số tiền, thứ tự dòng bảng, trạng thái approval (ch
 Cấu trúc dữ liệu:
 
 ```ts
-type StatusKey = 'draft'|'pending.kt'|'pending.ktt'|'pending.pgd'|'pending.gd'|
+type StatusKey = 'draft'|'pending.ktt'|'pending.pgd'|'pending.gd'|
                  'approved'|'processing'|'paid'|'rejected'|'changes_requested'|'cancelled'|'overdue';
 interface StatusDef { key: StatusKey; labelVi: string; glyph: string; tone: Tone; ownerRole?: Role; terminal: boolean }
 ```

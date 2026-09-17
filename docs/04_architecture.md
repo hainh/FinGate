@@ -471,12 +471,12 @@ mongoose.connect(env.MONGODB_URI, {
 ### 9.1 State machine (1 chỗ duy nhất: `domain/workflow`)
 
 ```text
-draft → pending.kt → pending.cv → pending.ktt → pending.pgd → pending.gd → pending.chairman
-                     ↓ changes_requested (resubmit → quay lại node đầu)
-                     ↓ rejected · cancelled · expired
-                                              payment_queued → paid
+draft → pending.ktt → pending.pgd → pending.gd → pending.chairman
+             ↓ changes_requested (resubmit → quay lại node đầu)
+             ↓ rejected · cancelled · expired
+                                      payment_queued → paid
 ```
-12 status key **đúng literal** DS §3.1, đọc từ `shared/status/registry` (UI + API + Excel + email cùng nguồn).
+11 status key **đúng literal** DS §3.1, đọc từ `shared/status/registry` (UI + API + Excel + email cùng nguồn).
 `POST /api/v1/documents/{id}/transition { action, opinion?, otp?, reason?, if_match, request_id }`
 
 `transition()` — thứ tự BẮT BUỘC:
