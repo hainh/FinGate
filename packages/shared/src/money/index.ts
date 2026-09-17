@@ -357,6 +357,19 @@ export function moneyInputValue(m: Money): string {
   return nf0.format(m.minor);
 }
 
+/**
+ * Chuỗi hiển thị trong ô nhập tiền NGAY KHI GÕ: nhóm nghìn cho chuỗi chỉ gồm chữ số
+ * và dấu ngăn cách (`2500000000` → `2.500.000.000`, nối tiếp `2.500` + `0` → `25.000`).
+ * Giữ nguyên văn khi có dấu thập phân `,` hoặc đơn vị (`2,5 tỷ`, `850 tr`) — không đổi nghĩa.
+ */
+export function formatMoneyTyping(text: string): string {
+  const t = text.replace(/\u2212/g, '-').trim();
+  if (!/\d/.test(t) || /[^\d.\s-]/.test(t)) return text;
+  const digits = t.replace(/\D/g, '');
+  if (digits.length > 30) return text;
+  return `${t.startsWith('-') ? '-' : ''}${nf0.format(BigInt(digits))}`;
+}
+
 /* ------------------------------------------------------------------ *
  * Số · phần trăm · lãi suất (DS §4.3)
  * ------------------------------------------------------------------ */

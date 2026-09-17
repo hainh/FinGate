@@ -6,6 +6,7 @@ import {
   divRound,
   formatMoney,
   formatMoneyOrMissing,
+  formatMoneyTyping,
   MISSING,
   money,
   moneyAria,
@@ -134,6 +135,34 @@ describe('parseMoneyInput — gõ tay & paste Excel (DS §7.6)', () => {
 
   it('báo lỗi rõ ràng khi không hiểu', () => {
     expect(() => parseMoneyInput('abc')).toThrow(TypeError);
+  });
+});
+
+describe('formatMoneyTyping — nhóm nghìn ngay khi gõ (cho nhập số dài)', () => {
+  it('nhóm chữ số thành từng cụm 3', () => {
+    expect(formatMoneyTyping('2500')).toBe('2.500');
+    expect(formatMoneyTyping('25000')).toBe('25.000');
+    expect(formatMoneyTyping('2500000000')).toBe('2.500.000.000');
+    expect(formatMoneyTyping('2.5000')).toBe('25.000'); // gõ nối tiếp sau khi đã nhóm
+  });
+
+  it('giữ nguyên khi có dấu phẩy thập phân hoặc đơn vị', () => {
+    expect(formatMoneyTyping('2,5')).toBe('2,5');
+    expect(formatMoneyTyping('2,5 tỷ')).toBe('2,5 tỷ');
+    expect(formatMoneyTyping('850 tr')).toBe('850 tr');
+  });
+
+  it('roundtrip: gõ dài → nhóm → parse không mất giá trị', () => {
+    for (const v of ['2500000000', '12345678901', '999999999999999999999']) {
+      const grouped = formatMoneyTyping(v);
+      expect(parseMoneyInput(grouped).minor).toBe(BigInt(v));
+    }
+  });
+
+  it('chuỗi rỗng / không có chữ số trả nguyên văn', () => {
+    expect(formatMoneyTyping('')).toBe('');
+    expect(formatMoneyTyping('  ')).toBe('  ');
+    expect(formatMoneyTyping('-')).toBe('-');
   });
 });
 

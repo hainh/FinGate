@@ -6,12 +6,13 @@
  */
 
 import type { CSSProperties, ReactNode } from 'react';
-import { useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Alert, Button, Input, InputNumber, Select, Tooltip, Typography } from 'antd';
-import type { ButtonProps } from 'antd';
+import type { ButtonProps, InputRef } from 'antd';
 import {
   STATUS_REGISTRY,
   formatMoney,
+  formatMoneyTyping,
   isStatusKey,
   money,
   moneyInputValue,
@@ -306,26 +307,64 @@ export function FgMoneyInput({
   disabled?: boolean;
   status?: 'error' | undefined;
 }): ReactNode {
-  const initial = value ? moneyInputValue(value) : '';
-  const [text, setText] = useState(initial);
-  const lastInitial = useRef(initial);
-  // đồng bộ khi value đổi từ ngoài (reset form) — chỉ khi không phải do chính ta gõ
-  if (lastInitial.current !== initial) {
-    lastInitial.current = initial;
-    setText(initial);
-  }
+  const external = value ? moneyInputValue(value) : '';
+  const [text, setText] = useState(external);
+  const editing = useRef(false);
+  const ref = useRef<InputRef>(null);
+  const caret = useRef<{ digits: number } | null>(null);
+
+  // value đổi từ ngoài (reset form, prefill) → đồng bộ, trừ khi người dùng đang gõ dở
+  useEffect(() => {
+    if (!editing.current) setText(external);
+  }, [external]);
+
+  // giữ con trỏ theo số chữ số đã gõ khi nhóm nghìn làm chuỗi dài/ngắn đi
+  useLayoutEffect(() => {
+    const pending = caret.current;
+    const node = ref.current?.input;
+    if (!pending || !node) return;
+    caret.current = null;
+    const display = node.value;
+    const start = display.startsWith('-') ? 1 : 0;
+    let seen = 0;
+    let pos = display.length;
+    if (pending.digits > 0) {
+      for (let i = start; i < display.length; i++) {
+        const c = display.charCodeAt(i);
+        if (c >= 48 && c <= 57 && ++seen === pending.digits) {
+          pos = i + 1;
+          break;
+        }
+      }
+    } else {
+      pos = start;
+    }
+    node.setSelectionRange(pos, pos);
+  }, [text]);
+
   return (
     <Input
+      ref={ref}
       inputMode="numeric"
       aria-label={ariaLabel ?? 'Số tiền'}
       placeholder={placeholder ?? '0 ₫ · hoặc 2,5 tỷ'}
       value={text}
       disabled={disabled}
       status={status}
+      onFocus={() => {
+        editing.current = true;
+      }}
+      onBlur={() => {
+        editing.current = false;
+        setText(external);
+      }}
       onChange={(e) => {
-        const t = e.target.value;
-        setText(t);
-        const trimmed = t.trim();
+        const raw = e.target.value;
+        const before = raw.slice(0, e.target.selectionStart ?? raw.length).replace(/\D/g, '').length;
+        const display = formatMoneyTyping(raw);
+        caret.current = { digits: before };
+        setText(display);
+        const trimmed = display.trim();
         if (!trimmed) onChange?.(null);
         else {
           try {
