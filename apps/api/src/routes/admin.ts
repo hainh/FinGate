@@ -355,16 +355,21 @@ export function adminRoutes(app: FastifyInstance): void {
           { _id: id },
           {
             $set: {
-              'invite.mode': isReset ? 'reset' : 'activate',
-              'invite.seed': seed,
-              'invite.expires_at': expires,
-              'invite.revoked_at': null,
-              'invite.sent_at': new Date(),
-              'invite.company_id': companyId,
-              'invite.role': role,
-              'invite.department_id': departmentId,
-              'invite.invited_by': invitedBy,
-              'invite.regenerate_count': regenerateCount,
+              // Ghi CẢ object: tài khoản bootstrap/đã kích hoạt có `invite: null`, set từng
+              // path `invite.x` sẽ lỗi MongoServerError code 28 (không tạo field dưới null).
+              invite: {
+                ...inv,
+                mode: isReset ? 'reset' : 'activate',
+                seed,
+                expires_at: expires,
+                revoked_at: null,
+                sent_at: new Date(),
+                company_id: companyId,
+                role,
+                department_id: departmentId,
+                invited_by: invitedBy,
+                regenerate_count: regenerateCount,
+              },
               updated_at: new Date(),
             },
           },
@@ -490,12 +495,16 @@ export function adminRoutes(app: FastifyInstance): void {
           { _id: id },
           {
             $set: {
-              'invite.seed': seed,
-              'invite.expires_at': expires,
-              'invite.revoked_at': null,
-              'invite.sent_at': new Date(),
-              'invite.send_count': Number(inv.send_count ?? 0) + 1,
-              'invite.regenerate_count': Number(inv.regenerate_count ?? 0) + 1,
+              // cùng lý do route invite-link: `invite` có thể đang null → ghi cả object.
+              invite: {
+                ...inv,
+                seed,
+                expires_at: expires,
+                revoked_at: null,
+                sent_at: new Date(),
+                send_count: Number(inv.send_count ?? 0) + 1,
+                regenerate_count: Number(inv.regenerate_count ?? 0) + 1,
+              },
             },
           },
         ).exec();
