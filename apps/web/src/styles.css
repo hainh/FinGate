@@ -106,7 +106,7 @@ body {
 }
 
 .fg-rail a.fg-rail-item:hover {
-  background: var(--fg-bg-hover);
+  background: var(--fg-bg-rail-hover);
   color: var(--fg-fix-white);
 }
 

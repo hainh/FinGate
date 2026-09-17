@@ -146,6 +146,7 @@ Tên biến: `--fg-{layer}-{group}-{name}-{modifier}` (`fg` = FinGate).
 --fg-bg-hover         #F7F8FA   hover row, hover nav
 --fg-bg-disabled      #F2F4F7   input/button disabled
 --fg-bg-rail          #262B34   sidebar (nav rail tối, tương phản với nội dung)
+--fg-bg-rail-hover    #3D4451   hover nav item trên rail tối (không dùng bg-hover)
 ```
 
 ### Text
@@ -211,6 +212,7 @@ Dark mode là **first-class**: bật từ `data-fg-theme="dark"`, không phải 
 | `bg.subtle` | `#F2F4F7` | `#12161C` |
 | `bg.elevated` | `#FFFFFF` | `#1E232B` |
 | `bg.rail` | `#262B34` | `#0B0E12` |
+| `bg.railHover` | `#3D4451` | `#1E232B` |
 | `text.primary` | `#171A1F` | `#E6E9EF` |
 | `text.secondary` | `#3D4451` | `#C3CAD4` |
 | `text.muted` | `#5D6673` | `#9AA4B2` |
@@ -948,7 +950,7 @@ Mỗi PR UI phải kèm checklist: keyboard path, contrast đã đo, focus order
 ```css
 :root, [data-fg-theme="light"] {
   --fg-bg-page:#F7F8FA; --fg-bg-surface:#FFFFFF; --fg-bg-subtle:#F2F4F7; --fg-bg-elevated:#FFFFFF;
-  --fg-bg-selected:#EEF1FE; --fg-bg-hover:#F7F8FA; --fg-bg-rail:#262B34;
+  --fg-bg-selected:#EEF1FE; --fg-bg-hover:#F7F8FA; --fg-bg-rail:#262B34; --fg-bg-rail-hover:#3D4451;
   --fg-text-primary:#171A1F; --fg-text-secondary:#3D4451; --fg-text-muted:#5D6673;
   --fg-text-tertiary:#7C8798; --fg-text-disabled:#98A2B3; --fg-text-on-accent:#FFFFFF; --fg-text-link:#3445C4;
   --fg-border-subtle:#EAECF0; --fg-border-default:#E1E5EB; --fg-border-strong:#D6DBE3;

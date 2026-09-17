@@ -77,6 +77,7 @@
   --fg-bg-hover: #f7f8fa;
   --fg-bg-disabled: #f2f4f7;
   --fg-bg-rail: #262b34;
+  --fg-bg-rail-hover: #3d4451;
 
   /* ---------- SEMANTIC: text ---------- */
   --fg-text-primary: #171a1f;
@@ -263,6 +264,7 @@
   --fg-bg-hover: #12161c;
   --fg-bg-disabled: #12161c;
   --fg-bg-rail: #0b0e12;
+  --fg-bg-rail-hover: #1e232b;
 
   --fg-text-primary: #e6e9ef;
   --fg-text-secondary: #c3cad4;
