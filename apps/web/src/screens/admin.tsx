@@ -65,7 +65,7 @@ const VALID_DAY_OPTIONS = [
 ];
 
 export function PersonnelScreen(): ReactNode {
-  const { can } = useAuth();
+  const { can, me } = useAuth();
   const query = usePersonnel(1);
   const [busy, setBusy] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -153,7 +153,7 @@ export function PersonnelScreen(): ReactNode {
                           {r.status === 'active' ? 'Link đổi mật khẩu' : 'Link kích hoạt'}
                         </FgButton>
                       ) : null}
-                      {can('hr:disable') && r.status === 'active' ? (
+                      {can('hr:disable') && r.status === 'active' && r.user_id !== me?.user_id ? (
                         <FgButton
                           size="small"
                           variant="danger"
