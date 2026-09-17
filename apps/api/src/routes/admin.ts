@@ -868,7 +868,6 @@ export function adminRoutes(app: FastifyInstance): void {
               working_calendar: (c as { working_calendar?: unknown }).working_calendar ?? null,
             })),
           },
-          { maxAge: 60 },
         );
       },
     }),
@@ -933,7 +932,7 @@ export function adminRoutes(app: FastifyInstance): void {
         }
         const filter = q.company_id ? { company_id: q.company_id } : withScopeFilter(scope);
         const rows = await Models.Department.find(filter as never).sort({ name: 1 }).lean();
-        return ok(reply, { items: rows.map((d) => ({ _id: String(d._id), company_id: String(d.company_id), name: String(d.name), code: (d as { code?: string | null }).code ?? null, parent_id: (d as { parent_id?: unknown }).parent_id ? String((d as { parent_id: unknown }).parent_id) : null, active: Boolean((d as { active?: boolean }).active) })) }, { maxAge: 60 });
+        return ok(reply, { items: rows.map((d) => ({ _id: String(d._id), company_id: String(d.company_id), name: String(d.name), code: (d as { code?: string | null }).code ?? null, parent_id: (d as { parent_id?: unknown }).parent_id ? String((d as { parent_id: unknown }).parent_id) : null, active: Boolean((d as { active?: boolean }).active) })) });
       },
     }),
   );
@@ -1081,7 +1080,6 @@ export function adminRoutes(app: FastifyInstance): void {
               usage_count: umap.get(String(c._id)) ?? 0,
             })),
           },
-          { maxAge: 60 },
         );
       },
     }),
