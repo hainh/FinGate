@@ -15,8 +15,11 @@ export default defineConfig({
     },
   },
   // Khai báo dep sớm để Vite không re-optimize giữa session (tách bản react-router khi lazy).
+  // @fingate/shared KHÔNG pre-bundle: là workspace ESM được build lại liên tục — để Vite
+  // phục vụ trực tiếp, tránh cache deps cũ (lỗi "does not provide an export named ...").
   optimizeDeps: {
-    include: ['react', 'react-dom', 'react-router', 'antd', '@ant-design/icons', 'dayjs', '@fingate/shared'],
+    include: ['react', 'react-dom', 'react-router', 'antd', '@ant-design/icons', 'dayjs'],
+    exclude: ['@fingate/shared'],
   },
   build: {
     sourcemap: false,
