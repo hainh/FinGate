@@ -321,7 +321,10 @@ Permission  (registry): doc:read doc:create doc:submit approval:act approval:ove
 ### 7.2 Đăng nhập & 2FA (AUTH-01/02/06)
 
 - Mật khẩu: `crypto.scrypt(pw, salt, 64, { N: 2**15, r: 8, p: 1 })` (built-in, không native dep cho build Render), so sánh `timingSafeEqual`.
-- Session: cookie `fgs` = **random id**, doc trong `sessions` (`HttpOnly; Secure; SameSite=Lax`, Path=/). Cache in-memory `Map` TTL 60s. TTL idle **15 phút** cho vai trò duyệt, absolute **8 giờ**; heartbeat 5 phút; quá hạn → `AUTH-06` giữ draft.
+- Session: cookie `fgs` = **random id**, doc trong `sessions` (`HttpOnly; Secure; SameSite=Lax`, Path=/). Cache in-memory `Map` TTL 60s.
+- **Yêu cầu phiên (ADR-19): giữ đăng nhập LÂU NHẤT CÓ THỂ.** Mặc định mọi phiên là loại "ghi nhớ" (`loginBody.remember = true`) với hạn **cuộn 400 ngày** (`SESSION_REMEMBER_DAYS` — 400 là trần `Max-Age` trình duyệt, không đặt dài hơn được). Mỗi lần có hoạt động, hạn được nạp lại thành 400 ngày (write tối đa 1 lần/ngày/phiên) và server phát lại `Set-Cookie` để Max-Age đếm lại → **người dùng hoạt động định kỳ không bao giờ phải đăng nhập lại**. Bỏ chọn ở màn `AUTH-01` → quay về chế độ nghiêm: idle **15 phút**, absolute **8 giờ**, heartbeat 5 phút, quá hạn → `AUTH-06` giữ draft.
+- `GET /me/session` trả `persistent` + `idle_limit_s` (`null` khi persistent) + `absolute_expires_at` để client không hiện đồng hồ đếm ngược sai.
+- **Cái giá phải trả (đã chấp nhận — ADR-19):** máy tính bỏ trống trong ca làm việc còn phiên sống → người khác tạo được phiếu nháp và xem được số liệu. Lớp chặn còn lại là **step-up verify (ADR-14)** — `approve` / `reject` / `pay` / `report:export` / `hr:disable` / đổi cấu hình đều phải nhập lại mật khẩu hoặc OTP **kể cả khi đang đăng nhập**; cùng với CSP `frame-ancestors 'none'`, `SameSite=Lax`, lockout đăng nhập và ADM-13 (thu hồi phiên từ xa). Khi nhân sự nghỉ: ADM-01 disable → `revokeAllUserSessions` thu hồi mọi phiên remember ngay.
 - **Thu hồi tức thì:** `disabled` / đổi vai trò / đổi mật khẩu → `sessions.deleteMany({user_id})` + xoá cache → request kế tiếp 401. (Lý do không JWT.)
 - TOTP `otp` 13.5.0 (RFC 6238, 6 số/30s), secret mã hoá AES-256-GCM bằng `FIELD_KEY`; **bắt buộc** với KTT/PGĐ/GĐ/Chairman/Admin; 10 recovery codes dùng 1 lần.
 - **Hành động nhạy cảm** (`approval:act`, `report:export`, `hr:disable`, internal transfer, đổi `min_balance`): dialog yêu cầu **mật khẩu hoặc OTP**, server verify lại trước khi CAS — không step-up token riêng (ADR-14).
@@ -542,7 +545,7 @@ GET  /api/v1/openapi.json
 | 2FA quản trị | TOTP bắt buộc + recovery codes + re-verify OTP/mật khẩu cho hành động nhạy cảm (§7.2) |
 | Audit | `history[]` nhúng + `audit_log` insert-only; DB user Atlas chỉ có CRUD nghiệp vụ, **không** drop collection; app không có API sửa audit |
 | Không cho tải sai quyền | entitlement per cột; `report:export` check server; presigned GET 60s **cấp sau khi** check quyền từng lần; không có bucket public |
-| Phiên | §7.2, thu hồi tức thì, idle 15', absolute 8h |
+| Phiên | **ADR-19**: mặc định ghi nhớ, hạn cuộn 400 ngày (trần trình duyệt) — hoạt động định kỳ = không hết phiên; bỏ chọn → idle 15', absolute 8h. Thu hồi tức thì khi disable / đổi vai trò / đổi mật khẩu / ADM-13 |
 | Mã hoá | TLS in-transit; at-rest do Atlas/R2; app-level AES-256-GCM cho `totp_secret`; mask số TK NH/MST khi không có `bank:read`/`doc:read` |
 | Anti-XSS/CSRF/injection | CSP `default-src 'self'; frame-ancestors 'none'` (CORS không cần vì same-origin) · `SameSite=Lax` + check `Origin` cho mutation · zod `.strict()` · render text (không HTML) · ODM chặn injection |
 | Rate limit | login/export/invite/tasks; `@fastify/rate-limit` in-memory (1 instance) |
@@ -737,6 +740,7 @@ Team: **1 tech lead + 1 BE + 1 FE + 0.5 người vận hành/deploy + 1 BA kế 
 | ADR-16 | PDF = browser print; Excel = exceljs stream | render service (Playwright) không sống nổi với 0.1 CPU / 512 MB |
 | ADR-17 | pnpm workspace, `pnpm -r`, không Turbo/Nx | 2 app + 1 package thì tooling thêm là nợ |
 | ADR-18 | `render.yaml` + `deploy/compose.yml` = 2 hồ sơ khai báo duy nhất | không Terraform/Helm |
+| ADR-19 | **Phiên mặc định "vĩnh viễn"**: ghi nhớ BẬT, hạn cuộn 400 ngày, không idle timeout | công cụ nội bộ dùng hằng ngày, người dùng chỉ là nhân sự được mời (ADR-15, không self-signup); rủi ro tiền thật do **step-up ADR-14** chặn tại `approve`/`pay`, không do TTL của cookie; 400 ngày là trần `Max-Age` của trình duyệt nên "dài nhất" = cuộn, không phải trần lớn hơn. Thu hồi vẫn tức thì qua ADM-13/ADM-01 |
 
 ---
 

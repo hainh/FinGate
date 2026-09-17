@@ -43,9 +43,17 @@ const envSchema = z.object({
   /** bỏ qua mail ở dev/test: log ra console thay vì gửi */
   MAIL_MODE: z.enum(['smtp', 'log', 'off']).default('log'),
 
-  /** phiên: idle 15' cho vai trò duyệt, absolute 8h (arch §7.2) */
+  /** phiên thường (không chọn "ghi nhớ"): idle 15', absolute 8h (arch §7.2) */
   SESSION_IDLE_MINUTES: z.coerce.number().int().default(15),
   SESSION_ABSOLUTE_HOURS: z.coerce.number().int().default(8),
+  /**
+   * Phiên "ghi nhớ đăng nhập" (mặc định BẬT — yêu cầu: giữ đăng nhập lâu nhất có thể).
+   * Đây là hạn CUỘN: mỗi lần có hoạt động (tối đa 1 write/ngày/phiên) hạn được nạp lại,
+   * nên người dùng hoạt động định kỳ không bao giờ phải đăng nhập lại.
+   * 400 = trần Max-Age mà trình duyệt cho phép (Chrome/Firefox/Edge cắt xuống 400),
+   * đặt lớn hơn cũng vô nghĩa. Giảm xuống nếu muốn phiên chết hẳn sau N ngày bỏ không.
+   */
+  SESSION_REMEMBER_DAYS: z.coerce.number().int().min(1).max(400).default(400),
   LOGIN_MAX_ATTEMPTS: z.coerce.number().int().default(8),
   LOGIN_LOCK_MINUTES: z.coerce.number().int().default(15),
 

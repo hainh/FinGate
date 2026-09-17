@@ -94,9 +94,38 @@ export interface SessionData {
   company_scope: string[];
   active_company_id: string | null;
   state: 'pending_2fa' | 'active';
-  /** epoch ms — hạn tuyệt đối của phiên */
+  /** true = "ghi nhớ đăng nhập": phiên cuộn (rolling), không trôi theo idle */
+  persistent: boolean;
+  /** epoch ms — mốc hết hạn của phiên (với persistent: mốc CUỘN, được đẩy lại mỗi lần gia hạn) */
   absolute_expires_at: number;
+  /**
+   * true khi lần đọc này vừa gia hạn phiên persistent → hook phát lại `Set-Cookie`
+   * để trình duyệt đếm lại Max-Age (không có bước này thì cookie chết đúng 400 ngày
+   * sau lần đăng nhập, bất kể DB còn hạn).
+   */
+  renewed: boolean;
 }
+
+/**
+ * Hạn của một phiên loại "ghi nhớ", tính bằng ms. 400 ngày là trần Max-Age mà
+ * trình duyệt chấp nhận — đặt lớn hơn cũng bị cắt, nên muốn "lâu nhất có thể"
+ * phải dùng chiến lược CUỘN (re-arm mỗi lần có hoạt động) chứ không phải một trần dài.
+ */
+function rememberTtlMs(): number {
+  return getEnv().SESSION_REMEMBER_DAYS * 86_400_000;
+}
+
+/** Trần tuyệt đối của một phiên thường (không remember). */
+function sessionTtlMs(persistent: boolean): number {
+  return persistent ? rememberTtlMs() : getEnv().SESSION_ABSOLUTE_HOURS * 3_600_000;
+}
+
+/**
+ * Ngưỡng gia hạn cuộn: chỉ viết DB khi không còn dùng quá `RENEW_SLACK_MS`.
+ * 1 ngày → người dùng hoạt động hằng ngày gần như KHÔNG BAO GIỜ hết phiên,
+ * đồng thời không nhân số write lên mỗi 30s (frontend đang poll 30s).
+ */
+const RENEW_SLACK_MS = 86_400_000;
 
 export async function createSession(input: {
   user_id: string;
@@ -105,19 +134,25 @@ export async function createSession(input: {
   state?: 'pending_2fa' | 'active';
   ip: string | null;
   ua: string | null;
+  /** "ghi nhớ đăng nhập" — mặc định false; route auth truyền theo loginBody.remember */
+  persistent?: boolean;
+  /** ghi đè TTL của chính session doc (vd. pending_2fa 5'); không đổi mốc cuộn */
   ttlMs?: number;
 }): Promise<{ raw: string; session_id: string }> {
-  const env = getEnv();
   const { raw, hash } = randomToken(32);
   const now = Date.now();
   const state = input.state ?? 'active';
-  const ttl = input.ttlMs ?? (state === 'pending_2fa' ? 5 * 60_000 : env.SESSION_ABSOLUTE_HOURS * 3_600_000);
+  const persistent = input.persistent ?? false;
+  const absoluteMs = sessionTtlMs(persistent);
+  const ttl = input.ttlMs ?? (state === 'pending_2fa' ? 5 * 60_000 : absoluteMs);
   const doc = await Models.Session.create({
     token_hash: hash,
     user_id: input.user_id,
     company_scope: input.company_scope,
     active_company_id: input.active_company_id,
     state,
+    persistent,
+    absolute_expires_at: new Date(now + absoluteMs),
     ip: input.ip,
     ua: input.ua,
     created_at: new Date(now),
@@ -133,14 +168,16 @@ export async function readSession(raw: string): Promise<SessionData | null> {
   if (cached !== undefined) return cached;
 
   const s = await Models.Session.findOne({ token_hash: hashToken(raw), revoked_at: null })
-    .select({ user_id: 1, company_scope: 1, active_company_id: 1, state: 1, expires_at: 1, created_at: 1 })
+    .select({ user_id: 1, company_scope: 1, active_company_id: 1, state: 1, persistent: 1, expires_at: 1, absolute_expires_at: 1, created_at: 1 })
     .lean<{
       _id: unknown;
       user_id: unknown;
       company_scope?: unknown[];
       active_company_id?: unknown;
       state?: string;
+      persistent?: boolean;
       expires_at?: Date;
+      absolute_expires_at?: Date;
       created_at?: Date;
     } | null>();
 
@@ -155,12 +192,31 @@ export async function readSession(raw: string): Promise<SessionData | null> {
     company_scope: (s.company_scope ?? []).map(String),
     active_company_id: s.active_company_id ? String(s.active_company_id) : null,
     state: s.state === 'pending_2fa' ? 'pending_2fa' : 'active',
-    absolute_expires_at: s.expires_at.getTime(),
+    persistent: Boolean(s.persistent),
+    // doc cũ (trước khi có cột này) → coi expires_at hiện hành là mốc
+    absolute_expires_at: (s.absolute_expires_at ?? s.expires_at).getTime(),
+    renewed: false,
   };
-  // sliding idle (15'): cập nhật không chờ, không chặn response
-  const idleDeadline = Date.now() + getEnv().SESSION_IDLE_MINUTES * 60_000;
-  const newExpiry = new Date(Math.min(idleDeadline, data.absolute_expires_at));
-  void Models.Session.updateOne({ _id: s._id }, { $set: { last_seen: new Date(), expires_at: newExpiry } }).exec();
+  // Cập nhật không chờ, không chặn response.
+  const set: Record<string, unknown> = { last_seen: new Date() };
+  const now = Date.now();
+  if (data.persistent) {
+    // CUỘN: mỗi lần dùng lại nạp hạn 400 ngày → không có trần tuyệt đối.
+    // Người dùng quay lại trước khi hết 400 ngày thì về thực tế là vĩnh viễn.
+    // chỉ viết khi còn dưới 400 ngày - 1 ngày để không nhân write theo nhịp poll 30s.
+    const rollTo = now + rememberTtlMs();
+    if (data.absolute_expires_at < rollTo - RENEW_SLACK_MS) {
+      data.absolute_expires_at = rollTo;
+      data.renewed = true;
+      set.expires_at = new Date(rollTo);
+      set.absolute_expires_at = new Date(rollTo);
+    }
+  } else {
+    // sliding idle (15'), bị chặn bởi trần absolute 8h
+    const idleDeadline = now + getEnv().SESSION_IDLE_MINUTES * 60_000;
+    set.expires_at = new Date(Math.min(idleDeadline, data.absolute_expires_at));
+  }
+  void Models.Session.updateOne({ _id: s._id }, { $set: set }).exec();
   cacheSet(key, data, 60_000);
   return data;
 }
@@ -178,15 +234,23 @@ export async function revokeAllUserSessions(userId: string, reason: string): Pro
 }
 
 /** Sau khi 2FA đạt → nâng session pending_2fa thành active. */
-export async function activateSession(sessionId: string, companyScope: string[], activeCompanyId: string | null): Promise<void> {
+export async function activateSession(
+  sessionId: string,
+  companyScope: string[],
+  activeCompanyId: string | null,
+  persistent = false,
+): Promise<void> {
+  const until = Date.now() + sessionTtlMs(persistent);
   await Models.Session.updateOne(
     { _id: sessionId },
     {
       $set: {
         state: 'active',
+        persistent,
         company_scope: companyScope,
         active_company_id: activeCompanyId,
-        expires_at: new Date(Date.now() + getEnv().SESSION_ABSOLUTE_HOURS * 3_600_000),
+        expires_at: new Date(until),
+        absolute_expires_at: new Date(until),
       },
     },
   ).exec();
@@ -225,7 +289,7 @@ export function installHttpLayer(app: FastifyInstance): void {
     (req as CtxRequest).fg = { ...EMPTY, traceId: traceIdOf(req), ip: clientIp(req), ua: (req.headers['user-agent'] as string) ?? null };
   });
 
-  app.addHook('preHandler', async (req) => {
+  app.addHook('preHandler', async (req, reply) => {
     const base = requestCtx(req);
     if (isPublicPath(req.url) || isNonApiPath(req.url)) return;
 
@@ -233,6 +297,8 @@ export function installHttpLayer(app: FastifyInstance): void {
     const session = raw ? await readSession(raw) : null;
     if (!session) throw new ApiError({ code: 'FG-AUTH-001' });
     if (session.state === 'pending_2fa') throw new ApiError({ code: 'FG-AUTH-005', data: { need_2fa: true } });
+    // phiên "ghi nhớ" vừa cuộn hạn → Max-Age trình duyệt phải đếm lại
+    if (session.renewed) reply.header('set-cookie', cookieHeader(raw!, { persistent: true }));
 
     const requested = scopeHeader(req);
     const identity = await resolveIdentity(session.user_id, {
@@ -313,14 +379,19 @@ export function readCookie(header: string | undefined, name: string): string | u
   return undefined;
 }
 
-export function cookieHeader(raw: string, opts: { maxAgeSec?: number; clear?: boolean } = {}): string {
+export function cookieHeader(
+  raw: string,
+  opts: { maxAgeSec?: number; clear?: boolean; persistent?: boolean } = {},
+): string {
+  const env = getEnv();
+  const defaultMaxAge = opts.persistent ? env.SESSION_REMEMBER_DAYS * 86_400 : env.SESSION_ABSOLUTE_HOURS * 3600;
   const parts = [
     `${COOKIE}=${raw}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Lax',
-    getEnv().isProd ? 'Secure' : '',
-    `Max-Age=${opts.clear ? 0 : (opts.maxAgeSec ?? getEnv().SESSION_ABSOLUTE_HOURS * 3600)}`,
+    env.isProd ? 'Secure' : '',
+    `Max-Age=${opts.clear ? 0 : (opts.maxAgeSec ?? defaultMaxAge)}`,
   ].filter(Boolean);
   return parts.join('; ');
 }

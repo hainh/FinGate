@@ -205,6 +205,10 @@ export const SessionSchema = new Schema(
     ua: { type: String, default: null },
     /** pending_2fa: sau bước 1, chưa xác minh OTP */
     state: { type: String, enum: ['pending_2fa', 'active'], default: 'active' },
+    /** true = "ghi nhớ đăng nhập": không trượt theo idle, hết hạn theo absolute_expires_at */
+    persistent: { type: Boolean, default: false },
+    /** trần tuyệt đối — expires_at (sliding) không bao giờ được vượt quá mốc này */
+    absolute_expires_at: { type: Date, default: null },
     challenge_hash: { type: String, default: null },
     created_at: { type: Date, default: () => new Date() },
     last_seen: { type: Date, default: () => new Date() },

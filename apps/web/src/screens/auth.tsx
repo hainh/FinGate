@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Checkbox } from 'antd';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ApiRequestError, apiCall, markSignedOut } from '../app/api.ts';
 import { useAuth } from '../app/store.tsx';
@@ -54,6 +55,7 @@ export function LoginScreen(): ReactNode {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  const [remember, setRemember] = useState(true);
   const [error, setError] = useState<ReactNode>(null);
   const [twoFa, setTwoFa] = useState<{ challenge: string; resendAfterS: number } | null>(null);
   const [code, setCode] = useState('');
@@ -73,7 +75,7 @@ export function LoginScreen(): ReactNode {
     setBusy(true);
     setError(null);
     try {
-      const r = await login(email, password);
+      const r = await login(email, password, remember);
       if (r.need_2fa && r.challenge) {
         setTwoFa({ challenge: r.challenge, resendAfterS: r.resend_after_s ?? 30 });
         setCooldown(r.resend_after_s ?? 30);
@@ -146,6 +148,11 @@ export function LoginScreen(): ReactNode {
           <FgField label="Mật khẩu" required labelFor="pass">
             <FgPassword id="pass" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
           </FgField>
+          <Checkbox checked={remember} onChange={(e) => setRemember(e.target.checked)}>
+            <FgText style="bodyS" color="muted">
+              Ghi nhớ đăng nhập — không hết hạn phiên
+            </FgText>
+          </Checkbox>
           {typeof error === 'string' || error ? (
             <FgAlert tone={String(error).includes('nhiều lần') ? 'warning' : 'danger'} title={error ?? ''} />
           ) : null}

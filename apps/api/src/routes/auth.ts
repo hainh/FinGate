@@ -17,6 +17,7 @@ import {
 import { loginBodySchema, twoFactorBodySchema, forgotBodySchema, resetBodySchema, activateBodySchema, prefsBodySchema } from './schemas.ts';
 import { loginBody, twoFactorBody, forgotPasswordBody, resetPasswordBody, activateBody, prefsUpdateBody } from '@fingate/shared';
 import { Models } from '../db/models.ts';
+import { getEnv } from '../env.ts';
 import {
   COOKIE,
   readCookie,
@@ -88,6 +89,8 @@ export function authRoutes(app: FastifyInstance): void {
         const needs2fa =
           Boolean(user.totp?.enabled) &&
           (MFA_REQUIRED_ROLES.includes(identity?.role ?? 'staff') || Boolean(user.mfa_required));
+        // loginBody.remember mặc định true → "đăng nhập vĩnh viễn" (§7.2, SESSION_REMEMBER_DAYS)
+        const remember = body.remember;
 
         await Models.User.updateOne(
           { _id: user._id },
@@ -101,6 +104,7 @@ export function authRoutes(app: FastifyInstance): void {
             company_scope: identity?.assignments.map((a) => a.company_id) ?? [],
             active_company_id: identity?.company_id ?? null,
             state: 'pending_2fa',
+            persistent: remember,
             ip,
             ua: requestCtx(req).ua,
             ttlMs: 5 * 60_000,
@@ -126,10 +130,11 @@ export function authRoutes(app: FastifyInstance): void {
           user_id: String(user._id),
           company_scope: scopeIds,
           active_company_id: pickActive(user.prefs?.active_company_id, scopeIds),
+          persistent: remember,
           ip,
           ua: requestCtx(req).ua,
         });
-        reply.header('set-cookie', cookieHeader(raw));
+        reply.header('set-cookie', cookieHeader(raw, { persistent: remember }));
         await mirrorAudit({
           at: new Date(),
           actor: { user_id: String(user._id), name: String(user.display_name ?? email), role: identity?.role ?? null },
@@ -173,8 +178,8 @@ export function authRoutes(app: FastifyInstance): void {
         if (!verified) verified = consumeRecoveryCode(String(user._id), user.recovery_codes ?? [], body.code);
         if (!verified) throw new ApiError({ code: 'FG-AUTH-006' });
 
-        await activateSession(session.session_id, session.company_scope, session.active_company_id);
-        reply.header('set-cookie', cookieHeader(raw));
+        await activateSession(session.session_id, session.company_scope, session.active_company_id, session.persistent);
+        reply.header('set-cookie', cookieHeader(raw, { persistent: session.persistent }));
         return { data: { ok: true, user_id: String(user._id) } };
       },
     }),
@@ -340,7 +345,7 @@ export function authRoutes(app: FastifyInstance): void {
         ).exec();
 
         const done = await finishActivation(user, { ip: requestCtx(req).ip, ua: requestCtx(req).ua });
-        reply.header('set-cookie', cookieHeader(done.raw));
+        reply.header('set-cookie', cookieHeader(done.raw, { persistent: true }));
         return { data: { ok: true, user_id: done.user_id, mfa_suggested: MFA_REQUIRED_ROLES.includes(role) } };
       },
     }),
@@ -522,8 +527,9 @@ export function authRoutes(app: FastifyInstance): void {
         // giữ phiên hiện tại
         const raw = readCookieValue(req);
         if (raw && sessionId) {
+          const kept = await Models.Session.findById(sessionId).select({ persistent: 1 }).lean<{ persistent?: boolean } | null>();
           await Models.Session.updateOne({ _id: sessionId }, { $set: { revoked_at: null } }).exec();
-          reply.header('set-cookie', cookieHeader(raw));
+          reply.header('set-cookie', cookieHeader(raw, { persistent: Boolean(kept?.persistent) }));
         }
         return { data: { ok: true } };
       },
@@ -538,7 +544,19 @@ export function authRoutes(app: FastifyInstance): void {
       config: { perms: [], screen: 'AUTH-06', summary: 'Kiểm tra phiên (heartbeat 5 phút)' },
       handler: async (req) => {
         const { actor, sessionId } = requestCtx(req);
-        return { data: { alive: Boolean(actor), session_id: sessionId, idle_limit_s: 60 * 60 } };
+        const env = getEnv();
+        const raw = readCookieValue(req);
+        const session = raw ? await readSession(raw) : null;
+        return {
+          data: {
+            alive: Boolean(actor),
+            session_id: sessionId,
+            /** phiên "ghi nhớ" → không có hạn idle; client khỏi hiện đồng hồ đếm ngược */
+            persistent: session?.persistent ?? false,
+            idle_limit_s: session?.persistent ? null : env.SESSION_IDLE_MINUTES * 60,
+            absolute_expires_at: session ? new Date(session.absolute_expires_at).toISOString() : null,
+          },
+        };
       },
     }),
   );
@@ -653,6 +671,8 @@ async function finishActivation(
     user_id: String(user._id),
     company_scope: scopeIds,
     active_company_id: scopeIds[0] ?? null,
+    // kích hoạt tài khoản là lần đăng nhập chủ động → giữ phiên dài như "ghi nhớ"
+    persistent: true,
     ip: ctx.ip,
     ua: ctx.ua,
   });

@@ -112,6 +112,7 @@ pnpm infra:down               # tắt MongoDB local
 | Đăng nhập không được / sai mật khẩu | Mật khẩu demo là `fingate-demo-2026`; nếu DB đã bị seed bằng `FIELD_KEY` khác thì reset: `pnpm db:seed --force` |
 | Banner **"Máy chủ đang thức dậy"** kẹt ở màn đăng nhập | **Đã sửa** (`apps/web/src/app/api.ts`: reset `coldStart` khi nhận *bất kỳ* response, kể cả 401 của `/me`) |
 | TOTP mất sau khi restart | Dev tự sinh `FIELD_KEY` mỗi lần nếu `.env` không đặt → đặt `FIELD_KEY` cố định trong `.env` |
+| **Mọi phiên "ghi nhớ" chết sau deploy** (ADR-19) | Token hash = HMAC(`SESSION_SECRET`) → `SESSION_SECRET` đổi là mất hết. `render.yaml` để `generateValue: true`: giá trị **được giữ qua các lần deploy**, nhưng **tạo lại service mới từ blueprint = secret mới = tất cả đăng xuất**. Muốn an toàn tuyệt đối: chuyển sang `sync: false` và dán một chuỗi ≥ 32 byte cố định trong Render Environment. `FIELD_KEY` đổi thì TOTP không giải mã được (không đăng xuất, nhưng phải bật lại 2FA). |
 
 ## 7. Deploy / Backup / Restore
 

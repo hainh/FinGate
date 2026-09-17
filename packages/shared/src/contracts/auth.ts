@@ -21,6 +21,13 @@ export const password = z.string().min(12, 'Mật khẩu tối thiểu 12 ký t�
 export const loginBody = z.object({
   email,
   password,
+  /**
+   * Mặc định `true` = tuỳ chọn "ghi nhớ đăng nhập". Phiên như vậy không bị giới hạn
+   * bởi idle 15' / absolute 8h (§7.2); nó hết hạn sau `SESSION_REMEMBER_DAYS`
+   * (mặc định 400 ngày — trần Max-Age của trình duyệt), hoặc bị thu hồi sớm hơn
+   * bởi logout / đổi mật khẩu / admin thu hồi phiên.
+   */
+  remember: z.boolean().default(true),
   /** chống CSRF: FE gửi origin đã biết. */
   device_hint: z.string().max(40).optional(),
 });

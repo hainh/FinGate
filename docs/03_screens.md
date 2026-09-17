@@ -83,12 +83,12 @@ Rail cấp 2 collapse được; `Chờ tôi duyệt` luôn có `FgBadgeCount`. N
 
 | ID | Màn hình | Route | Vai trò | Component | St | Ph | Nền |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| AUTH-01 | Đăng nhập | `/dang-nhap` | tất cả | `FgField` `FgInput` `FgButton` `FgAlert` | lỗi sai credentials (không tiết lộ field nào sai), lockout sau N lần, loading, rate-limit | P1 | D/T/M |
+| AUTH-01 | Đăng nhập | `/dang-nhap` | tất cả | `FgField` `FgInput` `FgPassword` `Checkbox` ("Ghi nhớ đăng nhập" — **mặc định tích**, ADR-19) `FgButton` `FgAlert` | lỗi sai credentials (không tiết lộ field nào sai), lockout sau N lần, loading, rate-limit | P1 | D/T/M |
 | AUTH-02 | Xác thực 2 lớp (OTP/PIN) | `/dang-nhap/2fa` | KTT, PGĐ, GĐ, QT | `FgInput` (otp, `inputmode=numeric`, tự fill 1 dòng), resend cooldown 30s | sai, hết hiệu lực, khóa phiên | P4 | D/M |
 | AUTH-03 | Quên mật khẩu | `/mat-khau/quen` | tất cả | `FgField` `FgButton` | gửi thành công (luôn trả cùng thông điệp, chống dò email) | P1 | D/M |
 | AUTH-04 | Đặt lại mật khẩu | `/mat-khau/dat-lai` | tất cả | `FgField` + strength meter (attention/danger) | link hết hạn, yếu, không khớp | P1 | D/M |
 | AUTH-05 | Kích hoạt tài khoản (link mời có chữ ký, hạn 1 ngày — admin copy gửi, không cần SMTP) | `/kich-hoat` | QT, nhân sự mới | form họ tên + đặt mật khẩu (một bước; vai trò nhóm 2FA được nhắc bật trong PREF-01 sau đăng nhập) | token hết hạn/sai chữ ký/đã thu hồi/đã dùng (FG-AUTH-009) | P2 | D/M |
-| AUTH-06 | Hết phiên — mở khóa | `/hoa` (khóa màn hình, không có route lịch sử) | tất cả | overlay full, hiện `đang giữ hồ sơ dở` + nút khôi phục | idle timeout (§XXVI), giữ bản nháp form | P2 | D/M |
+| AUTH-06 | Hết phiên — mở khóa | `/hoa` (khóa màn hình, không có route lịch sử) | tất cả | overlay full, hiện `đang giữ hồ sơ dở` + nút khôi phục | idle timeout (§XXVI), giữ bản nháp form. **Chỉ xảy ra khi bỏ chọn "Ghi nhớ đăng nhập"** (ADR-19) | P2 | D/M |
 
 **Bắt buộc mọi màn A:** không log mật khẩu/OTP, `FgText` không hiển thị email đầy đủ của người khác, có link "Không phải bạn? — Đăng xuất".
 

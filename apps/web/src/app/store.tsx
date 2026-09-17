@@ -65,7 +65,7 @@ interface AuthContextValue {
   /** 'all' hoặc company_id — scope đang hoạt động. */
   scope: string;
   setScope: (s: string) => void;
-  login: (email: string, password: string) => Promise<LoginResult>;
+  login: (email: string, password: string, remember?: boolean) => Promise<LoginResult>;
   login2fa: (challenge: string, code: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshMe: () => Promise<void>;
@@ -143,8 +143,8 @@ export function AppProviders({ children }: { children: ReactNode }) {
     });
   }, [status]);
 
-  const login = useCallback(async (email: string, password: string): Promise<LoginResult> => {
-    const r = await apiData<LoginResult>('/auth/login', { method: 'POST', body: { email, password } });
+  const login = useCallback(async (email: string, password: string, remember = true): Promise<LoginResult> => {
+    const r = await apiData<LoginResult>('/auth/login', { method: 'POST', body: { email, password, remember } });
     if (!r.need_2fa) {
       markSignedOut(false);
       await loadMe();
