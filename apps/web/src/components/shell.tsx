@@ -184,6 +184,8 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
 
           <span style={{ flex: 1 }} />
 
+          <FgFetchIndicator />
+
           <Input.Search
             placeholder="Tìm mã hồ sơ, nội dung…"
             style={{ width: 220 }}
@@ -191,8 +193,6 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
             aria-label="Tìm kiếm toàn cục"
             onSearch={(q) => q.trim() && navigate(`/tim-kiem?q=${encodeURIComponent(q)}`)}
           />
-
-          <FgFetchIndicator />
 
           <Link to="/thong-bao" aria-label="Thông báo" style={{ color: 'var(--fg-text-secondary)' }}>
             <Badge count={unread?.count ?? 0} size="small" offset={[2, -2]}>
