@@ -214,7 +214,11 @@ export function documentPermissions(
   const editable = (doc.status === 'draft' || doc.status === 'changes_requested') && mine && has('doc:create');
   const currentSteps = doc.steps.filter((s) => s.state === 'current' || s.state === 'waiting');
   const iAmStep = currentSteps.filter(
-    (s) => s.user_id === actor.user_id || doc.delegatedStepOrders.includes(s.order),
+    (s) =>
+      s.user_id === actor.user_id ||
+      // bước chưa gán người (người duyệt được cấu hình sau khi gửi) → đúng vai trò là duyệt được
+      (s.user_id == null && s.role === actor.role) ||
+      doc.delegatedStepOrders.includes(s.order),
   );
   const overLimit = doc.amount_minor > actor.amount_limit_minor;
 

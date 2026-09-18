@@ -132,6 +132,7 @@ export function documentRoutes(app: FastifyInstance): void {
           queryQueue({
             scope,
             userId: actor.user_id,
+            role: actor.role,
             mine: 'to_approve',
             kind: q.kind,
             companyId: q.company_id,
@@ -140,7 +141,7 @@ export function documentRoutes(app: FastifyInstance): void {
             sort: q.sort ?? '-waiting',
             limit: q.limit,
           }),
-          awaitingBadge(scope, actor.user_id),
+          awaitingBadge(scope, actor.user_id, actor.role),
         ]);
         return ok(
           reply,
@@ -187,7 +188,7 @@ export function documentRoutes(app: FastifyInstance): void {
         const [missing, overdue, awaiting] = await Promise.all([
           queryQueue({ scope, userId: actor.user_id, missingEvidenceOnly: true, limit: 50, sort: '-created_at' }),
           queryQueue({ scope, userId: actor.user_id, overdueOnly: true, limit: 50 }),
-          queryQueue({ scope, userId: actor.user_id, mine: 'to_approve', limit: 50, sort: '-waiting' }),
+          queryQueue({ scope, userId: actor.user_id, role: actor.role, mine: 'to_approve', limit: 50, sort: '-waiting' }),
         ]);
         const groups = [
           { key: 'missing_evidence', title: 'Hồ sơ thiếu chứng từ', tone: 'attention', ...missing },

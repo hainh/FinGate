@@ -387,9 +387,15 @@ export async function transition(input: {
   if (!steps.length && isDecision) throw new ApiError({ code: 'FG-WF-006' });
 
   // 3. đúng người? fast-track: step của mình có thể đang `waiting`
+  //    Bước chưa gán người (`user_id: null`, cấu hình người duyệt thêm sau khi gửi)
+  //    → ai đúng vai trò cũng xử lý được; người xử lý sẽ "nhận" bước đó.
   const myStep = isDecision
     ? steps
-        .filter((s) => s.user_id != null && String(s.user_id) === actor.user_id && (s.state === 'current' || s.state === 'waiting'))
+        .filter(
+          (s) =>
+            (s.state === 'current' || s.state === 'waiting') &&
+            (s.user_id != null ? String(s.user_id) === actor.user_id : s.role === actor.role),
+        )
         .sort((a, b) => a.order - b.order)[0]
     : null;
   if (isDecision && !myStep) {
@@ -463,6 +469,7 @@ export async function transition(input: {
     }
     const s = nextSteps.find((x) => x.order === myStep.order);
     if (s) {
+      if (s.user_id == null) s.user_id = actor.user_id;
       s.action = action;
       s.decided_at = now;
       s.opinion = body.opinion ?? null;

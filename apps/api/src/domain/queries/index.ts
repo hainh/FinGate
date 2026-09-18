@@ -109,6 +109,8 @@ export interface QueueRow {
 export interface QueueQuery {
   scope: ScopeLike;
   userId: string;
+  /** vai trò đang hoạt động — dùng cho bước duyệt chưa gán người (`user_id: null`). */
+  role?: Role;
   kind?: DocKind;
   status?: string | string[];
   companyId?: string;
@@ -154,7 +156,12 @@ export function queueFilter(input: QueueQuery): Record<string, unknown> {
   if (input.missingEvidenceOnly) filter['evidence.missing.0'] = { $exists: true };
   if (input.mine === 'created') filter.created_by = input.userId;
   if (input.mine === 'to_approve') {
-    filter['approval.steps'] = { $elemMatch: { user_id: input.userId, state: { $in: ['current', 'waiting'] } } };
+    // Bước chưa gán người duyệt (`user_id: null`) — xảy ra khi tài khoản/assignment
+    // của cấp duyệt được tạo SAU khi hồ sơ đã gửi. Khi đó ai đúng vai trò cũng xử lý được,
+    // khớp với timeline "bàn của bạn" (FgApprovalTimeline highlight theo role).
+    const owner: Record<string, unknown>[] = [{ user_id: input.userId }];
+    if (input.role) owner.push({ user_id: null, role: input.role });
+    filter['approval.steps'] = { $elemMatch: { state: { $in: ['current', 'waiting'] }, $or: owner } };
     if (!input.status) filter.status = { $in: [...DECISION_STATUSES] };
   }
   if (input.mine === 'approved_by_me') {
@@ -300,10 +307,12 @@ export function docHref(kind: string, id: string): string {
  * 2. Badge & số dư
  * ================================================================== */
 
-export async function awaitingBadge(scope: ScopeLike, userId: string): Promise<{ count: number; total_minor: bigint }> {
-  return cacheThrough(`badge:${userId}`, async () => {
+export async function awaitingBadge(scope: ScopeLike, userId: string, role?: Role): Promise<{ count: number; total_minor: bigint }> {
+  return cacheThrough(`badge:${userId}:${role ?? ''}`, async () => {
+    const owner: Record<string, unknown>[] = [{ user_id: userId }];
+    if (role) owner.push({ user_id: null, role });
     const f = withScope(scopeOf(scope), {
-      'approval.steps': { $elemMatch: { user_id: userId, state: { $in: ['current', 'waiting'] } } },
+      'approval.steps': { $elemMatch: { state: { $in: ['current', 'waiting'] }, $or: owner } },
       status: { $in: [...DECISION_STATUSES] },
     });
     const [count, rows] = await Promise.all([
@@ -687,17 +696,17 @@ export function weekdayVi(iso: string): string {
  * 6. DASH-01 — overview: MỘT endpoint gộp, Promise.all, ETag ở route (§8.3)
  * ================================================================== */
 
-export async function dashboardOverview(scope: ScopeLike, userId: string): Promise<Record<string, unknown>> {
+export async function dashboardOverview(scope: ScopeLike, userId: string, role?: Role): Promise<Record<string, unknown>> {
   const scopeKey = scope.companyIds === null ? 'all' : scope.companyIds.join(',');
-  return cacheThrough(`overview:${userId}:${scopeKey}:${today()}`, () => buildOverview(scope, userId), 20_000);
+  return cacheThrough(`overview:${userId}:${role ?? ''}:${scopeKey}:${today()}`, () => buildOverview(scope, userId, role), 20_000);
 }
 
-async function buildOverview(scope: ScopeLike, userId: string): Promise<Record<string, unknown>> {
+async function buildOverview(scope: ScopeLike, userId: string, role?: Role): Promise<Record<string, unknown>> {
   const day = today();
   const [accounts, awaiting, queue, income, spend, overdue, maturities, missing, unread] = await Promise.all([
     accountSnapshots(scope),
-    awaitingBadge(scope, userId),
-    queryQueue({ scope, userId, mine: 'to_approve', limit: 8, sort: '-waiting' }),
+    awaitingBadge(scope, userId, role),
+    queryQueue({ scope, userId, role, mine: 'to_approve', limit: 8, sort: '-waiting' }),
     sumByDateAndKind(scope, 'income', day),
     sumByDateAndKind(scope, 'spend', day),
     overdueReceivable(scope),
