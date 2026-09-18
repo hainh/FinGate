@@ -176,7 +176,7 @@ export function documentRoutes(app: FastifyInstance): void {
     }),
   );
 
-  /** DASH-05 — trung tâm "Cần xử lý": thiếu chứng từ + quá hạn + chờ lâu. */
+  /** DASH-05 — trung tâm "Cần xử lý": hồ sơ bị trả về + thiếu chứng từ + quá hạn + chờ duyệt. */
   app.route(
     defineRoute({
       method: 'GET',
@@ -185,12 +185,15 @@ export function documentRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const actor = requireActor(req);
         const scope = requireScope(req);
-        const [missing, overdue, awaiting] = await Promise.all([
+        const [missing, overdue, changes, awaiting] = await Promise.all([
           queryQueue({ scope, userId: actor.user_id, missingEvidenceOnly: true, limit: 50, sort: '-created_at' }),
           queryQueue({ scope, userId: actor.user_id, overdueOnly: true, limit: 50 }),
+          // bị cấp trên yêu cầu bổ sung → người lập (kế toán viên) phải sửa & gửi lại
+          queryQueue({ scope, userId: actor.user_id, mine: 'created', status: 'changes_requested', limit: 50, sort: '-created_at' }),
           queryQueue({ scope, userId: actor.user_id, role: actor.role, mine: 'to_approve', limit: 50, sort: '-waiting' }),
         ]);
         const groups = [
+          { key: 'changes_requested', title: 'Cần bổ sung (bị trả về)', tone: 'attention', ...changes },
           { key: 'missing_evidence', title: 'Hồ sơ thiếu chứng từ', tone: 'attention', ...missing },
           { key: 'overdue', title: 'Quá hạn xử lý', tone: 'danger', ...overdue },
           { key: 'awaiting', title: 'Đang chờ bạn duyệt', tone: 'warning', ...awaiting },

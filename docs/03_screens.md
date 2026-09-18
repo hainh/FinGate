@@ -102,7 +102,7 @@ Rail cấp 2 collapse được; `Chờ tôi duyệt` luôn có `FgBadgeCount`. N
 | DASH-02 | Bảng điều hành kế toán | `/bang-dieu-hanh` | KT, CV, KTT | hàng chờ theo vai trò, `FgTable`, SLA breach, hồ sơ thiếu chứng từ, `FgProgress` (KH hôm nay) | như DASH-01 + `changes_requested` nổi bật | P2 | D/T |
 | DASH-03 | Bản tin tài chính hàng ngày | `/ban-tin/ngay` | GĐ, PGĐ, KTT | bản **chỉ đọc** (§XIV blueprint): KPI + forecast + đáo hạn 3 mức + cảnh báo thiếu tiền; `FgButton` [In] [Xuất PDF] [Chia sẻ] | chưa sinh bản tin (hệ thống đang chạy), sinh lỗi, dữ liệu nguồn thiếu | P3 | D/M |
 | DASH-04 | Lịch sử bản tin | `/ban-tin` | GĐ, KTT | `FgTable` theo ngày, search | rỗng, ngày nghỉ/lễ | P3 | D |
-| DASH-05 | Trung tâm "Cần xử lý" | `/can-xu-ly` | GĐ, KTT | `FgExceptionList` đầy đủ (không giới hạn 6), group theo severity | 0 mục = success state | P2 | D/M |
+| DASH-05 | Trung tâm "Cần xử lý" | `/can-xu-ly` | GĐ, KTT, CV | Nhóm: *Cần bổ sung (bị trả về)* — hồ sơ `changes_requested` do tôi lập; *Hồ sơ thiếu chứng từ*; *Quá hạn xử lý*; *Đang chờ bạn duyệt*. `FgExceptionList` đầy đủ (không giới hạn 6) | 0 mục = success state | P2 | D/M |
 | DASH-06 | Tổng quan theo công ty | `/dashboard/cong-ty/:id` | GĐ, PGĐ | **cùng khung DASH-01**, scope ghim 1 công ty | công ty bị tạm dừng | P2 | D |
 | DASH-08 | Trang "Tiền hôm nay" (cash position nhanh) | `/hom-nay` | GĐ mobile | 4 khối dọc theo §5.4 breakpoint `<768` | như DASH-01 bản rút gọn | P4 | M |
 
