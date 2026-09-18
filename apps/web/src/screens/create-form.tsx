@@ -7,7 +7,9 @@
 
 import { useState, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { DOC_KIND_LABEL, formatMoney, moneyFromWire, statusLabel, type Money } from '@fingate/shared';
+import { DatePicker } from 'antd';
+import dayjs from 'dayjs';
+import { DOC_KIND_LABEL, formatMoney, moneyFromWire, normalizePlannedDate, statusLabel, type Money } from '@fingate/shared';
 import { ApiRequestError, apiData } from '../app/api.ts';
 import { useAuth } from '../app/store.tsx';
 import { useBankAccounts, useDocument } from '../app/queries.ts';
@@ -34,13 +36,20 @@ interface FormState {
   collateral: string;
 }
 
+/** Hạn mặc định: 17:00 hôm nay; nếu đã qua thì 09:00 hôm sau. */
+function defaultDeadline(): string {
+  const now = dayjs();
+  const todayEnd = now.hour(17).minute(0).second(0).millisecond(0);
+  return (todayEnd.isAfter(now) ? todayEnd : todayEnd.add(1, 'day').hour(9)).format('YYYY-MM-DDTHH:mm');
+}
+
 const initial = (): FormState => ({
   title: '',
   purpose: '',
   payee_name: '',
   payee_bank: '',
   amount: null,
-  planned_date: new Date().toISOString().slice(0, 10),
+  planned_date: defaultDeadline(),
   fund: 'bank',
   account_id: '',
   contract_code: '',
@@ -142,7 +151,7 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
       purpose: loaded.purpose,
       payee_name: loaded.payee.name,
       amount: moneyFromWire(loaded.amount),
-      planned_date: loaded.planned_date,
+      planned_date: normalizePlannedDate(loaded.planned_date),
       fund: loaded.source.fund,
       account_id: loaded.source.account_id ?? '',
       contract_code: loaded.contract.code ?? '',
@@ -176,8 +185,16 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
             <FgField label="Số tiền *" error={errors.amount ?? (f.amount === null ? 'Chưa nhập' : null)} help={f.amount ? formatMoney(f.amount, { mode: 'full' }) : 'Gõ "2,5 tỷ" hoặc "850 tr" — hệ thống hiểu cả hai'}>
               <FgMoneyInput value={f.amount} onChange={(m) => set('amount', m)} disabled={!canEdit} />
             </FgField>
-            <FgField label="Ngày dự kiến *" error={errors.planned_date}>
-              <FgInput type="date" value={f.planned_date} onChange={(e) => set('planned_date', e.target.value)} disabled={!canEdit} />
+            <FgField label="Hạn thanh toán (deadline) *" error={errors.planned_date}>
+              <DatePicker
+                showTime={{ format: 'HH:mm' }}
+                format="DD/MM/YYYY HH:mm"
+                value={f.planned_date ? dayjs(f.planned_date) : null}
+                onChange={(v) => set('planned_date', v ? v.format('YYYY-MM-DDTHH:mm') : '')}
+                disabled={!canEdit}
+                style={{ width: '100%' }}
+                placeholder="Chọn ngày giờ"
+              />
             </FgField>
             <FgField label="Nguồn tiền *">
               <FgSelect

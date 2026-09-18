@@ -12,6 +12,8 @@ import {
   DOC_KIND_LABEL,
   ROLE_LABEL,
   addDays,
+  dayEndOf,
+  dayStartOf,
   daysUntil,
   formatMoney,
   maturity,
@@ -206,7 +208,10 @@ export function queueFilter(input: QueueQuery): Record<string, unknown> {
     filter['approval.steps'] = { $elemMatch: { user_id: input.userId, state: 'done' } };
   }
   if (input.from || input.to) {
-    filter.planned_date = { ...(input.from ? { $gte: input.from } : {}), ...(input.to ? { $lte: input.to } : {}) };
+    filter.planned_date = {
+      ...(input.from ? { $gte: dayStartOf(input.from) } : {}),
+      ...(input.to ? { $lte: dayEndOf(input.to) } : {}),
+    };
   }
   if (input.q) {
     const rx = { $regex: escapeRegex(input.q), $options: 'i' };
@@ -654,8 +659,8 @@ export async function forecast(
       { $group: { _id: '$account_id', closing: { $first: '$closing_minor' } } },
     ]),
     scopedAggregate<{ _id: { date: string; kind: string }; total: unknown }>(Models.Document, scopeOf(scope), [
-      { $match: { planned_date: { $gte: from, $lte: to }, status: { $nin: ['draft', 'rejected', 'cancelled'] } } },
-      { $group: { _id: { date: '$planned_date', kind: '$kind' }, total: { $sum: '$amount.minor' } } },
+      { $match: { planned_date: { $gte: dayStartOf(from), $lte: dayEndOf(to) }, status: { $nin: ['draft', 'rejected', 'cancelled'] } } },
+      { $group: { _id: { date: { $substr: ['$planned_date', 0, 10] }, kind: '$kind' }, total: { $sum: '$amount.minor' } } },
     ]),
     Models.Company.find(scope.companyIds === null ? {} : { _id: { $in: scope.companyIds as never } }).select({ name: 1, min_balance_minor: 1 }).lean(),
     scopedAggregate<{ _id: string; closing: unknown }>(Models.BalanceDaily, scopeOf(scope), [
@@ -954,7 +959,7 @@ function buildExceptions(input: {
 
 async function sumByDateAndKind(scope: ScopeLike, kind: DocKind, date: string): Promise<bigint> {
   const rows = await scopedAggregate<{ total: unknown }>(Models.Document, scopeOf(scope), [
-    { $match: { kind, planned_date: date, status: { $ne: 'draft' } } },
+    { $match: { kind, planned_date: { $gte: dayStartOf(date), $lte: dayEndOf(date) }, status: { $ne: 'draft' } } },
     { $group: { _id: null, total: { $sum: '$amount.minor' } } },
   ]);
   return asBigInt(rows[0]?.total ?? 0n);

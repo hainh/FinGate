@@ -3,6 +3,7 @@
  * Idempotent; giữ `opening`/`blocked` đã nhập tay ở BANK-04 để không mất dữ liệu thủ quỹ.
  */
 
+import { datePartOf } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
 import { asBigInt } from '../queries/index.ts';
 
@@ -40,7 +41,7 @@ export async function rebuildBalances(): Promise<Record<string, unknown>> {
     const isIn = String(d.kind) === 'income';
     const account = (d.source as { account_id?: unknown } | undefined)?.account_id;
     const paid = status === 'paid';
-    const date = paid ? String((d.execution as { paid_at?: string } | undefined)?.paid_at ?? d.planned_date) : String(d.planned_date);
+    const date = datePartOf(String(paid ? ((d.execution as { paid_at?: string } | undefined)?.paid_at ?? d.planned_date) : d.planned_date));
 
     if (account) {
       const c = touch(String(account), company, date);

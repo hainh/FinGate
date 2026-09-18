@@ -15,7 +15,9 @@ import {
   EVIDENCE_LABEL,
   ACTION_LABEL,
   dateTimeLabel,
+  deadlineLabel,
   formatMoney,
+  isDeadlinePast,
   money,
   moneyFromWire,
   type EvidenceType,
@@ -104,7 +106,15 @@ export function DocumentDetailScreen(): ReactNode {
               title={`${d.kind_label} ${d.code}`}
               meta={
                 <>
-                  {d.company_name} · Tạo bởi {d.created_by_name} · Dự kiến {dateTimeLabel(d.planned_date).slice(0, 10)}
+                  {d.company_name} · Tạo bởi {d.created_by_name} · Hạn thanh toán {deadlineLabel(d.planned_date)}
+                  {isDeadlinePast(d.planned_date) && !['paid', 'cancelled', 'rejected'].includes(d.status) ? (
+                    <span
+                      className="fg-chip"
+                      style={{ marginLeft: 6, borderColor: 'var(--fg-status-danger-border)', color: 'var(--fg-status-danger-text)', background: 'var(--fg-status-danger-bg)' }}
+                    >
+                      Quá hạn
+                    </span>
+                  ) : null}
                   {d.current_owner ? (
                     <>
                       {' '}

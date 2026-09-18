@@ -5,7 +5,7 @@
 import { z } from 'zod';
 import { MATURITY_BUCKETS } from '../status/index.js';
 const lit = <T extends string>(arr: readonly T[]) => arr as unknown as [T, ...T[]];
-import { businessDate, moneyField, moneyWire, objectId, uuid } from './common.js';
+import { businessDate, businessDateTime, moneyField, moneyWire, objectId, uuid } from './common.js';
 import { priority } from './documents.js';
 
 export const accountKind = z.enum(['bank', 'cash']);
@@ -408,7 +408,7 @@ export const internalTransferBody = z.object({
   to_company_id: objectId,
   to_account_id: objectId.nullable().optional(),
   amount: moneyField,
-  planned_date: businessDate,
+  planned_date: businessDateTime,
   purpose: z.string().min(3).max(1000),
   fee_minor: z.string().regex(/^\d+$/).default('0'),
   request_id: z.string().uuid(),

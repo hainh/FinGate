@@ -21,6 +21,19 @@ export const businessDate = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Ngày phải theo định dạng YYYY-MM-DD')
   .refine((v) => !Number.isNaN(Date.parse(`${v}T00:00:00Z`)), 'Ngày không hợp lệ');
 
+/**
+ * Mốc deadline `YYYY-MM-DDTHH:mm` (giờ VN) — ngày + giờ:phút. Vẫn nhận `YYYY-MM-DD`
+ * cũ (coi như 00:00) để dữ liệu/khách hàng cũ không vỡ.
+ */
+export const businessDateTime = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/, 'Thời hạn phải theo định dạng YYYY-MM-DDTHH:mm')
+  .refine((v) => {
+    if (Number.isNaN(Date.parse(`${v.slice(0, 10)}T00:00:00Z`))) return false;
+    const [h, m] = (v.length > 10 ? v.slice(11) : '00:00').split(':');
+    return Number(h) <= 23 && Number(m) <= 59;
+  }, 'Thời hạn không hợp lệ');
+
 /** version của document, dùng cho ETag / If-Match. */
 export const docVersion = z.coerce.number().int().min(0);
 

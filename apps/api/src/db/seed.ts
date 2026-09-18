@@ -410,7 +410,7 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
       payee: { name: d.payee, is_internal: kind === 'internal' },
       amount: { minor: moneyMinor(d.amountTy), currency: 'VND', decimals: 0 },
       source: { fund: 'bank', account_id: account ? accountIds.get(account.number) ?? null : null },
-      planned_date: iso(d.plannedOffset),
+      planned_date: `${iso(d.plannedOffset)}T09:00`,
       business_date: iso(d.plannedOffset),
       priority: d.amountTy >= 5 ? 'high' : 'normal',
       contract: { code: `HĐ/2026/${d.company}-${String(docCount + 7).padStart(2, '0')}` },
@@ -477,7 +477,7 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
       payee: { name: parties[i % parties.length] ?? 'Đối tác', is_internal: false },
       amount: { minor: moneyMinor(amountTy), currency: 'VND', decimals: 0 },
       source: { fund: 'bank', account_id: account ? accountIds.get(account.number) ?? null : null },
-      planned_date: iso(((i * 3) % 40) - 10),
+      planned_date: `${iso(((i * 3) % 40) - 10)}T${String(8 + (i % 9)).padStart(2, '0')}:00`,
       business_date: iso(0),
       priority: 'normal',
       approval: {

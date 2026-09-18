@@ -9,9 +9,12 @@ import type { FastifyInstance } from 'fastify';
 import {
   ApiError,
   addDays,
+  dayEndOf,
+  dayStartOf,
   daysUntil,
   formatMoney,
   money,
+  normalizePlannedDate,
   today,
   type Permission,
 } from '@fingate/shared';
@@ -716,7 +719,7 @@ export function financeRoutes(app: FastifyInstance): void {
           amount: { minor, currency: body.amount.currency, decimals: 0 },
           source: { fund: 'bank', account_id: body.from_account_id },
           target: { company_id: body.to_company_id, account_id: body.to_account_id },
-          planned_date: body.planned_date,
+          planned_date: normalizePlannedDate(body.planned_date),
           business_date: today(),
           history: [history],
           evidence: { required: ['bank_order'], present: [], missing: ['bank_order'] },
@@ -751,7 +754,7 @@ export function financeRoutes(app: FastifyInstance): void {
           scopedFind<Record<string, unknown>>(
             Models.Document,
             scope,
-            { kind: 'spend', planned_date: { $gte: today(), $lte: addDays(today(), 30) }, status: { $ne: 'draft' } },
+            { kind: 'spend', planned_date: { $gte: dayStartOf(today()), $lte: dayEndOf(addDays(today(), 30)) }, status: { $ne: 'draft' } },
             { limit: 500 },
           ),
         ]);

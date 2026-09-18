@@ -4,7 +4,7 @@
  * Email chỉ cho severity = danger (§9.4); quiet hours xử lý ở mail/sender.
  */
 
-import { addDays, formatMoney, money, today } from '@fingate/shared';
+import { addDays, dayEndOf, dayStartOf, deadlineLabel, formatMoney, isDeadlinePast, money, today } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
 import { mailTemplates, sendMail } from '../../mail/sender.ts';
 import { asBigInt, maturityLadder } from '../queries/index.ts';
@@ -202,22 +202,26 @@ export async function evaluateAlerts(): Promise<Record<string, unknown>> {
     }
   }
 
-  /* 7 · thanh toán đến hạn */
+  /* 7 · thanh toán đến hạn — quá hạn tính theo ĐÚNG giờ:phút deadline */
   if (on('payment_due')) {
-    const rows = await Models.Document.find({ status: 'approved', planned_date: { $lte: addDays(day, 3) } } as never)
+    const rows = await Models.Document.find({ status: 'approved', planned_date: { $lte: dayEndOf(addDays(day, 3)) } } as never)
       .select({ code: 1, company_id: 1, amount: 1, planned_date: 1 })
       .limit(200)
       .lean();
     for (const d of rows) {
       const minor = asBigInt((d.amount as { minor?: unknown } | undefined)?.minor);
+      const planned = String(d.planned_date ?? '');
+      const late = isDeadlinePast(planned);
       hits.push({
         alert_type: 'payment_due',
         company_id: String(d.company_id),
-        severity: rule('payment_due').severity,
-        text: `${String(d.code)} đến hạn thanh toán ${String(d.planned_date)} · ${compact(minor)}`,
+        severity: late ? 3 : rule('payment_due').severity,
+        text: late
+          ? `${String(d.code)} QUÁ HẠN thanh toán ${deadlineLabel(planned)} · ${compact(minor)}`
+          : `${String(d.code)} đến hạn thanh toán ${deadlineLabel(planned)} · ${compact(minor)}`,
         amount_minor: minor,
         href: '/chi/cho-thanh-toan',
-        dedupe_key: `payment_due:${String(d._id)}:${day}`,
+        dedupe_key: `payment_due:${String(d._id)}:${day}:${late ? 'late' : 'soon'}`,
       });
     }
   }
@@ -234,7 +238,7 @@ export async function evaluateAlerts(): Promise<Record<string, unknown>> {
     }
     const flows = await Models.Document.aggregate(
       [
-        { $match: { planned_date: { $gte: day, $lte: addDays(day, 30) }, status: { $ne: 'draft' } } },
+        { $match: { planned_date: { $gte: dayStartOf(day), $lte: dayEndOf(addDays(day, 30)) }, status: { $ne: 'draft' } } },
         { $group: { _id: '$kind', total: { $sum: '$amount.minor' } } },
       ] as never[],
     );

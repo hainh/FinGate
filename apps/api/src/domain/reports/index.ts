@@ -9,6 +9,8 @@
 import {
   REPORT_LABEL,
   addDays,
+  dayEndOf,
+  dayStartOf,
   daysUntil,
   formatMoney,
   money,
@@ -101,8 +103,8 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
         Models.Document,
         input.scope,
         [
-          { $match: { planned_date: { $gte: from, $lte: to }, status: { $ne: 'draft' } } },
-          { $group: { _id: { date: '$planned_date', kind: '$kind' }, total: { $sum: '$amount.minor' }, count: { $sum: 1 } } },
+          { $match: { planned_date: { $gte: dayStartOf(from), $lte: dayEndOf(to) }, status: { $ne: 'draft' } } },
+          { $group: { _id: { date: { $substr: ['$planned_date', 0, 10] }, kind: '$kind' }, total: { $sum: '$amount.minor' }, count: { $sum: 1 } } },
           { $sort: { '_id.date': 1 } },
         ],
       );
@@ -345,8 +347,8 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
         Models.Document,
         input.scope,
         [
-          { $match: { planned_date: { $gte: from, $lte: to }, status: { $ne: 'draft' } } },
-          { $group: { _id: '$planned_date', in: { $sum: { $cond: [{ $eq: ['$kind', 'income'] }, '$amount.minor', 0] } }, out: { $sum: { $cond: [{ $eq: ['$kind', 'income'] }, 0, '$amount.minor'] } } } },
+          { $match: { planned_date: { $gte: dayStartOf(from), $lte: dayEndOf(to) }, status: { $ne: 'draft' } } },
+          { $group: { _id: { $substr: ['$planned_date', 0, 10] }, in: { $sum: { $cond: [{ $eq: ['$kind', 'income'] }, '$amount.minor', 0] } }, out: { $sum: { $cond: [{ $eq: ['$kind', 'income'] }, 0, '$amount.minor'] } } } },
           { $sort: { _id: 1 } },
         ],
       );
@@ -401,7 +403,7 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
         Models.Document,
         input.scope,
         [
-          { $match: { status: { $ne: 'draft' }, planned_date: { $gte: from, $lte: to } } },
+          { $match: { status: { $ne: 'draft' }, planned_date: { $gte: dayStartOf(from), $lte: dayEndOf(to) } } },
           { $group: { _id: '$company_id', income: { $sum: { $cond: [{ $eq: ['$kind', 'income'] }, '$amount.minor', 0] } }, expense: { $sum: { $cond: [{ $eq: ['$kind', 'spend'] }, '$amount.minor', 0] } }, count: { $sum: 1 } } },
           { $sort: { expense: -1 } },
         ],

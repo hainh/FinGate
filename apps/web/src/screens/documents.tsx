@@ -12,10 +12,11 @@ import { Link } from 'react-router';
 import {
   STATUS_KEYS,
   daysBetween,
+  deadlineLabel,
   formatMoney,
+  isDeadlinePast,
   money,
   moneyFromWire,
-  shortDate,
   statusLabel,
   sum,
   today,
@@ -40,7 +41,7 @@ const STATUS_OPTIONS = [
 const SORTS = [
   { value: '-waiting', label: 'Chờ lâu nhất' },
   { value: '-amount', label: 'Số tiền lớn nhất' },
-  { value: '-planned_date', label: 'Ngày dự kiến gần nhất' },
+  { value: '-planned_date', label: 'Hạn thanh toán gần nhất' },
   { value: '-created_at', label: 'Mới tạo trước' },
 ];
 
@@ -123,10 +124,22 @@ export function useDocColumns(): TableColumnsType<QueueRow> {
             ),
         },
         {
-          title: 'Dự kiến',
+          title: 'Hạn thanh toán',
           dataIndex: 'planned_date',
           key: 'planned_date',
-          render: (v: string) => <span className="fg-num">{shortDate(v)}</span>,
+          render: (v: string, r: QueueRow) => {
+            const late = isDeadlinePast(v) && !['paid', 'cancelled', 'rejected'].includes(r.status);
+            return (
+              <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                <span className="fg-num">{deadlineLabel(v)}</span>
+                {late ? (
+                  <span className="fg-chip" style={{ borderColor: 'var(--fg-status-danger-border)', color: 'var(--fg-status-danger-text)', background: 'var(--fg-status-danger-bg)' }}>
+                    Quá hạn
+                  </span>
+                ) : null}
+              </span>
+            );
+          },
         },
       ] as TableColumnsType<QueueRow>,
     [],

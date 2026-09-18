@@ -7,7 +7,7 @@
  * - `notifyNextApprover` → notifications (web) + email (K-13)
  */
 
-import { STATUS_REGISTRY, formatMoney, money, type DocKind, type Role, type StatusKey } from '@fingate/shared';
+import { STATUS_REGISTRY, datePartOf, formatMoney, money, type DocKind, type Role, type StatusKey } from '@fingate/shared';
 import { Models } from '../db/models.ts';
 import { bumpBalance } from '../db/cas.ts';
 import { cacheInvalidate } from '../lib/cache.ts';
@@ -88,7 +88,7 @@ export async function syncBalancesForDocument(input: {
     const is = counted(to);
     if (was === is && !input.execution) return;
 
-    const date = to === 'paid' ? (input.execution?.paid_at ?? doc.planned_date) : doc.planned_date;
+    const date = datePartOf(String(to === 'paid' ? (input.execution?.paid_at ?? doc.planned_date) : doc.planned_date));
     const isIn = doc.kind === 'income';
 
     let plannedDelta: { in: bigint; out: bigint } = { in: 0n, out: 0n };
@@ -114,7 +114,7 @@ export async function syncBalancesForDocument(input: {
       await bumpBalance({
         company_id: String(doc.target.company_id),
         account_id: String(doc.target.account_id),
-        date: input.execution?.paid_at ?? doc.planned_date,
+        date: datePartOf(String(input.execution?.paid_at ?? doc.planned_date)),
         actualIn: actual,
       });
     }

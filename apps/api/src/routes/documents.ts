@@ -15,6 +15,7 @@ import {
   STATUS_REGISTRY,
   formatMoney,
   money,
+  normalizePlannedDate,
   statusLabel,
   today,
   vnDate,
@@ -260,7 +261,7 @@ export function documentRoutes(app: FastifyInstance): void {
             group_managed: Boolean(body.source.group_managed),
           },
           target: body.target ? { company_id: body.target.company_id, account_id: body.target.account_id ?? null } : null,
-          planned_date: body.planned_date,
+          planned_date: normalizePlannedDate(body.planned_date),
           business_date: body.business_date ?? vnDate(),
           priority: body.priority,
           contract: { code: body.contract.code ?? null, value: body.contract.value ? { minor: BigInt(body.contract.value.amount_minor), currency: body.contract.value.currency, decimals: 0 } : null },
@@ -329,9 +330,10 @@ export function documentRoutes(app: FastifyInstance): void {
         }
 
         const set: Record<string, unknown> = {};
-        for (const key of ['title', 'purpose', 'note', 'priority', 'planned_date', 'business_date', 'debt_code', 'category_id', 'department_id', 'loan_id'] as const) {
+        for (const key of ['title', 'purpose', 'note', 'priority', 'business_date', 'debt_code', 'category_id', 'department_id', 'loan_id'] as const) {
           if (body[key] !== undefined) set[key] = body[key];
         }
+        if (body.planned_date !== undefined) set.planned_date = normalizePlannedDate(body.planned_date);
         if (body.payee) set.payee = { ...doc.payee, ...body.payee };
         if (body.source?.account_id) await assertSourceAccountAllowed(String(doc.company_id), body.source.account_id);
         if (body.source) set.source = { ...doc.source, ...body.source };

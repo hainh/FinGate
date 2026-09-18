@@ -4,7 +4,7 @@
 
 import { z } from 'zod';
 import { DOC_KINDS, ROLES } from '../status/index.js';
-import { actionEnum, businessDate, docKind, docVersion, evidenceType, moneyField, moneyWire, objectId, roleEnum, statusKey, uuid } from './common.js';
+import { actionEnum, businessDate, businessDateTime, docKind, docVersion, evidenceType, moneyField, moneyWire, objectId, roleEnum, statusKey, uuid } from './common.js';
 
 export const priority = z.enum(['low', 'normal', 'high', 'urgent']);
 export type Priority = z.infer<typeof priority>;
@@ -74,7 +74,7 @@ const documentFields = z.object({
       .nullable()
       .optional(),
     source: sourceField,
-    planned_date: businessDate,
+    planned_date: businessDateTime,
     business_date: businessDate.optional(),
     priority: priority.default('normal'),
     contract: contractField.default({}),

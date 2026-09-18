@@ -435,6 +435,39 @@ export function dateTimeLabel(at: Date | string | number): string {
   return `${ddmmyyyy(at)} ${vnTime(at)}`;
 }
 
+/** `YYYY-MM-DDTHH:mm` theo giờ Việt Nam — mốc deadline của phiếu. */
+export function vnDateTime(at: Date | string | number = new Date()): string {
+  return `${vnDate(at)}T${vnTime(at)}`;
+}
+
+/* ---------------------- deadline phiếu (planned_date) ---------------------- */
+
+/** Cắt phần ngày của mốc deadline `YYYY-MM-DDTHH:mm`. */
+export const datePartOf = (planned: string): string => planned.slice(0, 10);
+
+/** `YYYY-MM-DDT00:00` — biên dưới của một ngày nghiệp vụ. */
+export const dayStartOf = (iso: string): string => `${iso.slice(0, 10)}T00:00`;
+
+/** `YYYY-MM-DDT23:59` — biên trên của một ngày nghiệp vụ. */
+export const dayEndOf = (iso: string): string => `${iso.slice(0, 10)}T23:59`;
+
+/** Chuẩn hoá `YYYY-MM-DD` cũ thành `YYYY-MM-DDTHH:mm` (mặc định 00:00). */
+export const normalizePlannedDate = (planned: string): string => (planned.length === 10 ? `${planned}T00:00` : planned);
+
+/** Deadline đã qua chưa — so theo giờ:phút, giờ VN (so chuỗi vì lưu dạng wall-clock). */
+export function isDeadlinePast(planned: string | null | undefined, nowRef: Date = new Date()): boolean {
+  if (!planned) return false;
+  const v = planned.length === 10 ? `${planned}T00:00` : planned;
+  return v < vnDateTime(nowRef);
+}
+
+/** `18/09/2026 09:00` — nhãn deadline (đọc trực tiếp wall-clock, không đổi múi giờ). */
+export function deadlineLabel(planned: string): string {
+  const [d = '', t = '00:00'] = planned.split('T');
+  const [y = '', m = '', dd = ''] = d.split('-');
+  return `${dd}/${m}/${y} ${t}`;
+}
+
 /** `T2 08/09` cho bảng forecast. */
 export function weekdayDate(at: Date | string | number): string {
   return `${vnWeekday(at)} ${shortDate(at)}`;
