@@ -52,7 +52,7 @@ const MINE_OPTIONS = [
   { value: 'approved_by_me', label: 'Tôi đã duyệt' },
 ];
 
-export function useDocColumns(): TableColumnsType<QueueRow> {
+export function useDocColumns(sortable = false): TableColumnsType<QueueRow> {
   return useMemo(
     () =>
       [
@@ -60,6 +60,7 @@ export function useDocColumns(): TableColumnsType<QueueRow> {
           title: 'Mã / loại',
           dataIndex: 'code',
           key: 'code',
+          sorter: sortable ? (a: QueueRow, b: QueueRow) => a.code.localeCompare(b.code) : undefined,
           render: (_v: unknown, r: QueueRow) => (
             <div>
               <Link to={deepLink(r)} className="fg-link" style={{ fontWeight: 500 }}>
@@ -127,6 +128,7 @@ export function useDocColumns(): TableColumnsType<QueueRow> {
           title: 'Hạn thanh toán',
           dataIndex: 'planned_date',
           key: 'planned_date',
+          sorter: sortable ? (a: QueueRow, b: QueueRow) => (a.planned_date ?? '').localeCompare(b.planned_date ?? '') : undefined,
           render: (v: string, r: QueueRow) => {
             const late = isDeadlinePast(v) && !['paid', 'cancelled', 'rejected'].includes(r.status);
             return (
@@ -142,7 +144,7 @@ export function useDocColumns(): TableColumnsType<QueueRow> {
           },
         },
       ] as TableColumnsType<QueueRow>,
-    [],
+    [sortable],
   );
 }
 
@@ -160,9 +162,11 @@ export interface DocListConfig {
   bulk?: boolean;
   createHref?: string;
   createLabel?: string;
+  /** sắp xếp trực tiếp trên cột bảng (ẩn dropdown "Sắp xếp" ở thanh lọc). */
+  sortOnTable?: boolean;
 }
 
-export function DocListScreen({ title, source, fixed = {}, bulk, createHref, createLabel }: DocListConfig): ReactNode {
+export function DocListScreen({ title, source, fixed = {}, bulk, createHref, createLabel, sortOnTable = false }: DocListConfig): ReactNode {
   const { can } = useAuth();
   const canCreate = can('doc:create');
   const [params, setParams] = useUrlSearchParamsShim();
@@ -209,7 +213,7 @@ export function DocListScreen({ title, source, fixed = {}, bulk, createHref, cre
   const [selected, setSelected] = useState<Record<string, QueueRow>>({});
   const [bulkOpen, setBulkOpen] = useState(false);
   const anyFilter = Boolean(qDebounced || get('status') || get('mine'));
-  const columns = useDocColumns();
+  const columns = useDocColumns(sortOnTable);
   const selectable = Boolean(bulk);
 
   const selectedList = Object.values(selected);
@@ -236,7 +240,9 @@ export function DocListScreen({ title, source, fixed = {}, bulk, createHref, cre
         {source === 'documents' ? (
           <FgSelect ariaLabel="Phạm vi hồ sơ" options={MINE_OPTIONS} value={get('mine')} onChange={(v) => setFilter('mine', v ?? '')} style={{ width: 170 }} />
         ) : null}
-        <FgSelect ariaLabel="Sắp xếp" options={SORTS} value={get('sort') || '-waiting'} onChange={(v) => setFilter('sort', v ?? '')} style={{ width: 180 }} />
+        {sortOnTable ? null : (
+          <FgSelect ariaLabel="Sắp xếp" options={SORTS} value={get('sort') || '-waiting'} onChange={(v) => setFilter('sort', v ?? '')} style={{ width: 180 }} />
+        )}
         <FgSearchInput value={qText} onChange={setQText} />
         {anyFilter ? (
           <FgButton
@@ -420,27 +426,27 @@ export function ChangesRequestedScreen(): ReactNode {
 
 /** CHI-01 — danh sách chi. */
 export function SpendListScreen(): ReactNode {
-  return <DocListScreen title="Phiếu chi" source="documents" fixed={{ kind: 'spend' }} createHref="/chi/moi" createLabel="+ Đề nghị chi" />;
+  return <DocListScreen title="Phiếu chi" source="documents" fixed={{ kind: 'spend' }} createHref="/chi/moi" createLabel="+ Đề nghị chi" sortOnTable />;
 }
 
 /** CHI-04 — ghim pending.* (cùng khung, filter ghim qua URL mặc định). */
 export function SpendPendingScreen(): ReactNode {
-  return <DocListScreen title="Chi chờ duyệt" source="documents" fixed={{ kind: 'spend', status: 'pending.gd' }} />;
+  return <DocListScreen title="Chi chờ duyệt" source="documents" fixed={{ kind: 'spend', status: 'pending.gd' }} sortOnTable />;
 }
 
 /** CHI-07 — đã thanh toán. */
 export function SpendPaidScreen(): ReactNode {
-  return <DocListScreen title="Chi đã thanh toán" source="documents" fixed={{ kind: 'spend', status: 'paid' }} />;
+  return <DocListScreen title="Chi đã thanh toán" source="documents" fixed={{ kind: 'spend', status: 'paid' }} sortOnTable />;
 }
 
 /** THU-01. */
 export function IncomeListScreen(): ReactNode {
-  return <DocListScreen title="Phiếu thu" source="documents" fixed={{ kind: 'income' }} createHref="/thu/moi" createLabel="+ Khoản thu" />;
+  return <DocListScreen title="Phiếu thu" source="documents" fixed={{ kind: 'income' }} createHref="/thu/moi" createLabel="+ Khoản thu" sortOnTable />;
 }
 
 /** THU-04 — thu quá hạn. */
 export function IncomeOverdueScreen(): ReactNode {
-  return <DocListScreen title="Thu quá hạn" source="documents" fixed={{ kind: 'income', overdue_only: 'true' }} />;
+  return <DocListScreen title="Thu quá hạn" source="documents" fixed={{ kind: 'income', overdue_only: 'true' }} sortOnTable />;
 }
 
 /** DANH MỤC — chuyển tiền nội bộ + đảo hạn mở (link DOC-01). */
