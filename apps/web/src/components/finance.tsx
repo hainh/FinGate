@@ -204,74 +204,101 @@ export function FgApprovalTimeline({
 
 /* ================= 7 câu hỏi — decision pack (OVL-02 / tab Tóm tắt) ================= */
 
-const StatRow = ({ label, children }: { label: ReactNode; children: ReactNode }) => (
-  <div className="fg-stat-row">
-    <span className="fg-stat-label">{label}</span>
-    <span style={{ textAlign: 'end' }}>{children}</span>
+/**
+ * Hướng dòng tiền → màu nhấn phân chia các khối: vào = xanh lá, ra = cam (nóng),
+ * nội bộ = xanh dương (trung tính).
+ */
+export type DecisionDirection = 'in' | 'out' | 'neutral';
+
+const DIRECTION_TONE: Record<DecisionDirection, string> = {
+  in: 'success',
+  out: 'warning',
+  neutral: 'info',
+};
+
+export const directionOf = (kind: string): DecisionDirection =>
+  kind === 'income' ? 'in' : kind === 'spend' ? 'out' : 'neutral';
+
+function SumSection({ tone, title, children }: { tone: string; title: string; children: ReactNode }): ReactNode {
+  const t = toneStyle(tone);
+  return (
+    <section className="fg-sum-section" style={{ borderInlineStartColor: t.borderColor as string }}>
+      <div className="fg-sum-title" style={{ color: t.color }}>
+        {title}
+      </div>
+      <div className="fg-sum-body">{children}</div>
+    </section>
+  );
+}
+
+const SumRow = ({ label, children }: { label: ReactNode; children: ReactNode }) => (
+  <div className="fg-sum-row">
+    <span className="fg-sum-label">{label}</span>
+    <span className="fg-sum-value">{children}</span>
   </div>
 );
 
-export function FgDecisionPack({ pack }: { pack: DecisionPack }): ReactNode {
+export function FgDecisionPack({
+  pack,
+  direction = 'out',
+}: {
+  pack: DecisionPack;
+  direction?: DecisionDirection;
+}): ReactNode {
   const w = (m: MoneyWire | null | undefined): Money | null => moneyFromWire(m);
   const bal = w(pack.q6_impact.balance_after);
   const min = w(pack.q6_impact.min_balance);
+  const accent = DIRECTION_TONE[direction] ?? 'info';
   return (
-    <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
-      <FgCard>
-        <FgText style="overline" color="muted">
-          1 · Chi cho ai
+    <div className="fg-sum">
+      <SumSection tone={accent} title="Đơn vị nhận">
+        <FgText style="body" strong as="div">
+          {pack.q1_payee.name}
         </FgText>
-        <StatRow label="Đơn vị nhận">{pack.q1_payee.name}</StatRow>
-        {pack.q1_payee.tax_code ? <StatRow label="MST">{pack.q1_payee.tax_code}</StatRow> : null}
-        {pack.q1_payee.bank ? <StatRow label="TK nhận">{pack.q1_payee.bank}</StatRow> : null}
+        {pack.q1_payee.tax_code ? <SumRow label="MST">{pack.q1_payee.tax_code}</SumRow> : null}
+        {pack.q1_payee.bank ? <SumRow label="TK nhận">{pack.q1_payee.bank}</SumRow> : null}
         {pack.q1_payee.is_internal ? (
-          <StatRow label="Loại">
+          <SumRow label="Loại">
             <FgTooltip title="Chuyển nội bộ — không tính vào chi phí/doanh thu">
               <span>Nội bộ tập đoàn</span>
             </FgTooltip>
-          </StatRow>
+          </SumRow>
         ) : null}
-      </FgCard>
-      <FgCard>
-        <FgText style="overline" color="muted">
-          2 · Bao nhiêu
-        </FgText>
-        <StatRow label="Số tiền">
+      </SumSection>
+
+      <SumSection tone={accent} title="Số tiền">
+        <div style={{ marginBottom: 'var(--fg-space-1)' }}>
           <FgMoney value={w(pack.q2_amount.amount)} mode="full" emphasis />
-        </StatRow>
-        {pack.q2_amount.amount_usd ? (
-          <StatRow label="Quy USD">
-            <FgMoney value={w(pack.q2_amount.amount_usd)} mode="full" />
-          </StatRow>
-        ) : null}
-        {pack.q2_amount.fx_rate ? <StatRow label="Tỷ giá">{pack.q2_amount.fx_rate}</StatRow> : null}
-      </FgCard>
-      <FgCard>
-        <div style={{ display: 'block', marginBottom: 8 }}>
-          <FgText style="overline" color="muted">
-            3 · Để làm gì
-          </FgText>
         </div>
-        <FgText style="bodyS">{pack.q3_purpose.text}</FgText>
-        <div style={{ marginTop: 8 }}>
+        {pack.q2_amount.amount_usd ? (
+          <SumRow label="Quy USD">
+            <FgMoney value={w(pack.q2_amount.amount_usd)} mode="full" />
+          </SumRow>
+        ) : null}
+        {pack.q2_amount.fx_rate ? <SumRow label="Tỷ giá">{pack.q2_amount.fx_rate}</SumRow> : null}
+      </SumSection>
+
+      <SumSection tone={accent} title="Mục đích">
+        <FgText style="bodyS" as="div">
+          {pack.q3_purpose.text}
+        </FgText>
+        <div style={{ marginTop: 'var(--fg-space-1)' }}>
           <FgText style="caption" color="muted">
             {pack.q3_purpose.category ?? 'Chưa phân loại'}
             {pack.q3_purpose.department ? ` · ${pack.q3_purpose.department}` : ''}
           </FgText>
         </div>
-      </FgCard>
-      <FgCard>
-        <FgText style="overline" color="muted">
-          4 · Căn cứ
-        </FgText>
-        <StatRow label="Hợp đồng">{pack.q4_basis.contract_code ?? '—'}</StatRow>
+      </SumSection>
+
+      <SumSection tone={accent} title="Căn cứ">
+        <SumRow label="Hợp đồng">{pack.q4_basis.contract_code ?? '—'}</SumRow>
         {pack.q4_basis.contract_value ? (
-          <StatRow label="Giá trị HĐ">
+          <SumRow label="Giá trị HĐ">
             <FgMoney value={w(pack.q4_basis.contract_value)} mode="compact" />
-          </StatRow>
+          </SumRow>
         ) : null}
-        <StatRow label="Hóa đơn">{pack.q4_basis.invoice ?? '—'}</StatRow>
-        <div style={{ marginTop: 8 }}>
+        <SumRow label="Hóa đơn">{pack.q4_basis.invoice ?? '—'}</SumRow>
+        <div className="fg-sum-note">
           {pack.evidence.missing.length ? (
             <FgText style="bodyS" color="danger">
               Thiếu chứng từ: {pack.evidence.missing.map((t) => EVIDENCE_LABEL[t as keyof typeof EVIDENCE_LABEL] ?? t).join(', ')}
@@ -282,56 +309,54 @@ export function FgDecisionPack({ pack }: { pack: DecisionPack }): ReactNode {
             </FgText>
           )}
         </div>
-      </FgCard>
-      <FgCard>
-        <FgText style="overline" color="muted">
-          5 · Nguồn tiền & ảnh hưởng số dư
-        </FgText>
-        <StatRow label={pack.q5_source.fund === 'bank' ? 'Tài khoản' : 'Quỹ'}>
+      </SumSection>
+
+      <SumSection tone={pack.q6_impact.breach ? 'danger' : accent} title="Nguồn tiền & ảnh hưởng số dư">
+        <SumRow label={pack.q5_source.fund === 'bank' ? 'Tài khoản' : 'Quỹ'}>
           {pack.q5_source.account_label ?? '—'}
-        </StatRow>
-        {pack.q5_source.group_account_label ? <StatRow label="TK Tập đoàn phụ trách">{pack.q5_source.group_account_label}</StatRow> : null}
-        <StatRow label="Số dư khả dụng ngay">
+        </SumRow>
+        {pack.q5_source.group_account_label ? <SumRow label="TK Tập đoàn phụ trách">{pack.q5_source.group_account_label}</SumRow> : null}
+        <SumRow label="Số dư khả dụng ngay">
           <FgMoney value={w(pack.q6_impact.available_now)} mode="full" />
-        </StatRow>
-        <StatRow label="Sau giao dịch">
+        </SumRow>
+        <SumRow label="Sau giao dịch">
           <FgMoney value={bal} mode="full" style={{ color: pack.q6_impact.breach ? 'var(--fg-status-danger-text)' : undefined, fontWeight: 500 }} />
-        </StatRow>
-        <StatRow label="Ngưỡng tối thiểu">
+        </SumRow>
+        <SumRow label="Ngưỡng tối thiểu">
           <FgMoney value={min} mode="compact" />
-        </StatRow>
+        </SumRow>
         {pack.q6_impact.breach ? (
-          <FgText style="bodyS" color="danger">
-            ⛔ Sau giao dịch sẽ dưới ngưỡng tối thiểu
-          </FgText>
+          <div className="fg-sum-note">
+            <FgText style="bodyS" color="danger">
+              ⛔ Sau giao dịch sẽ dưới ngưỡng tối thiểu
+            </FgText>
+          </div>
         ) : null}
-      </FgCard>
-      <FgCard>
-        <FgText style="overline" color="muted">
-          6 · Trong kế hoạch / ngân sách?
-        </FgText>
-        <StatRow label="Trạng thái">
+      </SumSection>
+
+      <SumSection tone={pack.q7_plan.in_plan ? 'success' : 'danger'} title="Ngân sách / kế hoạch">
+        <SumRow label="Trạng thái">
           {pack.q7_plan.in_plan ? (
             <FgText color="success">Trong kế hoạch</FgText>
           ) : (
             <FgText color="danger">NGOÀI NGÂN SÁCH</FgText>
           )}
-        </StatRow>
-        {pack.q7_plan.budget_line ? <StatRow label="Dòng ngân sách">{pack.q7_plan.budget_line}</StatRow> : null}
+        </SumRow>
+        {pack.q7_plan.budget_line ? <SumRow label="Dòng ngân sách">{pack.q7_plan.budget_line}</SumRow> : null}
         {pack.q7_plan.used && pack.q7_plan.limit ? (
-          <StatRow label="Đã dùng / giới hạn">
+          <SumRow label="Đã dùng / giới hạn">
             <FgMoney value={w(pack.q7_plan.used)} mode="compact" /> / <FgMoney value={w(pack.q7_plan.limit)} mode="compact" />
-          </StatRow>
+          </SumRow>
         ) : null}
         {pack.q7_plan.percent !== null && pack.q7_plan.percent !== undefined ? (
-          <StatRow label="Tỷ lệ đã dùng">{pct(pack.q7_plan.percent, 0)}</StatRow>
+          <SumRow label="Tỷ lệ đã dùng">{pct(pack.q7_plan.percent, 0)}</SumRow>
         ) : null}
-        <div style={{ marginTop: 8 }}>
+        <div className="fg-sum-note">
           <FgText style="caption" color="muted">
             Quy trình: {pack.matrix_label}
           </FgText>
         </div>
-      </FgCard>
+      </SumSection>
     </div>
   );
 }

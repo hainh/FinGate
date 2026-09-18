@@ -25,7 +25,7 @@ import { useDecisionPack, useTransition, type TransitionInput } from '../app/que
 import type { DocumentDetail, QueueRow } from '../app/types.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgPassword, FgStatusChip, FgTextarea, FgText } from '../components/primitives.tsx';
 import { FgModal } from '../components/uitk.tsx';
-import { FgDecisionPack } from '../components/finance.tsx';
+import { FgDecisionPack, directionOf } from '../components/finance.tsx';
 
 /* ================= step-up ================= */
 
@@ -310,7 +310,7 @@ export function ApprovalConfirmModal({
           <div className="fg-stripe-fast">⚡ Bạn đang duyệt TRƯỚC cấp dưới chưa xong — lý do sẽ vào audit log và hiển thị cho mọi người.</div>
         </div>
       ) : null}
-      {pack.data ? <FgDecisionPack pack={pack.data} /> : <FgText style="bodyS" color="muted">Đang tải 7 câu hỏi kiểm soát…</FgText>}
+      {pack.data ? <FgDecisionPack pack={pack.data} direction={directionOf(doc.kind)} /> : <FgText style="bodyS" color="muted">Đang tải 7 câu hỏi kiểm soát…</FgText>}
       {pack.data?.evidence.missing.length ? (
         <div style={{ marginBottom: 12 }}>
           <FgAlert

@@ -494,6 +494,57 @@ body {
   font-size: var(--fg-font-body-s-size);
 }
 
+/* ---------------- decision pack — tab Tóm tắt / OVL-02 ---------------- */
+
+.fg-sum {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: var(--fg-space-4) var(--fg-space-6);
+}
+
+.fg-sum-section {
+  border-inline-start: var(--fg-border-w-2) solid var(--fg-border-default);
+  padding-inline-start: var(--fg-space-3);
+  min-width: 0;
+}
+
+.fg-sum-title {
+  font-size: var(--fg-font-overline-size);
+  line-height: var(--fg-font-overline-line);
+  letter-spacing: var(--fg-tracking-overline);
+  text-transform: uppercase;
+  font-weight: var(--fg-weight-semibold);
+  margin: 0 0 var(--fg-space-1);
+}
+
+.fg-sum-body {
+  display: grid;
+  gap: 1px;
+}
+
+.fg-sum-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--fg-space-3);
+  padding: 1px 0;
+  min-width: 0;
+}
+
+.fg-sum-label {
+  color: var(--fg-text-muted);
+  font-size: var(--fg-font-body-s-size);
+}
+
+.fg-sum-value {
+  text-align: end;
+  font-size: var(--fg-font-body-s-size);
+  min-width: 0;
+}
+
+.fg-sum-note {
+  margin-top: var(--fg-space-2);
+}
+
 .fg-money {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

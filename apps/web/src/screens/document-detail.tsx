@@ -25,7 +25,7 @@ import type { DocumentDetail } from '../app/types.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgPassword, FgStatusChip, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonParagraphs, FgSkeletonTable, FgTable, FgTabs } from '../components/uitk.tsx';
-import { FgApprovalTimeline, FgDecisionPack, OwnerLine } from '../components/finance.tsx';
+import { FgApprovalTimeline, FgDecisionPack, OwnerLine, directionOf } from '../components/finance.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery } from '../components/pagekit.tsx';
 import { useAuth } from '../app/store.tsx';
@@ -262,7 +262,7 @@ function SummaryTab({ doc }: { doc: DocumentDetail }): ReactNode {
               style={{ marginBottom: 'var(--fg-space-4)' }}
             />
           ) : null}
-          <FgDecisionPack pack={p} />
+          <FgDecisionPack pack={p} direction={directionOf(doc.kind)} />
         </>
       )}
     </FgQuery>
