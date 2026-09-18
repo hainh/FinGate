@@ -25,6 +25,7 @@ import {
   type Role,
   type StatusKey,
 } from '@fingate/shared';
+import { getEnv } from '../../env.ts';
 import { Models } from '../../db/models.ts';
 import { cas } from '../../db/cas.ts';
 import { verifyPassword } from '../../lib/password.ts';
@@ -378,8 +379,8 @@ export async function transition(input: {
     throw new ApiError({ code: 'FG-RBAC-001' });
   }
 
-  // 2. step-up verify cho hành động nhạy cảm (§7.2)
-  if (requiresStepUp(action)) {
+  // 2. step-up verify cho hành động nhạy cảm (§7.2) — mặc định TẮT (APPROVAL_STEP_UP=false)
+  if (requiresStepUp(action) && getEnv().APPROVAL_STEP_UP === 'true') {
     await assertStepUp(actor.user_id, body.verify);
   }
 

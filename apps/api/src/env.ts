@@ -43,6 +43,12 @@ const envSchema = z.object({
   /** bỏ qua mail ở dev/test: log ra console thay vì gửi */
   MAIL_MODE: z.enum(['smtp', 'log', 'off']).default('log'),
 
+  /**
+   * Bắt xác thực lại (mật khẩu/OTP) trước hành động duyệt/chi.
+   * MẶC ĐỊNH TẮT — bật `true` nếu muốn yêu cầu step-up như ADR-14.
+   */
+  APPROVAL_STEP_UP: z.enum(['true', 'false']).default('false'),
+
   /** phiên thường (không chọn "ghi nhớ"): idle 1day, absolute 7 day (arch §7.2) */
   SESSION_IDLE_MINUTES: z.coerce.number().int().default(60 * 24),
   SESSION_ABSOLUTE_HOURS: z.coerce.number().int().default(24 * 7),
