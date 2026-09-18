@@ -9,6 +9,7 @@
 import type { FastifyInstance } from 'fastify';
 import {
   ApiError,
+  DEFAULT_AMOUNT_LIMIT_MINOR,
   MFA_REQUIRED_ROLES,
   ROLE_LABEL,
   buildEntitlements,
@@ -674,7 +675,7 @@ async function finishActivation(
         company_id: inv.company_id,
         department_id: inv.department_id ?? null,
         role,
-        amount_limit_minor: 0n,
+        amount_limit_minor: BigInt(DEFAULT_AMOUNT_LIMIT_MINOR[role] ?? '0'),
       } as never);
     }
   }

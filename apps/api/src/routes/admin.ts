@@ -11,6 +11,7 @@ import mongoose from 'mongoose';
 import ExcelJS from 'exceljs';
 import {
   ApiError,
+  DEFAULT_AMOUNT_LIMIT_MINOR,
   MFA_REQUIRED_ROLES,
   ROLE_LABEL,
   today,
@@ -225,7 +226,7 @@ export function adminRoutes(app: FastifyInstance): void {
           company_id: companyId,
           department_id: body.department_id ?? null,
           role: body.role,
-          amount_limit_minor: body.amount_limit_minor ? BigInt(body.amount_limit_minor) : 0n,
+          amount_limit_minor: body.amount_limit_minor ? BigInt(body.amount_limit_minor) : BigInt(DEFAULT_AMOUNT_LIMIT_MINOR[body.role as Role] ?? '0'),
           status: 'active',
         } as never);
 
@@ -777,7 +778,7 @@ export function adminRoutes(app: FastifyInstance): void {
           company_id: body.to_company_id,
           department_id: body.department_id ?? null,
           role: body.role ?? actor.role,
-          amount_limit_minor: 0n,
+          amount_limit_minor: BigInt(DEFAULT_AMOUNT_LIMIT_MINOR[(body.role ?? actor.role) as Role] ?? '0'),
           valid_from: effectiveAt,
         } as never);
         await revokeAllUserSessions(id, 'chuyển công ty');

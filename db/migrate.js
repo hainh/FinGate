@@ -9,6 +9,9 @@ import { readdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { withDb } from './_common.js';
+// 'mongoose' không resolve được từ db/ (pnpm node_modules nghiêm ngặt) → lấy qua
+// module đã dùng ở apps/api/dist (đã được connectDb() kết nối trong withDb).
+import { connectDb } from '../apps/api/dist/lib/mongo.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(here, 'migrations');
@@ -37,7 +40,8 @@ await withDb(async () => {
     const mod = await import(pathToFileURL(resolve(MIGRATIONS_DIR, file)).href);
     if (typeof mod.up !== 'function') throw new Error(`${file} thiếu export up(db)`);
     process.stdout.write(`→ ${file} `);
-    await mod.up(await import('mongoose').then((m) => m.default.connection));
+    const mongoose = await connectDb();
+    await mod.up(mongoose.connection);
     applied.add(file);
     await Models.Setting.updateOne(
       { key: 'migrations.applied' },
