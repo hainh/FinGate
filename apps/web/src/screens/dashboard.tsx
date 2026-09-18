@@ -46,7 +46,7 @@ function MiniBarChart({ chart }: { chart: NonNullable<import('../app/types.ts').
 }
 
 export function DashboardScreen(): ReactNode {
-  const { me } = useAuth();
+  const { me, can } = useAuth();
   const overview = useOverview();
   const report = useReport('thu-chi-ngay');
   const rollovers = useRollovers('30d');
@@ -79,9 +79,11 @@ export function DashboardScreen(): ReactNode {
                 </>
               }
               actions={
-                <Link to="/cho-toi-duyet">
-                  <FgButton variant="primary">Mở hàng chờ của tôi ({ov.counts.awaiting_me})</FgButton>
-                </Link>
+                can('approval:act') ? (
+                  <Link to="/cho-toi-duyet">
+                    <FgButton variant="primary">Mở hàng chờ của tôi ({ov.counts.awaiting_me})</FgButton>
+                  </Link>
+                ) : null
               }
             />
 
@@ -114,7 +116,7 @@ export function DashboardScreen(): ReactNode {
             {/* tầng 02 — KPI */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 'var(--fg-space-4)', marginBottom: 'var(--fg-space-4)' }}>
               {kpis.map((k) => (
-                <FgKpiCard key={k.label} kpi={k} href={k.label.includes('duyệt') ? '/cho-toi-duyet' : undefined} />
+                <FgKpiCard key={k.label} kpi={k} href={k.label.includes('duyệt') && can('approval:act') ? '/cho-toi-duyet' : undefined} />
               ))}
             </div>
 
@@ -186,9 +188,11 @@ export function DashboardScreen(): ReactNode {
               title={`Chờ ${me?.display_name?.split(' ').slice(-1)[0] ?? 'bạn'} duyệt`}
               style={{ marginTop: 'var(--fg-space-4)' }}
               extra={
-                <Link to="/cho-toi-duyet" className="fg-link" style={{ fontSize: 12 }}>
-                  Xem tất cả ({ov.counts.awaiting_me})
-                </Link>
+                can('approval:act') ? (
+                  <Link to="/cho-toi-duyet" className="fg-link" style={{ fontSize: 12 }}>
+                    Xem tất cả ({ov.counts.awaiting_me})
+                  </Link>
+                ) : null
               }
             >
               {!ov.awaiting_me_rows.length ? (
