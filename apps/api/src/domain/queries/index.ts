@@ -147,6 +147,49 @@ const LIST_PROJECTION = {
   'evidence.missing': 1,
 } as const;
 
+/**
+ * "Chờ tôi duyệt" chỉ gồm hồ sơ mà bước của người gọi là cấp THẤP NHẤT còn chờ:
+ * mọi cấp dưới trong ma trận duyệt của phiếu đó đã duyệt xong. Cấp cao hơn vẫn
+ * thấy phiếu ở các danh sách khác (không truyền `mine`) để duyệt nhảy cấp (blueprint §IV).
+ *
+ * Bước chưa gán người (`user_id: null`) — xảy ra khi tài khoản/assignment của cấp
+ * duyệt được tạo SAU khi hồ sơ đã gửi. Khi đó ai đúng vai trò cũng xử lý được.
+ */
+function lowestPendingOwnerFilter(userId: string, role?: Role): Record<string, unknown> {
+  const owned = role
+    ? {
+        $or: [
+          { $eq: [{ $toString: '$$s.user_id' }, userId] },
+          { $and: [{ $eq: ['$$s.user_id', null] }, { $eq: ['$$s.role', role] }] },
+        ],
+      }
+    : { $eq: [{ $toString: '$$s.user_id' }, userId] };
+  return {
+    $expr: {
+      $let: {
+        vars: {
+          pending: {
+            $filter: {
+              input: '$approval.steps',
+              as: 's',
+              cond: { $in: ['$$s.state', ['current', 'waiting']] },
+            },
+          },
+        },
+        in: {
+          $anyElementTrue: {
+            $map: {
+              input: '$$pending',
+              as: 's',
+              in: { $and: [{ $eq: ['$$s.order', { $min: '$$pending.order' }] }, owned] },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
 export function queueFilter(input: QueueQuery): Record<string, unknown> {
   const filter: Record<string, unknown> = {};
   if (input.kind) filter.kind = input.kind;
@@ -156,12 +199,7 @@ export function queueFilter(input: QueueQuery): Record<string, unknown> {
   if (input.missingEvidenceOnly) filter['evidence.missing.0'] = { $exists: true };
   if (input.mine === 'created') filter.created_by = input.userId;
   if (input.mine === 'to_approve') {
-    // Bước chưa gán người duyệt (`user_id: null`) — xảy ra khi tài khoản/assignment
-    // của cấp duyệt được tạo SAU khi hồ sơ đã gửi. Khi đó ai đúng vai trò cũng xử lý được,
-    // khớp với timeline "bàn của bạn" (FgApprovalTimeline highlight theo role).
-    const owner: Record<string, unknown>[] = [{ user_id: input.userId }];
-    if (input.role) owner.push({ user_id: null, role: input.role });
-    filter['approval.steps'] = { $elemMatch: { state: { $in: ['current', 'waiting'] }, $or: owner } };
+    Object.assign(filter, lowestPendingOwnerFilter(input.userId, input.role));
     if (!input.status) filter.status = { $in: [...DECISION_STATUSES] };
   }
   if (input.mine === 'approved_by_me') {
@@ -309,10 +347,8 @@ export function docHref(kind: string, id: string): string {
 
 export async function awaitingBadge(scope: ScopeLike, userId: string, role?: Role): Promise<{ count: number; total_minor: bigint }> {
   return cacheThrough(`badge:${userId}:${role ?? ''}`, async () => {
-    const owner: Record<string, unknown>[] = [{ user_id: userId }];
-    if (role) owner.push({ user_id: null, role });
     const f = withScope(scopeOf(scope), {
-      'approval.steps': { $elemMatch: { state: { $in: ['current', 'waiting'] }, $or: owner } },
+      ...lowestPendingOwnerFilter(userId, role),
       status: { $in: [...DECISION_STATUSES] },
     });
     const [count, rows] = await Promise.all([

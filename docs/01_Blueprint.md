@@ -184,6 +184,7 @@ Quy trình mặc định:
 ## Cơ chế hiển thị và duyệt vượt cấp (fast-track)
 
 * Ngay khi phiếu được gửi đi (khác trạng thái Nháp), **tất cả các cấp trong quy trình đều nhìn thấy phiếu** và có quyền duyệt ngay, không bắt buộc chờ cấp dưới xử lý xong.
+* Trang **Chờ tôi duyệt** chỉ liệt kê phiếu mà bước của người dùng là **cấp thấp nhất còn chờ** — tức mọi cấp dưới trong Approval Matrix của phiếu đã duyệt xong. Cấp cao hơn vẫn thấy phiếu (để duyệt vượt cấp) ở các danh sách khác như *Chi chờ duyệt*, danh sách hồ sơ.
 * Khi một cấp hoàn tất duyệt, hệ thống **tự động thông báo cho cấp cao hơn kế tiếp** (notification trên web, có thể mở rộng email/mobile theo mục XVIII).
 * Trạng thái hồ sơ luôn phản ánh **cấp thấp nhất chưa duyệt** ("đang nằm ở bàn của ai"); nếu có cấp cao hơn đã duyệt trước, hiển thị thêm nhãn "Đã duyệt trước bởi {cấp}".
 * Hồ sơ được coi là **Đã duyệt** khi cấp cao nhất theo Approval Matrix đã duyệt; các cấp trung gian chưa xử lý được đánh dấu **bỏ qua** trong lịch sử phê duyệt (không xóa, audit log lưu đầy đủ ai duyệt lúc nào).

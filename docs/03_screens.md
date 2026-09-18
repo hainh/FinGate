@@ -114,7 +114,7 @@ Rail cấp 2 collapse được; `Chờ tôi duyệt` luôn có `FgBadgeCount`. N
 
 | ID | Màn hình | Route | Vai trò | Component | St | Ph | Nền |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| APPR-01 | Chờ tôi duyệt | `/cho-toi-duyet` | CV, KTT, PGĐ, GĐ | `FgFilterBar`, `FgTable` sort mặc định *chờ lâu nhất*, group `Công ty` tắt được, `FgStatusChip(withOwner)`, bulk bar (`Đã chọn 12 · Tổng 18,40 tỷ · [Duyệt hàng loạt]`) | 0 hồ sơ, hồ sơ bị người khác duyệt (409), pending quá SLA → `overdue` chip thứ 2 | P1 | D/T/M |
+| APPR-01 | Chờ tôi duyệt | `/cho-toi-duyet` | CV, KTT, PGĐ, GĐ | `FgFilterBar`, `FgTable` sort mặc định *chờ lâu nhất*, group `Công ty` tắt được, `FgStatusChip(withOwner)`, bulk bar (`Đã chọn 12 · Tổng 18,40 tỷ · [Duyệt hàng loạt]`); chỉ hiện phiếu mà bước của tôi là **cấp thấp nhất còn chờ** (mọi cấp dưới trong Matrix đã duyệt xong) — duyệt vượt cấp dùng các danh sách khác | 0 hồ sơ, hồ sơ bị người khác duyệt (409), pending quá SLA → `overdue` chip thứ 2 | P1 | D/T/M |
 | APPR-02 | Tôi đã duyệt | `/toi-da-duyet` | mọi cấp duyệt | `FgTable` + `FgApprovalTimeline` compressed, bộ kết quả theo ý kiến | rỗng theo khoảng ngày | P2 | D |
 | APPR-03 | Hồ sơ bị trả về / cần bổ sung | `/can-bo-sung` | KT, CV | `FgTable` filter `changes_requested`, hiển thị yêu cầu + người yêu cầu + còn hạn? | hết hạn phản hồi | P2 | D/M |
 | APPR-04 | Ủy quyền phê duyệt | `/uy-quyen` | PGĐ, GĐ, QT | `FgUserPicker`, `FgDateRange`, `FgTable` đang/đã hết hiệu lực, `FgConfirmDialog` | trùng khoảng, tự ủy quyền cho mình, cấp dưới vượt hạn mức | P3 | D |
