@@ -69,17 +69,17 @@ const PLAN: SeedPlan = {
   ],
   categories: [
     { name: 'Lương', group: 'hoat_dong', kind: 'spend', required: [], order: 1 },
-    { name: 'Thuê văn phòng', group: 'hoat_dong', kind: 'spend', required: ['contract'], order: 2 },
-    { name: 'Điện nước', group: 'hoat_dong', kind: 'spend', required: ['invoice'], order: 3 },
-    { name: 'Mua hàng / nguyên vật liệu', group: 'hoat_dong', kind: 'spend', required: ['contract', 'invoice', 'goods_receipt'], order: 4 },
-    { name: 'Chi phí quản lý', group: 'hoat_dong', kind: 'spend', required: ['invoice'], order: 5 },
-    { name: 'Xây dựng', group: 'dau_tu', kind: 'spend', required: ['contract', 'acceptance'], order: 10 },
-    { name: 'Máy móc thiết bị', group: 'dau_tu', kind: 'spend', required: ['contract', 'invoice'], order: 11 },
+    { name: 'Thuê văn phòng', group: 'hoat_dong', kind: 'spend', required: [], order: 2 },
+    { name: 'Điện nước', group: 'hoat_dong', kind: 'spend', required: [], order: 3 },
+    { name: 'Mua hàng / nguyên vật liệu', group: 'hoat_dong', kind: 'spend', required: ['goods_receipt'], order: 4 },
+    { name: 'Chi phí quản lý', group: 'hoat_dong', kind: 'spend', required: [], order: 5 },
+    { name: 'Xây dựng', group: 'dau_tu', kind: 'spend', required: ['acceptance'], order: 10 },
+    { name: 'Máy móc thiết bị', group: 'dau_tu', kind: 'spend', required: [], order: 11 },
     { name: 'Trả gốc vay', group: 'tai_chinh', kind: 'spend', required: ['loan_schedule'], order: 20 },
     { name: 'Trả lãi vay', group: 'tai_chinh', kind: 'spend', required: ['bank_order'], order: 21 },
     { name: 'Phí ngân hàng', group: 'tai_chinh', kind: 'spend', required: [], order: 22 },
-    { name: 'Thu dịch vụ', group: 'hoat_dong', kind: 'income', required: ['contract'], order: 30 },
-    { name: 'Thu bán hàng', group: 'hoat_dong', kind: 'income', required: ['contract', 'invoice'], order: 31 },
+    { name: 'Thu dịch vụ', group: 'hoat_dong', kind: 'income', required: [], order: 30 },
+    { name: 'Thu bán hàng', group: 'hoat_dong', kind: 'income', required: [], order: 31 },
   ],
   loans: [
     { company: 'MP', bank: 'BIDV', contract: 'HĐTD/2024/MP-01', limit: 30, outstanding: 20, dueInDays: 0, rate: '9,50' },
@@ -282,8 +282,8 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
   /* settings — ngưỡng chairman, yêu cầu chứng từ mặc định */
   const settings = [
     { key: 'approval.chairman_threshold_minor', value: { amount_minor: moneyMinor(5).toString() }, description: 'Hồ sơ > ngưỡng phải qua Chủ tịch HĐQT (§XX)' },
-    { key: 'evidence.required.spend', value: { types: ['contract', 'invoice'] }, description: 'Chứng từ bắt buộc phiếu chi (BA-3)' },
-    { key: 'evidence.required.income', value: { types: ['contract'] }, description: 'Chứng từ bắt buộc phiếu thu' },
+    { key: 'evidence.required.spend', value: { types: [] }, description: 'Chứng từ bắt buộc phiếu chi — hoá đơn/hợp đồng không còn bắt buộc' },
+    { key: 'evidence.required.income', value: { types: [] }, description: 'Chứng từ bắt buộc phiếu thu — hoá đơn/hợp đồng không còn bắt buộc' },
     { key: 'newsletter.recipients', value: { roles: ['director', 'deputy_director', 'chief_accountant'] }, description: 'Người nhận bản tin 06:30' },
     { key: 'app.demo', value: { seeded_at: new Date().toISOString(), note: 'Dữ liệu demo ẩn danh — chưa phải số liệu thật (BA-0, BA-11)' }, description: 'Cờ dữ liệu demo' },
   ];
@@ -500,7 +500,7 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
           sla_deadline: new Date(Date.now() + ((i % 5) - 2) * DAY),
         })),
       },
-      evidence: { required: ['contract'], present: i % 4 === 0 ? [] : ['contract'], missing: i % 4 === 0 ? ['contract'] : [] },
+      evidence: { required: [], present: [], missing: [] },
       submitted_at: status === 'draft' ? null : new Date(Date.now() - ((i % 9) + 1) * DAY),
       history: [{ at: new Date(Date.now() - 10 * DAY), actor: { user_id: creator ?? null, role: 'staff', name: 'Hệ thống seed' }, action: 'create', to: 'draft' }],
     } as never);

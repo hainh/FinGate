@@ -24,6 +24,13 @@ export interface EvidenceState {
   missing: string[];
 }
 
+/** Hoá đơn/hợp đồng không còn bắt buộc — chỉ là chứng từ khuyến khích, không chặn gửi/duyệt. */
+const OPTIONAL_EVIDENCE = new Set<string>(['contract', 'invoice']);
+
+function withoutOptional(types: string[] | null | undefined): string[] {
+  return (types ?? []).filter((t) => !OPTIONAL_EVIDENCE.has(t));
+}
+
 export async function requiredEvidenceFor(doc: {
   kind: DocKind;
   category_id?: string | null;
@@ -31,16 +38,16 @@ export async function requiredEvidenceFor(doc: {
 }): Promise<string[]> {
   if (doc.category_id) {
     const cat = await Models.Category.findById(doc.category_id).select({ required_evidence: 1 }).lean();
-    if (cat?.required_evidence?.length) return cat.required_evidence;
+    if (cat?.required_evidence?.length) return withoutOptional(cat.required_evidence);
   }
   const rule = await Models.Setting.findOne({ key: `evidence.required.${doc.kind}` }).lean<{ value?: { types?: string[] } } | null>();
-  if (rule?.value?.types?.length) return rule.value.types;
+  if (rule?.value?.types?.length) return withoutOptional(rule.value.types);
   // mặc định nghiệp vụ (BA-3 sẽ seed bản chính thức)
   switch (doc.kind) {
     case 'spend':
-      return ['contract', 'invoice'];
+      return withoutOptional(['contract', 'invoice']);
     case 'income':
-      return ['contract'];
+      return withoutOptional(['contract']);
     case 'rollover':
       return ['loan_schedule'];
     case 'internal':
