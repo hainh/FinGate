@@ -1025,6 +1025,8 @@ export function adminRoutes(app: FastifyInstance): void {
               name: String(c.name),
               code: String(c.code),
               tax_code: actorCanSeeTax(req) ? ((c as { tax_code?: string | null }).tax_code ?? null) : null,
+              address: actorCanSeeTax(req) ? ((c as { address?: string | null }).address ?? null) : null,
+              contact_email: actorCanSeeTax(req) ? ((c as { contact_email?: string | null }).contact_email ?? null) : null,
               is_group: Boolean((c as { is_group?: boolean }).is_group),
               min_balance: wire(asBigInt((c as { min_balance_minor?: unknown }).min_balance_minor)),
               status: String((c as { status?: string }).status ?? 'active'),
@@ -1770,8 +1772,10 @@ function maskEmail(email: string): string {
   return `${head}${'•'.repeat(Math.max(1, (user ?? '').length - 2))}@${domain}`;
 }
 
+/** MST/địa chỉ/email công ty: người xem hồ sơ (doc:read) hoặc người quản trị công ty (admin:settings). */
 function actorCanSeeTax(req: FastifyRequest): boolean {
-  return requestCtx(req).actor?.permissions.includes('doc:read') ?? false;
+  const perms = requestCtx(req).actor?.permissions ?? [];
+  return perms.includes('doc:read') || perms.includes('admin:settings');
 }
 
 async function assertManages(req: FastifyRequest, userId: string): Promise<void> {
