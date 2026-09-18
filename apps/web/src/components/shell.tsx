@@ -7,6 +7,8 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router';
+import { useIsFetching } from '@tanstack/react-query';
+import { LoadingOutlined } from '@ant-design/icons';
 import { Badge, Dropdown, Input } from 'antd';
 import { useAuth, useUi, SCOPE_ALL } from '../app/store.tsx';
 import { useOverview, useUnreadCount } from '../app/queries.ts';
@@ -38,6 +40,38 @@ const NAV: NavItem[] = [
   // Người có quyền mời/điều phối nhân sự (Chủ tịch · GĐ · KTT · Quản trị) — không chỉ admin:matrix.
   { to: '/quantri/nguoidung', label: 'Quản trị', glyph: '⚙', perm: 'hr:invite', match: ['/quantri'] },
 ];
+
+/**
+ * true sau khi `active` giữ nguyên liên tục `delay` ms — dùng để tránh nhấp nháy
+ * chỉ báo khi request ngắn.
+ */
+function useDelayedFlag(active: boolean, delay = 500): boolean {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    if (!active) {
+      setOn(false);
+      return;
+    }
+    const t = setTimeout(() => setOn(true), delay);
+    return () => clearTimeout(t);
+  }, [active, delay]);
+  return on;
+}
+
+/** chỉ báo tải toàn cục trên header — ô kích thước cố định nên không đẩy layout. */
+function FgFetchIndicator(): ReactNode {
+  const fetching = useIsFetching();
+  const show = useDelayedFlag(fetching > 0, 500);
+  return (
+    <span
+      aria-live="polite"
+      aria-label={show ? 'Đang cập nhật dữ liệu' : undefined}
+      style={{ width: 20, height: 20, display: 'grid', placeItems: 'center', color: 'var(--fg-text-muted)', flex: 'none' }}
+    >
+      {show ? <LoadingOutlined spin aria-hidden /> : null}
+    </span>
+  );
+}
 
 export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
   const { me, can, logout, scope, setScope } = useAuth();
@@ -157,6 +191,8 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
             aria-label="Tìm kiếm toàn cục"
             onSearch={(q) => q.trim() && navigate(`/tim-kiem?q=${encodeURIComponent(q)}`)}
           />
+
+          <FgFetchIndicator />
 
           <Link to="/thong-bao" aria-label="Thông báo" style={{ color: 'var(--fg-text-secondary)' }}>
             <Badge count={unread?.count ?? 0} size="small" offset={[2, -2]}>

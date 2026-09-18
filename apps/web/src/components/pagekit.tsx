@@ -13,7 +13,7 @@ import { App } from 'antd';
 import { problemHint, type ProblemJson } from '@fingate/shared';
 import { ApiRequestError, coldStart } from '../app/api.ts';
 import { useAuth } from '../app/store.tsx';
-import { FgAlert, FgButton, FgText } from './primitives.tsx';
+import { FgAlert, FgButton } from './primitives.tsx';
 import { FgEmptyState } from './uitk.tsx';
 
 /* ---------------- toast (FgToast — OVL-21) ---------------- */
@@ -164,11 +164,6 @@ export function FgQuery<T>({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-3)' }}>
       {partial}
       {staleNote}
-      {query.isFetching && query.data ? (
-        <FgText style="caption" color="muted" aria-live="polite">
-          Đang cập nhật…
-        </FgText>
-      ) : null}
       {children(query.data)}
     </div>
   );
