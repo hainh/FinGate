@@ -17,6 +17,7 @@ import {
   parseMoneyInput,
   cmp,
   statusLabel,
+  today,
   ZERO,
 } from '@fingate/shared';
 import { ApiRequestError } from '../app/api.ts';
@@ -260,7 +261,7 @@ export function ApprovalConfirmModal({
     reject: 'Từ chối',
     request_changes: 'Yêu cầu bổ sung',
     submit: 'Gửi duyệt',
-    pay: `Ghi nhận đã chi ${formatMoney(amount, { mode: 'compact' })}`,
+    pay: `Thực thi ${formatMoney(amount, { mode: 'compact' })}`,
     cancel: 'Hủy hồ sơ',
   };
   const danger = action === 'reject' || action === 'cancel';
@@ -274,7 +275,8 @@ export function ApprovalConfirmModal({
       // approve thường không bắt buộc ý kiến, nhưng khi thiếu chứng từ server
       // cần `reason` >=20 ký tự (FG-WF-004) → gửi kèm để user không phải làm lại.
       reason: needsReason ? opinion : opinion && opinion.trim().length >= 20 ? opinion : undefined,
-      execution: action === 'pay' ? { paid_at: doc.planned_date } : undefined,
+      // thực thi ghi nhận dòng tiền NGAY hôm nay (ngày nghiệp vụ VN), không dùng ngày dự kiến
+      execution: action === 'pay' ? { paid_at: today() } : undefined,
     });
     // onDone sẽ chạy qua useEffect(runner.success) — kể cả retry muộn
   };

@@ -480,8 +480,7 @@ export async function transition(input: {
   }
 
   if (action === 'pay') {
-    const exec = body.execution;
-    if (!exec?.paid_at) throw new ApiError({ code: 'FG-VAL-001', errors: { execution: 'Cần ngày thực chi' } });
+    // "Thực thi": ngày thực chi mặc định là ngày nghiệp vụ hôm nay nếu client không gửi
     nextStatus = 'paid';
   }
   if (action === 'queue_payment') nextStatus = 'processing';

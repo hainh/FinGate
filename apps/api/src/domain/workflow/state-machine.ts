@@ -39,7 +39,8 @@ export const TRANSITIONS: Record<StatusKey, Partial<Record<Action, StatusKey>>> 
     reject: 'rejected',
     request_changes: 'changes_requested',
   },
-  approved: { queue_payment: 'processing', cancel: 'cancelled' },
+  // duyệt xong cấp cao nhất → kế toán viên "thực thi" (pay) trực tiếp, hoặc đưa vào hàng thanh toán
+  approved: { pay: 'paid', queue_payment: 'processing', cancel: 'cancelled' },
   processing: { pay: 'paid', request_changes: 'changes_requested' },
   paid: {},
   rejected: { submit: 'pending.ktt' },

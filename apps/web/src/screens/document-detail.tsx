@@ -200,7 +200,7 @@ export function DocumentDetailScreen(): ReactNode {
                 ) : null}
                 {d.can.pay ? (
                   <FgButton variant="primary" onClick={() => setConfirmAction('pay')}>
-                    Ghi nhận đã thanh toán
+                    Thực thi
                   </FgButton>
                 ) : null}
                 {d.can.fast_track && !d.can.approve ? (
@@ -329,7 +329,8 @@ function HistoryTab({ doc }: { doc: DocumentDetail }): ReactNode {
 function CashTab({ doc }: { doc: DocumentDetail }): ReactNode {
   const bal = doc.source.balance_available;
   const amt = moneyFromWire(doc.amount)!;
-  const after = bal ? money(bal).minor - amt.minor : null;
+  // phiếu thu CỘNG tiền, phiếu chi TRỪ tiền vào tài khoản nguồn
+  const after = bal ? (doc.kind === 'income' ? money(bal).minor + amt.minor : money(bal).minor - amt.minor) : null;
   return (
     <FgCard>
       <FgText style="h4">Ảnh hưởng số dư</FgText>

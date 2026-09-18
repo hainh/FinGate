@@ -106,6 +106,11 @@ export async function bumpBalance(input: {
   if (input.actualIn) inc.actual_in_minor = input.actualIn;
   if (input.actualOut) inc.actual_out_minor = input.actualOut;
 
+  // Số dư (closing) = opening + actual_in − actual_out → thực thi xong là số dư đổi NGAY
+  // (opening không đổi nên chỉ cần cộng delta actual). rebuildBalances vẫn tính lại nhất quán.
+  const closingDelta = (input.actualIn ?? 0n) - (input.actualOut ?? 0n);
+  if (closingDelta !== 0n) inc.closing_minor = closingDelta;
+
   const set: Record<string, unknown> = { company_id, account_id, date, source: 'system' };
   if (input.min_balance_minor !== undefined) set.min_balance_minor = input.min_balance_minor;
 

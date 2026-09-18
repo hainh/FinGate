@@ -29,7 +29,7 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'doc.reject': 'Từ chối',
   'doc.request_changes': 'Yêu cầu bổ sung',
   'doc.fast_track': 'Duyệt trước',
-  'doc.pay': 'Ghi nhận thanh toán',
+  'doc.pay': 'Thực thi (ghi nhận dòng tiền)',
   'doc.cancel': 'Hủy hồ sơ',
   'doc.delete': 'Xoá phiếu thu/chi',
   'document.delete': 'Xoá phiếu thu/chi',

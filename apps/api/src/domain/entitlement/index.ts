@@ -250,7 +250,9 @@ export function documentPermissions(
     // `can approve` đã bao gồm step `waiting` của chính mình
     fast_track:
       approveAllowed && !!current && iAmStep.some((s) => s.state === 'waiting'),
-    pay: doc.status === 'approved' && has('payment:mark') && !overLimit,
+    // "Thực thi" phiếu đã duyệt xong: kế toán viên (payment:mark) thực hiện, KHÔNG giới hạn
+    // bởi hạn mức duyệt — hạn mức là thẩm quyền duyệt, không phải quyền ghi nhận dòng tiền.
+    pay: (doc.status === 'approved' || doc.status === 'processing') && has('payment:mark'),
     override: has('approval:override'),
     attach: (doc.status === 'draft' || doc.status === 'changes_requested' || has('doc:create')) && has('doc:read'),
     export: has('report:export'),

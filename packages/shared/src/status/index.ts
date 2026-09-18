@@ -299,7 +299,7 @@ export const ACTION_LABEL: Record<Action, string> = {
   request_changes: 'Yêu cầu bổ sung',
   cancel: 'Hủy',
   queue_payment: 'Đưa vào thanh toán',
-  pay: 'Ghi nhận đã thanh toán',
+  pay: 'Thực thi',
   expire: 'Hết hiệu lực',
 };
 
