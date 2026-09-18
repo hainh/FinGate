@@ -352,7 +352,7 @@ export function authRoutes(app: FastifyInstance): void {
           const displayName = String(user.display_name ?? body.display_name ?? String(user.email).split('@')[0]);
           await Models.User.updateOne(
             { _id: user._id },
-            { $set: { display_name: displayName, password: pw, mfa_required: MFA_REQUIRED_ROLES.includes(role), invite: null, updated_at: new Date() } },
+            { $set: { display_name: displayName, password: pw, mfa_required: MFA_REQUIRED_ROLES.includes(role), invite: null, last_login_at: new Date(), last_login_ip: requestCtx(req).ip, failed_logins: 0, locked_until: null, updated_at: new Date() } },
           ).exec();
           const done = await finishPasswordReset({ _id: user._id, email: user.email, display_name: displayName }, role, {
             ip: requestCtx(req).ip,
@@ -657,6 +657,10 @@ async function finishActivation(
   const set: Record<string, unknown> = {
     status: 'active',
     invite: null,
+    last_login_at: new Date(),
+    last_login_ip: ctx.ip,
+    failed_logins: 0,
+    locked_until: null,
     updated_at: new Date(),
   };
   await Models.User.updateOne({ _id: user._id }, { $set: set }).exec();
