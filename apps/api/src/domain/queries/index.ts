@@ -70,9 +70,9 @@ export function scopeOf(scope: ScopeLike): Scope {
   return { companyIds: scope.companyIds };
 }
 
+/** Không còn che số tài khoản — trả về nguyên số đầy đủ. */
 export function maskAccount(number: string): string {
-  const clean = String(number ?? '').replace(/\s/g, '');
-  return clean.length <= 4 ? `•••• ${clean}` : `•••• ${clean.slice(-4)}`;
+  return String(number ?? '');
 }
 
 /* ================================================================== *

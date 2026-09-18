@@ -115,7 +115,6 @@ export function adminRoutes(app: FastifyInstance): void {
       ]);
       const holdMap = new Map(holding.map((h) => [String(h._id), Number(h.n)]));
 
-        const showEmail = actor.permissions.includes('hr:invite');
         const now = new Date();
         const items = users.map((u) => {
           const a = assignments.find((x) => String(x.user_id) === String(u._id));
@@ -125,8 +124,8 @@ export function adminRoutes(app: FastifyInstance): void {
           return {
             user_id: String(u._id),
             display_name: String(u.display_name ?? email.split('@')[0]),
-            email: showEmail ? email : maskEmail(email),
-            email_masked: !showEmail,
+            email,
+            email_masked: false,
             company_id: a ? String(a.company_id) : '',
             company_name: a ? (cmap.get(String(a.company_id)) ?? '') : '',
             department_id: a?.department_id ? String(a.department_id) : null,
@@ -1767,10 +1766,7 @@ function rx(s: string): RegExp {
 }
 
 function maskEmail(email: string): string {
-  const [user, domain] = String(email).split('@');
-  if (!domain) return '•••';
-  const head = (user ?? '').slice(0, 2);
-  return `${head}${'•'.repeat(Math.max(1, (user ?? '').length - 2))}@${domain}`;
+  return String(email);
 }
 
 /** MST/địa chỉ/email công ty: người xem hồ sơ (doc:read) hoặc người quản trị công ty (admin:settings). */

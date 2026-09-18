@@ -202,7 +202,7 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
         return {
           company_name: cmap.get(String((a as { company_id?: unknown } | undefined)?.company_id ?? '')) ?? 'Tập đoàn',
           bank_name: String((a as { bank_name?: string } | undefined)?.bank_name ?? '—'),
-          account: `•••• ${String((a as { account_number?: string } | undefined)?.account_number ?? '').slice(-4)}`,
+          account: String((a as { account_number?: string } | undefined)?.account_number ?? ''),
           balance: wire(closing),
           balance_compact: formatMoney(money(closing), { mode: 'compact' }),
           available_compact: formatMoney(money(closing - blocked), { mode: 'compact' }),

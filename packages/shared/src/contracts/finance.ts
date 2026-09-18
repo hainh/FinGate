@@ -37,7 +37,7 @@ export const bankAccountRow = z.object({
   is_group: z.boolean(),
   bank_name: z.string(),
   account_name: z.string(),
-  /** luôn mask ở danh sách — hiển thị full cần quyền bank:read (DS §7.7). */
+  /** số tài khoản đầy đủ (không còn che). */
   account_number_masked: z.string(),
   currency: z.string(),
   kind: accountKind,

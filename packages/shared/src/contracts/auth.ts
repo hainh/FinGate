@@ -206,7 +206,7 @@ export const personnelListQuery = z.object({
 export const personnelRow = z.object({
   user_id: objectId,
   display_name: z.string(),
-  /** email bị mask khi người gọi không có quyền hr:* (blueprint §XXVI). */
+  /** email đầy đủ (không còn che). */
   email: z.string(),
   email_masked: z.boolean().default(false),
   company_id: objectId,

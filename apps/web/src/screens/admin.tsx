@@ -102,15 +102,8 @@ export function PersonnelScreen(): ReactNode {
                 { title: 'Họ tên', dataIndex: 'display_name', key: 'n', render: (v: string) => <FgText strong>{v}</FgText> },
                 {
                   title: 'Email',
+                  dataIndex: 'email',
                   key: 'e',
-                  render: (_v, r) =>
-                    r.email_masked ? (
-                      <FgTooltip title="Email bị ẩn vì bạn không có quyền quản lý nhân sự">
-                        <span className="fg-muted">đã ẩn</span>
-                      </FgTooltip>
-                    ) : (
-                      r.email
-                    ),
                 },
                 { title: 'Công ty', dataIndex: 'company_name', key: 'c' },
                 { title: 'Vai trò', dataIndex: 'role_label', key: 'r' },

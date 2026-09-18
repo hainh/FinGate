@@ -45,8 +45,6 @@ export function financeRoutes(app: FastifyInstance): void {
       config: { perms: ['doc:read'] as Permission[], screen: 'BANK-01', summary: 'Tài khoản ngân hàng + số dư' },
       handler: async (req, reply) => {
         const scope = requireScope(req);
-        const actor = requireActor(req);
-        const showFull = actor.permissions.includes('bank:read');
         const rows = await accountSnapshots(scope, {
           includeClosed: (req.query as { include_closed?: string }).include_closed === 'true',
           // Công ty con thấy tài khoản Tập đoàn để chọn nguồn tiền (§VIII).
@@ -63,7 +61,7 @@ export function financeRoutes(app: FastifyInstance): void {
               label: r.label,
               bank_name: r.label.split(' ')[0] ?? '',
               account_number_masked: r.account_number_masked,
-              account_number: showFull ? undefined : undefined,
+              account_number: r.account_number_masked,
               kind: r.kind,
               currency: r.currency,
               status: r.status,
