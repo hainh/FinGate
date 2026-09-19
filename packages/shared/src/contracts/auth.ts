@@ -115,25 +115,21 @@ export const meProfile = z.object({
  * Nhân sự & tài khoản (blueprint §XXIX)
  * ------------------------------------------------------------------ */
 
-export const personnelInviteBody = z
-  .object({
-    email,
-    company_id: objectId.optional().describe('Giám đốc công ty con: server ghim vào công ty mình'),
-    role: idString,
-    department_id: objectId.nullable().optional(),
-    amount_limit_minor: z.string().regex(/^\d+$/).optional(),
-    note: z.string().max(500).optional(),
-    /** số ngày link có hiệu lực — mặc định 1 ngày (admin tự copy link gửi, không qua mail). */
-    valid_days: z.number().int().min(1).max(30).default(1),
-    /** true = gửi email kèm (SMTP cấu hình); mặc định false: admin copy link ký sẵn gửi tay. */
-    send_email: z.boolean().default(false),
-    request_id: uuid,
-  })
-  .superRefine((v, ctx) => {
-    if (!v.company_id) {
-      ctx.addIssue({ code: 'custom', path: ['company_id'], message: 'Phải chọn công ty trực thuộc' });
-    }
-  });
+export const personnelInviteBody = z.object({
+  email,
+  /** Nhân sự có thể trực thuộc nhiều công ty — vai trò/hạn mức dùng chung, bộ phận chọn theo từng công ty. */
+  company_ids: z.array(objectId).min(1, 'Phải chọn ít nhất một công ty trực thuộc'),
+  /** bộ phận theo từng công ty: `{ [company_id]: department_id | null }`. */
+  departments: z.record(z.string(), objectId.nullable()).optional(),
+  role: idString,
+  amount_limit_minor: z.string().regex(/^\d+$/).optional(),
+  note: z.string().max(500).optional(),
+  /** số ngày link có hiệu lực — mặc định 1 ngày (admin tự copy link gửi, không qua mail). */
+  valid_days: z.number().int().min(1).max(30).default(1),
+  /** true = gửi email kèm (SMTP cấu hình); mặc định false: admin copy link ký sẵn gửi tay. */
+  send_email: z.boolean().default(false),
+  request_id: uuid,
+});
 
 /**
  * Kết quả cấp lại link mời — ADM-01. Token tự chứa chữ ký HMAC nên server
@@ -213,6 +209,17 @@ export const personnelRow = z.object({
   company_name: z.string(),
   department_id: objectId.nullable().default(null),
   department_name: z.string().nullable(),
+  /** toàn bộ công ty nhân sự trực thuộc (company đầu là công ty chính/active_company). */
+  companies: z
+    .array(
+      z.object({
+        company_id: objectId,
+        company_name: z.string(),
+        department_id: objectId.nullable().default(null),
+        department_name: z.string().nullable().default(null),
+      }),
+    )
+    .default([]),
   role: idString,
   role_label: z.string(),
   status: z.enum(['invited', 'active', 'deactivated']),
@@ -246,9 +253,11 @@ export const personnelDeactivateBody = z.object({
  */
 export const personnelUpdateBody = z.object({
   display_name: z.string().trim().min(1).max(120).optional(),
-  company_id: objectId.optional(),
+  /** danh sách công ty trực thuộc (company đầu là công ty chính/active_company). */
+  company_ids: z.array(objectId).min(1).optional(),
+  /** bộ phận theo từng công ty: `{ [company_id]: department_id | null }`. */
+  departments: z.record(z.string(), objectId.nullable()).optional(),
   role: idString.optional(),
-  department_id: objectId.nullable().optional(),
   amount_limit_minor: z.string().regex(/^\d+$/).optional(),
   /** quyền cấp thêm / thu hồi so với vai trò — bảng tick phân quyền (ADM-01). */
   extra_permissions: z.array(z.enum(PERMISSIONS)).optional(),

@@ -242,6 +242,48 @@ export function FgSelect({
   );
 }
 
+export function FgMultiSelect({
+  options,
+  value = [],
+  onChange,
+  placeholder,
+  allowClear = true,
+  style,
+  ariaLabel,
+  size,
+  disabled,
+  loading,
+}: {
+  options: FgSelectOption[];
+  value?: string[];
+  onChange?: (v: string[]) => void;
+  placeholder?: string;
+  allowClear?: boolean;
+  style?: CSSProperties;
+  ariaLabel?: string;
+  size?: 'small' | 'middle' | 'large';
+  disabled?: boolean;
+  loading?: boolean;
+}): ReactNode {
+  return (
+    <Select
+      mode="multiple"
+      aria-label={ariaLabel}
+      options={options}
+      value={value}
+      onChange={(v: string[]) => onChange?.(v)}
+      placeholder={placeholder}
+      allowClear={allowClear}
+      style={{ minWidth: 140, ...style }}
+      size={size}
+      disabled={disabled}
+      loading={loading}
+      optionFilterProp="label"
+      maxTagCount="responsive"
+    />
+  );
+}
+
 export function FgNumber(props: React.ComponentProps<typeof InputNumber>): ReactNode {
   return <InputNumber {...props} />;
 }

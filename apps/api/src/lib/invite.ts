@@ -121,6 +121,10 @@ export interface InviteShape {
   /** 'activate' | 'reset'; undefined = activate (tương thích bản ghi cũ). */
   mode?: string | null;
   company_id?: unknown;
+  /** danh sách công ty trực thuộc (bản ghi mới); rỗng/thiếu = dùng `company_id`. */
+  company_ids?: unknown[];
+  /** bộ phận theo từng công ty: `{ [company_id]: department_id | null }`. */
+  departments?: Record<string, unknown>;
   role?: string | null;
   department_id?: unknown;
   invited_by?: unknown;

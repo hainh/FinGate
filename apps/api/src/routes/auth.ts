@@ -667,13 +667,21 @@ async function finishActivation(
   await Models.User.updateOne({ _id: user._id }, { $set: set }).exec();
 
   // bảo đảm Assignment đúng cấu hình mời (phòng user bị xoá assignment giữa chừng)
-  if (inv.company_id) {
-    const existing = await Models.Assignment.findOne({ user_id: user._id, company_id: inv.company_id } as never).lean();
+  const invDepartments = (inv.departments ?? {}) as Record<string, unknown>;
+  const invCompanyIds =
+    Array.isArray(inv.company_ids) && inv.company_ids.length
+      ? inv.company_ids.map(String)
+      : inv.company_id
+        ? [String(inv.company_id)]
+        : [];
+  for (const cid of invCompanyIds) {
+    const existing = await Models.Assignment.findOne({ user_id: user._id, company_id: cid } as never).lean();
     if (!existing) {
+      const dept = invDepartments[cid] ?? (cid === String(inv.company_id ?? '') ? inv.department_id ?? null : null);
       await Models.Assignment.create({
         user_id: user._id,
-        company_id: inv.company_id,
-        department_id: inv.department_id ?? null,
+        company_id: cid,
+        department_id: dept ? String(dept) : null,
         role,
         amount_limit_minor: BigInt(DEFAULT_AMOUNT_LIMIT_MINOR[role] ?? '0'),
       } as never);
@@ -701,7 +709,7 @@ async function finishActivation(
     ua: ctx.ua,
   });
 
-  const scopeIds = inv.company_id ? [String(inv.company_id)] : [];
+  const scopeIds = invCompanyIds;
   const { raw } = await createSession({
     user_id: String(user._id),
     company_scope: scopeIds,

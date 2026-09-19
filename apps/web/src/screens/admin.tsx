@@ -26,7 +26,7 @@ import {
 } from '@fingate/shared';
 import { useAuditLog, useCompanies, useDepartments, useMatrix, useMatrixUpsert, usePersonnel, type DepartmentRow } from '../app/queries.ts';
 import { useAuth, useUi } from '../app/store.tsx';
-import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
+import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgMultiSelect, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonTable, FgTable, FgTabs, FgTag } from '../components/uitk.tsx';
 import { FgApprovalTimeline } from '../components/finance.tsx';
@@ -105,7 +105,14 @@ export function PersonnelScreen(): ReactNode {
                   dataIndex: 'email',
                   key: 'e',
                 },
-                { title: 'Công ty', dataIndex: 'company_name', key: 'c' },
+                {
+                  title: 'Công ty',
+                  key: 'c',
+                  render: (_v, r) => {
+                    const names = r.companies?.length ? r.companies.map((c) => c.company_name) : [r.company_name];
+                    return <span>{names.filter(Boolean).join(', ') || '—'}</span>;
+                  },
+                },
                 { title: 'Vai trò', dataIndex: 'role_label', key: 'r' },
                 {
                   title: 'Hạn mức duyệt',
@@ -411,41 +418,44 @@ function InviteModal({
   const { me, can } = useAuth();
   const companies = useCompanies();
   const [email, setEmail] = useState('');
-  const [companyId, setCompanyId] = useState<string | undefined>(me?.scope.active_company_id ?? undefined);
+  const [companyIds, setCompanyIds] = useState<string[]>(me?.scope.active_company_id ? [me.scope.active_company_id] : []);
+  const [deptByCompany, setDeptByCompany] = useState<Record<string, string | undefined>>({});
   const [role, setRole] = useState<string>('staff');
-  const [deptId, setDeptId] = useState<string | undefined>(undefined);
   const [limit, setLimit] = useState<Money | null>(null);
   const [validDays, setValidDays] = useState('1');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [depts, setDepts] = useState<{ _id: string; name: string }[]>([]);
+  const [allDepts, setAllDepts] = useState<{ _id: string; name: string; company_id: string }[]>([]);
 
   const lockedToOwnCompany = !me?.scope.all;
   useEffect(() => {
-    if (lockedToOwnCompany && me?.scope.active_company_id) setCompanyId(me.scope.active_company_id);
+    if (lockedToOwnCompany && me?.scope.active_company_id) setCompanyIds([me.scope.active_company_id]);
   }, [lockedToOwnCompany, me?.scope.active_company_id]);
 
   useEffect(() => {
-    if (!open || !companyId) return;
+    if (!open) return;
     let cancelled = false;
     void (async () => {
       try {
-        const r = await apiCall<{ items: { _id: string; name: string; company_id: string; active?: boolean }[] }>('/departments', { query: { company_id: companyId } });
-        if (!cancelled) setDepts(r.items.filter((d) => String(d.company_id) === companyId && d.active !== false).map((d) => ({ _id: d._id, name: d.name })));
+        const r = await apiCall<{ items: { _id: string; name: string; company_id: string; active?: boolean }[] }>('/departments');
+        if (!cancelled) setAllDepts(r.items.filter((d) => d.active !== false).map((d) => ({ _id: d._id, name: d.name, company_id: String(d.company_id) })));
       } catch {
-        if (!cancelled) setDepts([]);
+        if (!cancelled) setAllDepts([]);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [open, companyId]);
+  }, [open]);
 
   const companyOptions = useMemo(
     () => (companies.data?.items ?? []).map((c) => ({ label: c.name, value: c._id })),
     [companies.data],
   );
+  const companyLabel = (cid: string): string => companyOptions.find((o) => o.value === cid)?.label ?? cid;
+  const deptOptionsFor = (cid: string): { label: string; value: string }[] =>
+    allDepts.filter((d) => d.company_id === cid).map((d) => ({ label: d.name, value: d._id }));
 
   const submit = async (): Promise<void> => {
     setBusy(true);
@@ -456,9 +466,9 @@ function InviteModal({
         method: 'POST',
         body: {
           email: email.trim(),
-          company_id: companyId,
+          company_ids: companyIds,
+          departments: Object.fromEntries(companyIds.map((cid) => [cid, deptByCompany[cid] ?? null])),
           role,
-          department_id: deptId ?? null,
           amount_limit_minor: limit ? moneyToWire(limit).minor : undefined,
           valid_days: Number(validDays),
         },
@@ -508,12 +518,19 @@ function InviteModal({
         <FgField label="Email người được mời" required error={fieldErrors.email ?? null}>
           <FgInput type="email" value={email} onChange={(e: { target: { value: string } }) => setEmail(e.target.value)} placeholder="ban@congty.vn" />
         </FgField>
-        <FgField label="Công ty" required error={fieldErrors.company_id ?? null}>
-          <FgSelect
+        <FgField label="Công ty" required error={fieldErrors.company_ids ?? fieldErrors.company_id ?? null}>
+          <FgMultiSelect
             options={companyOptions}
-            value={companyId}
-            onChange={setCompanyId}
-            placeholder="Chọn công ty"
+            value={companyIds}
+            onChange={(v) => {
+              setCompanyIds(v);
+              setDeptByCompany((prev) => {
+                const next: Record<string, string | undefined> = {};
+                for (const cid of v) next[cid] = prev[cid];
+                return next;
+              });
+            }}
+            placeholder="Chọn một hoặc nhiều công ty"
             disabled={lockedToOwnCompany}
             style={{ width: '100%' }}
           />
@@ -536,17 +553,18 @@ function InviteModal({
             </FgText>
           ) : null}
         </FgField>
-        <FgField label="Bộ phận (tùy chọn)">
-          <FgSelect
-            options={depts.map((d) => ({ label: d.name, value: d._id }))}
-            value={deptId}
-            onChange={setDeptId}
-            placeholder={companyId ? 'Chọn bộ phận' : 'Chọn công ty trước'}
-            allowClear
-            disabled={!companyId}
-            style={{ width: '100%' }}
-          />
-        </FgField>
+        {companyIds.map((cid) => (
+          <FgField key={cid} label={`Bộ phận · ${companyLabel(cid)} (tùy chọn)`}>
+            <FgSelect
+              options={deptOptionsFor(cid)}
+              value={deptByCompany[cid]}
+              onChange={(v) => setDeptByCompany((prev) => ({ ...prev, [cid]: v }))}
+              placeholder="Chọn bộ phận"
+              allowClear
+              style={{ width: '100%' }}
+            />
+          </FgField>
+        ))}
         <FgField label="Hạn mức duyệt (VND, tùy chọn)">
           <FgMoneyInput value={limit} onChange={setLimit} ariaLabel="Hạn mức duyệt" />
         </FgField>
@@ -569,34 +587,41 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
   const companies = useCompanies();
   const canMoveCompany = can('hr:transfer');
   const [name, setName] = useState(row.display_name);
-  const [companyId, setCompanyId] = useState<string | undefined>(row.company_id || undefined);
+  const [companyIds, setCompanyIds] = useState<string[]>(row.companies?.length ? row.companies.map((c) => c.company_id) : row.company_id ? [row.company_id] : []);
   const [role, setRole] = useState<string>(row.role || 'staff');
-  const [deptId, setDeptId] = useState<string | undefined>(row.department_id ?? undefined);
+  const [deptByCompany, setDeptByCompany] = useState<Record<string, string | undefined>>(() => {
+    const map: Record<string, string | undefined> = {};
+    for (const c of row.companies ?? []) if (c.department_id) map[c.company_id] = c.department_id;
+    if (!row.companies?.length && row.company_id && row.department_id) map[row.company_id] = row.department_id;
+    return map;
+  });
   const [limit, setLimit] = useState<Money | null>(row.amount_limit_minor && row.amount_limit_minor !== '0' ? money(row.amount_limit_minor) : null);
   const [extraPerms, setExtraPerms] = useState<Permission[]>((row.extra_permissions ?? []) as Permission[]);
   const [deniedPerms, setDeniedPerms] = useState<Permission[]>((row.denied_permissions ?? []) as Permission[]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [depts, setDepts] = useState<{ _id: string; name: string }[]>([]);
+  const [allDepts, setAllDepts] = useState<{ _id: string; name: string; company_id: string }[]>([]);
 
   useEffect(() => {
-    if (!companyId) return;
     let cancelled = false;
     void (async () => {
       try {
-        const r = await apiCall<{ items: { _id: string; name: string; company_id: string; active?: boolean }[] }>('/departments', { query: { company_id: companyId } });
-        if (!cancelled) setDepts(r.items.filter((d) => String(d.company_id) === companyId && d.active !== false).map((d) => ({ _id: d._id, name: d.name })));
+        const r = await apiCall<{ items: { _id: string; name: string; company_id: string; active?: boolean }[] }>('/departments');
+        if (!cancelled) setAllDepts(r.items.filter((d) => d.active !== false).map((d) => ({ _id: d._id, name: d.name, company_id: String(d.company_id) })));
       } catch {
-        if (!cancelled) setDepts([]);
+        if (!cancelled) setAllDepts([]);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [companyId]);
+  }, []);
 
   const companyOptions = useMemo(() => (companies.data?.items ?? []).map((c) => ({ label: c.name, value: c._id })), [companies.data]);
+  const companyLabel = (cid: string): string => companyOptions.find((o) => o.value === cid)?.label ?? cid;
+  const deptOptionsFor = (cid: string): { label: string; value: string }[] =>
+    allDepts.filter((d) => d.company_id === cid).map((d) => ({ label: d.name, value: d._id }));
 
   const roleDefaults = useMemo(() => permissionsForRole((role || 'staff') as Role), [role]);
 
@@ -628,9 +653,9 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
         method: 'PATCH',
         body: {
           display_name: name.trim(),
-          company_id: companyId,
+          company_ids: companyIds,
+          departments: Object.fromEntries(companyIds.map((cid) => [cid, deptByCompany[cid] ?? null])),
           role,
-          department_id: deptId ?? null,
           amount_limit_minor: limit ? moneyToWire(limit).minor : '0',
           extra_permissions: extraPerms,
           denied_permissions: deniedPerms,
@@ -658,15 +683,19 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
         <FgField label="Email (định danh đăng nhập — không đổi được)">
           <FgInput value={row.email} readOnly disabled />
         </FgField>
-        <FgField label="Công ty" required error={fieldErrors.company_id ?? null}>
-          <FgSelect
+        <FgField label="Công ty" required error={fieldErrors.company_ids ?? fieldErrors.company_id ?? null}>
+          <FgMultiSelect
             options={companyOptions}
-            value={companyId}
+            value={companyIds}
             onChange={(v) => {
-              if (v !== companyId) setDeptId(undefined);
-              setCompanyId(v);
+              setCompanyIds(v);
+              setDeptByCompany((prev) => {
+                const next: Record<string, string | undefined> = {};
+                for (const cid of v) next[cid] = prev[cid];
+                return next;
+              });
             }}
-            placeholder="Chọn công ty"
+            placeholder="Chọn một hoặc nhiều công ty"
             disabled={!canMoveCompany}
             style={{ width: '100%' }}
           />
@@ -696,17 +725,19 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
             </FgText>
           ) : null}
         </FgField>
-        <FgField label="Bộ phận (tùy chọn)">
-          <FgSelect
-            options={depts.map((d) => ({ label: d.name, value: d._id }))}
-            value={deptId}
-            onChange={setDeptId}
-            placeholder={companyId ? 'Chọn bộ phận' : 'Chọn công ty trước'}
-            allowClear
-            disabled={!companyId}
-            style={{ width: '100%' }}
-          />
-        </FgField>
+        {companyIds.map((cid) => (
+          <FgField key={cid} label={`Bộ phận · ${companyLabel(cid)} (tùy chọn)`}>
+            <FgSelect
+              options={deptOptionsFor(cid)}
+              value={deptByCompany[cid]}
+              onChange={(v) => setDeptByCompany((prev) => ({ ...prev, [cid]: v }))}
+              placeholder="Chọn bộ phận"
+              allowClear
+              disabled={!canMoveCompany}
+              style={{ width: '100%' }}
+            />
+          </FgField>
+        ))}
         <FgField label="Hạn mức duyệt (VND, tùy chọn)">
           <FgMoneyInput value={limit} onChange={setLimit} ariaLabel="Hạn mức duyệt" />
         </FgField>

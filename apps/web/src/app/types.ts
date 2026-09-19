@@ -464,6 +464,13 @@ export interface MatrixEntry {
   active: boolean;
 }
 
+export interface PersonnelCompany {
+  company_id: string;
+  company_name: string;
+  department_id: string | null;
+  department_name: string | null;
+}
+
 export interface PersonnelRow {
   user_id: string;
   display_name: string;
@@ -473,6 +480,8 @@ export interface PersonnelRow {
   company_name: string;
   department_id: string | null;
   department_name: string | null;
+  /** toàn bộ công ty nhân sự trực thuộc (công ty đầu là công ty chính). */
+  companies: PersonnelCompany[];
   role: string;
   role_label: string;
   status: 'invited' | 'active' | 'deactivated';

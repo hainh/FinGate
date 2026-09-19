@@ -115,9 +115,25 @@ export function adminRoutes(app: FastifyInstance): void {
       ]);
       const holdMap = new Map(holding.map((h) => [String(h._id), Number(h.n)]));
 
+      // gom assignment theo user — một nhân sự có thể trực thuộc nhiều công ty.
+      const byUser = new Map<string, typeof assignments>();
+      for (const a of assignments) {
+        const k = String(a.user_id);
+        const arr = byUser.get(k);
+        if (arr) arr.push(a);
+        else byUser.set(k, [a]);
+      }
+
         const now = new Date();
         const items = users.map((u) => {
-          const a = assignments.find((x) => String(x.user_id) === String(u._id));
+          const asg = byUser.get(String(u._id)) ?? [];
+          const a = asg[0];
+          const companies = asg.map((x) => ({
+            company_id: String(x.company_id),
+            company_name: cmap.get(String(x.company_id)) ?? '',
+            department_id: x.department_id ? String(x.department_id) : null,
+            department_name: x.department_id ? (dmap.get(String(x.department_id)) ?? null) : null,
+          }));
           const email = String(u.email ?? '');
           const inv = (u as { invite?: InviteShape }).invite;
           const inviteStatus = inviteLinkStatus(String(u.status), inv, now);
@@ -126,10 +142,11 @@ export function adminRoutes(app: FastifyInstance): void {
             display_name: String(u.display_name ?? email.split('@')[0]),
             email,
             email_masked: false,
-            company_id: a ? String(a.company_id) : '',
-            company_name: a ? (cmap.get(String(a.company_id)) ?? '') : '',
-            department_id: a?.department_id ? String(a.department_id) : null,
-            department_name: a?.department_id ? (dmap.get(String(a.department_id)) ?? null) : null,
+            company_id: companies[0]?.company_id ?? '',
+            company_name: companies[0]?.company_name ?? '',
+            department_id: companies[0]?.department_id ?? null,
+            department_name: companies[0]?.department_name ?? null,
+            companies,
             role: String(a?.role ?? 'staff'),
             role_label: ROLE_LABEL[String(a?.role ?? 'staff') as Role] ?? '',
             status: String(u.status ?? 'invited'),
@@ -166,14 +183,20 @@ export function adminRoutes(app: FastifyInstance): void {
         const actor = requireActor(req);
         const body = validate(personnelInviteBody, req.body);
         // Giám đốc công ty con: company KHÓA cứng vào công ty mình (§XXIX.1)
-        let companyId = body.company_id ?? actor.company_id;
+        let companyIds = [...new Set(body.company_ids.map(String))];
         if (!actor.scope_all) {
-          if (body.company_id && body.company_id !== actor.company_id) {
+          if (companyIds.some((c) => c !== actor.company_id)) {
             throw new ApiError({ code: 'FG-HR-002', detail: 'Bạn chỉ mời được nhân sự cho công ty của mình' });
           }
-          companyId = actor.company_id;
+          companyIds = actor.company_id ? [actor.company_id] : companyIds;
         }
-        if (!companyId) throw new ApiError({ code: 'FG-HR-002', detail: 'Chưa xác định công ty' });
+        if (!companyIds.length) throw new ApiError({ code: 'FG-HR-002', detail: 'Chưa xác định công ty' });
+        const primaryCompanyId = companyIds[0] as string;
+        const departments: Record<string, string | null> = {};
+        for (const cid of companyIds) {
+          const d = body.departments?.[cid];
+          departments[cid] = d ? String(d) : null;
+        }
 
         const email = body.email.trim().toLowerCase();
         const existing = await Models.User.findOne({ email }).lean();
@@ -212,27 +235,31 @@ export function adminRoutes(app: FastifyInstance): void {
             sent_at: new Date(),
             send_count: 0,
             regenerate_count: 0,
-            company_id: companyId,
+            company_id: primaryCompanyId,
+            company_ids: companyIds,
             role: body.role,
-            department_id: body.department_id ?? null,
+            department_id: departments[primaryCompanyId] ?? null,
+            departments,
           },
         } as never);
 
         // gán công ty + chức danh NGAY từ lúc mời — hết hạn/thu hồi thì Assignment vẫn còn,
         // link mới regenerate dùng lại đúng cấu hình này (§XXIX.3).
-        await Models.Assignment.create({
-          user_id: created._id,
-          company_id: companyId,
-          department_id: body.department_id ?? null,
-          role: body.role,
-          amount_limit_minor: body.amount_limit_minor ? BigInt(body.amount_limit_minor) : BigInt(DEFAULT_AMOUNT_LIMIT_MINOR[body.role as Role] ?? '0'),
-          status: 'active',
-        } as never);
+        await Models.Assignment.insertMany(
+          companyIds.map((cid) => ({
+            user_id: created._id,
+            company_id: cid,
+            department_id: departments[cid] ?? null,
+            role: body.role,
+            amount_limit_minor: body.amount_limit_minor ? BigInt(body.amount_limit_minor) : BigInt(DEFAULT_AMOUNT_LIMIT_MINOR[body.role as Role] ?? '0'),
+            status: 'active',
+          })) as never[],
+        );
 
         const link = currentInviteLink(String(created._id), { seed, expires_at: expires, sent_at: new Date() })!;
 
         if (body.send_email) {
-          const company = await Models.Company.findById(companyId).select({ name: 1 }).lean();
+          const company = await Models.Company.findById(primaryCompanyId).select({ name: 1 }).lean();
           const sent = await sendMail({
             to: email,
             subject: `Mời bạn tham gia ${company?.name ?? 'FinGate'}`,
@@ -256,7 +283,7 @@ export function adminRoutes(app: FastifyInstance): void {
           actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
           action: 'hr.invite',
           subject: { type: 'user', id: String(created._id), code: maskEmail(email) },
-          company_id: companyId,
+          company_id: primaryCompanyId,
           ip: requestCtx(req).ip,
         });
         return ok(
@@ -653,25 +680,42 @@ export function adminRoutes(app: FastifyInstance): void {
         if (!user) throw new ApiError({ code: 'FG-WF-001', status: 404 });
         if (user.status === 'deactivated') throw new ApiError({ code: 'FG-HR-001', detail: 'Tài khoản đã ngừng hoạt động — không sửa được' });
 
-        const assignment = await Models.Assignment.findOne({ user_id: id, status: 'active' } as never)
+        const current = await Models.Assignment.find({ user_id: id, status: 'active' } as never)
           .select({ _id: 1, company_id: 1, department_id: 1, role: 1, amount_limit_minor: 1, extra_permissions: 1, denied_permissions: 1 })
-          .lean<{
-            _id: unknown;
-            company_id?: unknown;
-            department_id?: unknown;
-            role?: string;
-            amount_limit_minor?: unknown;
-            extra_permissions?: string[];
-            denied_permissions?: string[];
-          } | null>();
+          .lean<
+            {
+              _id: unknown;
+              company_id?: unknown;
+              department_id?: unknown;
+              role?: string;
+              amount_limit_minor?: unknown;
+              extra_permissions?: string[];
+              denied_permissions?: string[];
+            }[]
+          >();
 
-        const currentCompany = assignment?.company_id ? String(assignment.company_id) : null;
-        const nextCompany = body.company_id ?? currentCompany;
-        if (!nextCompany) throw new ApiError({ code: 'FG-HR-002', detail: 'Chưa xác định công ty' });
-        const companyChanged = Boolean(body.company_id && body.company_id !== currentCompany);
+        const currentIds = current.map((a) => String(a.company_id));
+        const currentCompany = current[0]?.company_id ? String(current[0].company_id) : null;
+
+        const sameSet = (a: string[], b: string[]): boolean => {
+          const sa = [...a].sort();
+          const sb = [...b].sort();
+          return sa.length === sb.length && sa.every((v, i) => v === sb[i]);
+        };
+
+        const scope = requireScope(req);
+        const requestedIds = body.company_ids?.map(String);
+        const outOfScopeIds = currentIds.filter((cid) => scope.companyIds !== null && !scope.companyIds.includes(cid));
+        // Giám đốc công ty con chỉ quản lý công ty trong phạm vi — không đụng công ty khác của nhân sự.
+        const nextCompanyIds = actor.scope_all
+          ? [...new Set(requestedIds?.length ? requestedIds : currentIds.length ? currentIds : currentCompany ? [currentCompany] : [])]
+          : [...new Set(currentIds.length ? currentIds.filter((cid) => !outOfScopeIds.includes(cid)) : actor.company_id ? [actor.company_id] : [])];
+        if (!nextCompanyIds.length) throw new ApiError({ code: 'FG-HR-002', detail: 'Chưa xác định công ty' });
+        const primaryCompanyId = nextCompanyIds[0] as string;
+        const primary = current.find((a) => String(a.company_id) === primaryCompanyId) ?? current[0];
+        const companyChanged = actor.scope_all && Boolean(nextCompanyIds.length && !sameSet(currentIds, nextCompanyIds));
         if (companyChanged) {
           requirePerm(req, 'hr:transfer');
-          if (!actor.scope_all) throw new ApiError({ code: 'FG-HR-002', detail: 'Chỉ quản trị cấp Tập đoàn được đổi công ty' });
           const held = await Models.Document.countDocuments({
             status: { $in: [...DECISION_STATUSES] },
             'approval.steps': { $elemMatch: { user_id: id, state: { $in: ['current', 'waiting'] } } },
@@ -685,38 +729,72 @@ export function adminRoutes(app: FastifyInstance): void {
           }
         }
 
-        const nextRole = String(body.role ?? assignment?.role ?? 'staff');
-        const nextDept = body.department_id !== undefined ? body.department_id : assignment?.department_id ? String(assignment.department_id) : null;
-        const nextLimit = body.amount_limit_minor !== undefined ? BigInt(body.amount_limit_minor) : asBigInt(assignment?.amount_limit_minor);
-        const prevExtra = (assignment?.extra_permissions ?? []) as string[];
-        const prevDenied = (assignment?.denied_permissions ?? []) as string[];
+        const nextRole = String(body.role ?? primary?.role ?? 'staff');
+        const nextLimit = body.amount_limit_minor !== undefined ? BigInt(body.amount_limit_minor) : asBigInt(primary?.amount_limit_minor);
+        const prevExtra = (primary?.extra_permissions ?? []) as string[];
+        const prevDenied = (primary?.denied_permissions ?? []) as string[];
         const nextExtra = body.extra_permissions !== undefined ? body.extra_permissions : prevExtra;
         const nextDenied = body.denied_permissions !== undefined ? body.denied_permissions : prevDenied;
+
+        // bộ phận theo từng công ty: ưu tiên giá trị gửi lên, nếu không giữ nguyên bộ phận cũ của công ty đó.
+        const nextDepartments: Record<string, string | null> = {};
+        for (const cid of nextCompanyIds) {
+          const prevA = current.find((a) => String(a.company_id) === cid);
+          if (body.departments && cid in body.departments) {
+            const d = body.departments[cid];
+            nextDepartments[cid] = d ? String(d) : null;
+          } else {
+            nextDepartments[cid] = prevA?.department_id ? String(prevA.department_id) : null;
+          }
+        }
+        const primaryDept = nextDepartments[primaryCompanyId] ?? null;
 
         const userSet: Record<string, unknown> = { updated_at: new Date(), mfa_required: MFA_REQUIRED_ROLES.includes(nextRole as Role) };
         if (body.display_name !== undefined) userSet.display_name = body.display_name;
         // tài khoản còn lời mời: đồng bộ cấu hình để lúc kích hoạt vào đúng công ty/vai trò mới.
         const inv = (user as { invite?: InviteShape }).invite;
         if (user.status === 'invited' && inv?.seed) {
-          userSet.invite = { ...inv, company_id: nextCompany, role: nextRole, department_id: nextDept };
+          const invDepartments: Record<string, string | null> = { ...nextDepartments };
+          const prevDepartments = (inv.departments ?? {}) as Record<string, unknown>;
+          for (const cid of outOfScopeIds) {
+            const prevA = current.find((a) => String(a.company_id) === cid);
+            invDepartments[cid] = prevA?.department_id ? String(prevA.department_id) : prevDepartments[cid] ? String(prevDepartments[cid]) : null;
+          }
+          userSet.invite = {
+            ...inv,
+            company_id: primaryCompanyId,
+            company_ids: [...nextCompanyIds, ...outOfScopeIds],
+            role: nextRole,
+            department_id: primaryDept,
+            departments: invDepartments,
+          };
         }
         await Models.User.updateOne({ _id: id }, { $set: userSet }).exec();
 
-        if (assignment) {
-          await Models.Assignment.updateOne(
-            { _id: assignment._id },
-            { $set: { company_id: nextCompany, department_id: nextDept, role: nextRole, amount_limit_minor: nextLimit, extra_permissions: nextExtra, denied_permissions: nextDenied } },
-          ).exec();
-        } else {
-          await Models.Assignment.create({ user_id: id, company_id: nextCompany, department_id: nextDept, role: nextRole, amount_limit_minor: nextLimit, extra_permissions: nextExtra, denied_permissions: nextDenied, status: 'active' } as never);
+        // đồng bộ Assignment: kết thúc công ty bị bỏ, cập nhật công ty còn lại, thêm công ty mới.
+        const currentByCompany = new Map(current.map((a) => [String(a.company_id), a]));
+        for (const a of current) {
+          const cid = String(a.company_id);
+          if (nextCompanyIds.includes(cid) || outOfScopeIds.includes(cid)) continue;
+          await Models.Assignment.updateOne({ _id: a._id }, { $set: { status: 'ended', valid_to: new Date() } }).exec();
+        }
+        for (const cid of nextCompanyIds) {
+          const existing = currentByCompany.get(cid);
+          const fields = {
+            department_id: nextDepartments[cid] ?? null,
+            role: nextRole,
+            amount_limit_minor: nextLimit,
+            extra_permissions: nextExtra,
+            denied_permissions: nextDenied,
+          };
+          if (existing) {
+            await Models.Assignment.updateOne({ _id: existing._id }, { $set: fields }).exec();
+          } else {
+            await Models.Assignment.create({ user_id: id, company_id: cid, ...fields, status: 'active' } as never);
+          }
         }
 
-        const roleChanged = nextRole !== String(assignment?.role ?? '');
-        const sameSet = (a: string[], b: string[]) => {
-          const sa = [...a].sort();
-          const sb = [...b].sort();
-          return sa.length === sb.length && sa.every((v, i) => v === sb[i]);
-        };
+        const roleChanged = nextRole !== String(primary?.role ?? '');
         const permsChanged = !sameSet(prevExtra, nextExtra) || !sameSet(prevDenied, nextDenied);
         if (companyChanged || roleChanged || permsChanged) await revokeAllUserSessions(id, 'đổi vai trò/công ty/quyền');
 
@@ -725,12 +803,12 @@ export function adminRoutes(app: FastifyInstance): void {
           actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
           action: 'hr.update',
           subject: { type: 'user', id, code: maskEmail(String(user.email)) },
-          company_id: nextCompany,
+          company_id: primaryCompanyId,
           diff_fields: {
             display_name: body.display_name ?? null,
-            company_id: companyChanged ? nextCompany : null,
+            company_ids: companyChanged ? nextCompanyIds : null,
             role: body.role ?? null,
-            department_id: nextDept,
+            departments: nextDepartments,
             amount_limit_minor: body.amount_limit_minor ?? null,
             extra_permissions: body.extra_permissions ?? null,
             denied_permissions: body.denied_permissions ?? null,

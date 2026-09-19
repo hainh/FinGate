@@ -917,7 +917,7 @@ Nếu là màn hình của **Tổng Giám đốc**
 ## 1. Mô hình
 
 * **1 Tập đoàn → nhiều công ty con**; mỗi công ty con có bộ nhân sự riêng.
-* Mỗi nhân sự thuộc về **một công ty** tại một thời điểm, gắn với **một chức danh/vai trò** (theo mục III).
+* Mỗi nhân sự có thể trực thuộc **nhiều công ty**; **chức danh/vai trò** và hạn mức dùng chung, **bộ phận chọn theo từng công ty** (theo mục III).
 * **Chủ tịch HĐQT** có quyền thêm/xóa tài khoản nhân sự của **mọi công ty con** bằng email.
 * **Giám đốc công ty con** được phân quyền **mời nhân sự của chính công ty mình** (chỉ mời; xóa/ngừng hoạt động tài khoản vẫn thuộc Chủ tịch HĐQT).
 
@@ -926,7 +926,7 @@ Nếu là màn hình của **Tổng Giám đốc**
 Người có quyền mời nhập:
 
 * Email
-* Công ty con sẽ trực thuộc (với Giám đốc công ty con: trường này **cố định vào công ty mình**, không chọn được công ty khác)
+* (Các) công ty con sẽ trực thuộc — chọn một hoặc nhiều công ty (với Giám đốc công ty con: trường này **cố định vào công ty mình**, không chọn được công ty khác)
 * Chức danh/vai trò
 
 Hệ thống:
