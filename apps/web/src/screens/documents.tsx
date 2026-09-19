@@ -205,9 +205,9 @@ export function DocListScreen({ title, source, fixed = {}, bulk, createHref, cre
     [qDebounced, get('status'), get('mine'), get('sort'), fixed],
   );
 
-  const queue = useQueue({ limit: 100 });
-  const docs = useDocuments(filters);
-  const processed = useProcessed(100);
+  const queue = useQueue({ limit: 100 }, source === 'queue');
+  const docs = useDocuments(filters, source === 'documents');
+  const processed = useProcessed(100, source === 'processed');
   const query = source === 'queue' ? queue : source === 'processed' ? processed : docs;
 
   const [selected, setSelected] = useState<Record<string, QueueRow>>({});

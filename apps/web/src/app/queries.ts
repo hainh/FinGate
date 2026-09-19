@@ -41,10 +41,12 @@ export function useOverview() {
   });
 }
 
-export function useQueue(params: { limit?: number } = {}) {
-  const { scope } = useAuth();
+export function useQueue(params: { limit?: number } = {}, enabled = true) {
+  const { scope, can } = useAuth();
   return useQuery({
     queryKey: ['queue', scope, params],
+    // Tài khoản không có quyền duyệt (vd kế toán viên) không gọi hàng chờ — tránh 403 vô nghĩa.
+    enabled: enabled && can('approval:act'),
     queryFn: () => apiCall<ListResult<QueueRow>>('/queue', { query: { scope, ...params } }),
   });
 }
@@ -61,10 +63,11 @@ export interface DocListFilters {
   limit?: number;
 }
 
-export function useDocuments(filters: DocListFilters) {
-  const { scope } = useAuth();
+export function useDocuments(filters: DocListFilters, enabled = true) {
+  const { scope, can } = useAuth();
   return useQuery({
     queryKey: ['documents', scope, filters],
+    enabled: enabled && can('doc:read'),
     queryFn: () => apiCall<ListResult<QueueRow>>('/documents', { query: { scope, ...filters } }),
   });
 }
@@ -87,10 +90,11 @@ export function useDecisionPack(id: string | undefined) {
   });
 }
 
-export function useProcessed(limit = 50) {
-  const { scope } = useAuth();
+export function useProcessed(limit = 50, enabled = true) {
+  const { scope, can } = useAuth();
   return useQuery({
     queryKey: ['queue-processed', scope, limit],
+    enabled: enabled && can('approval:act'),
     queryFn: () => apiCall<ListResult<QueueRow>>('/queue/processed', { query: { scope, limit } }),
   });
 }
