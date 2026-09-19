@@ -62,6 +62,16 @@ export function requireScope(req: FastifyRequest): ScopeLike {
   return scope;
 }
 
+/**
+ * Chặn ghi/đọc chéo công ty: `companyId` phải nằm trong phạm vi hiện tại (§7.5).
+ * Dùng cho route nhận company_id / tài khoản từ client (không tin UI).
+ */
+export function assertCompanyScope(req: FastifyRequest, companyId: string | null | undefined): void {
+  const { scope } = requestCtx(req);
+  if (scope.companyIds === null) return;
+  if (!companyId || !scope.companyIds.includes(companyId)) throw new ApiError({ code: 'FG-RBAC-002' });
+}
+
 export function requirePerm(req: FastifyRequest, ...perms: Permission[]): ActorInfo {
   const actor = requireActor(req);
   for (const p of perms) {

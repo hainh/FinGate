@@ -19,7 +19,7 @@ import {
   type Permission,
 } from '@fingate/shared';
 import { Models } from '../db/models.ts';
-import { defineRoute, requestCtx, requireActor, requireScope, validate } from '../lib/http.ts';
+import { assertCompanyScope, defineRoute, requestCtx, requireActor, requireScope, validate } from '../lib/http.ts';
 import { ok } from '../lib/serialize.ts';
 import {
   bankAccountUpsertBody,
@@ -160,6 +160,8 @@ export function financeRoutes(app: FastifyInstance): void {
         const acct = await Models.BankAccount.findById(id).lean();
         if (!acct) throw new ApiError({ code: 'FG-WF-001', status: 404 });
         if (acct.is_group && !actor.permissions.includes('admin:group_accounts')) throw new ApiError({ code: 'FG-RBAC-001' });
+        // Tài khoản thường phải thuộc công ty trong phạm vi hiện tại.
+        if (!acct.is_group) assertCompanyScope(req, acct.company_id ? String(acct.company_id) : null);
         if (status !== 'active') {
           const referencing = await Models.Document.countDocuments({
             status: { $in: ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.chairman', 'approved', 'processing'] },
@@ -331,6 +333,7 @@ export function financeRoutes(app: FastifyInstance): void {
         const body = validate(statementImportBody, req.body);
         const account = await Models.BankAccount.findById(id).lean();
         if (!account) throw new ApiError({ code: 'FG-WF-001', status: 404 });
+        assertCompanyScope(req, account.company_id ? String(account.company_id) : null);
         let inserted = 0;
         const duplicates: string[] = [];
         for (const row of body.rows) {
@@ -425,6 +428,7 @@ export function financeRoutes(app: FastifyInstance): void {
         }
         const companyId = body.company_id ?? actor.company_id;
         if (!companyId) throw new ApiError({ code: 'FG-RBAC-002' });
+        assertCompanyScope(req, companyId);
         const dup = await Models.Loan.findOne({ company_id: companyId, contract_code: body.contract_code }).lean();
         if (dup) throw new ApiError({ code: 'FG-VAL-001', errors: { contract_code: 'Hợp đồng tín dụng này đã có' } });
         const created = await Models.Loan.create({
@@ -597,6 +601,7 @@ export function financeRoutes(app: FastifyInstance): void {
         const body = validate(debtUpsertBody, req.body);
         const companyId = body.company_id ?? actor.company_id;
         if (!companyId) throw new ApiError({ code: 'FG-RBAC-002' });
+        assertCompanyScope(req, companyId);
         const created = await Models.DebtItem.create({
           kind: body.kind,
           company_id: companyId,
@@ -696,6 +701,9 @@ export function financeRoutes(app: FastifyInstance): void {
         if (String(toAcct.company_id) !== body.to_company_id) {
           throw new ApiError({ code: 'FG-RBAC-002', detail: 'Tài khoản nhận không thuộc công ty nhận' });
         }
+        // Cả công ty nguồn và nhận phải nằm trong phạm vi hiện tại (chuyển nội bộ là thao tác cấp tập đoàn).
+        assertCompanyScope(req, body.from_company_id);
+        assertCompanyScope(req, body.to_company_id);
 
         const minor = BigInt(body.amount.amount_minor);
         const code = await nextDocumentCode('internal');

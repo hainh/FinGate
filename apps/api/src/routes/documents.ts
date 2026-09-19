@@ -319,6 +319,7 @@ export function documentRoutes(app: FastifyInstance): void {
         const params = req.params as { id: string };
         const body = validate(documentUpdateBody, req.body);
         const doc = await loadDoc(params.id);
+        await assertVisible(req, String(doc.company_id));
         if (String(doc.created_by) !== actor.user_id && !actor.permissions.includes('approval:override')) {
           throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ người lập mới sửa được hồ sơ' });
         }
@@ -397,6 +398,7 @@ export function documentRoutes(app: FastifyInstance): void {
           // hồ sơ đã archive → đọc từ R2 (§8.7)
           throw new ApiError({ code: 'FG-SYS-003', detail: 'Hồ sơ lưu trữ — đang đọc từ kho' });
         }
+        await assertDocVisible(req, params.id);
         return ok(reply, { data: await detailOf(params.id, actor.user_id) }, { maxAge: 0 });
       },
     }),
@@ -723,6 +725,7 @@ export function documentRoutes(app: FastifyInstance): void {
         const key = (req.query as { key?: string }).key ?? '';
         if (!/^uploads\/[\w./-]+$/.test(key)) throw new ApiError({ code: 'FG-VAL-001', detail: 'Key không hợp lệ' });
         const actor = requireActor(req);
+        await assertUploadKeyVisible(req, key);
         const chunks: Buffer[] = [];
         for await (const c of req.raw) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c as string));
         const buf = Buffer.concat(chunks);
@@ -746,6 +749,7 @@ export function documentRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const key = (req.query as { key?: string }).key ?? '';
         if (!/^uploads\/[\w./-]+$/.test(key)) throw new ApiError({ code: 'FG-VAL-001' });
+        await assertUploadKeyVisible(req, key);
         const url = await storage().presignGet(key, 60);
         return reply.code(302).header('location', url).header('cache-control', 'private, no-store').send();
       },
@@ -762,6 +766,22 @@ async function assertVisible(req: FastifyRequest, companyId: string): Promise<vo
   const { scope } = requestCtx(req);
   if (scope.companyIds === null) return;
   if (!scope.companyIds.includes(companyId)) throw new ApiError({ code: 'FG-RBAC-002' });
+}
+
+/** `findById` KHÔNG kèm scope → tra company_id rồi kiểm tra trước khi trả chi tiết. */
+async function assertDocVisible(req: FastifyRequest, id: string): Promise<void> {
+  const doc = await Models.Document.findById(id).select({ company_id: 1 }).lean<{ company_id?: unknown } | null>();
+  if (!doc) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy hồ sơ' });
+  await assertVisible(req, String(doc.company_id));
+}
+
+/** Key `uploads/{companyCode}/{docCode}/{attachmentId}_v{n}_...` → chứng từ phải thuộc phạm vi (§7.5). */
+async function assertUploadKeyVisible(req: FastifyRequest, key: string): Promise<void> {
+  const file = key.split('/').pop() ?? '';
+  const attachmentId = file.split('_')[0] ?? '';
+  const att = await Models.Attachment.findOne({ attachment_id: attachmentId }).select({ company_id: 1 }).lean<{ company_id?: unknown } | null>();
+  if (!att) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy chứng từ' });
+  await assertVisible(req, String(att.company_id));
 }
 
 async function rebuildEvidenceForDoc(id: string, doc: { kind: DocKind; category_id?: string | null; company_id: string }): Promise<{ required: string[]; present: string[]; missing: string[] }> {

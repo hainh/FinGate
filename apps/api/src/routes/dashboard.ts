@@ -103,7 +103,12 @@ export function dashboardRoutes(app: FastifyInstance): void {
       url: '/newsletter',
       config: { perms: ['report:view'] as Permission[], screen: 'DASH-04', summary: 'Lịch sử bản tin' },
       handler: async (req, reply) => {
-        const rows = await Models.Setting.find({ key: { $regex: '^newsletter:' } })
+        const scope = requireScope(req);
+        // bản tin lưu theo key `newsletter:<date>:<scope>` — chỉ trả đúng phạm vi hiện tại,
+        // không để công ty B đọc bản tin tổng hợp của công ty A (§7.5).
+        const scopeKey = scope.companyIds === null ? 'all' : scope.companyIds.join(',');
+        const rx = new RegExp(`^newsletter:[^:]*:${scopeKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
+        const rows = await Models.Setting.find({ key: rx })
           .sort({ key: -1 })
           .limit(60)
           .select({ key: 1, value: 1, updated_at: 1 })

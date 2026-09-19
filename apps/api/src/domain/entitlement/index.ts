@@ -133,13 +133,16 @@ export async function resolveIdentity(
 
 export function scopeFor(identity: ResolvedIdentity, requested?: string | null): ScopeLike {
   const ids = identity.assignments.map((a) => a.company_id);
-  if (identity.scope_all) {
-    // chairman/admin: mọi company của tập đoàn
-    return { companyIds: null };
-  }
+  // Yêu cầu MỘT công ty cụ thể → LUÔN thu hẹp về đúng công ty đó, kể cả người có
+  // `scope_all` (chủ tịch/quản trị). Nếu không, bộ chuyển phạm vi ở header vô tác dụng
+  // và dữ liệu công ty A vẫn hiện khi đang chọn công ty B (§7.5).
   if (requested && requested !== 'all') {
-    if (!ids.includes(requested)) return { companyIds: [] }; // ngoài scope → rỗng, không 500
+    if (!identity.scope_all && !ids.includes(requested)) return { companyIds: [] }; // ngoài scope → rỗng, không 500
     return { companyIds: [requested] };
+  }
+  if (identity.scope_all) {
+    // không yêu cầu gì → chủ tịch/quản trị thấy mọi công ty của tập đoàn
+    return { companyIds: null };
   }
   return { companyIds: ids };
 }

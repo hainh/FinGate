@@ -977,8 +977,11 @@ export function adminRoutes(app: FastifyInstance): void {
       method: 'GET',
       url: '/admin/matrix',
       config: { perms: ['admin:matrix'] as Permission[], screen: 'ADM-04', summary: 'Approval Matrix' },
-      handler: async (_req, reply) => {
-        const rows = await Models.ApprovalMatrix.find({}).sort({ doc_kind: 1, amount_min_minor: 1 }).lean();
+      handler: async (req, reply) => {
+        const scope = requireScope(req);
+        // Chỉ ma trận của công ty trong phạm vi + ma trận cấp tập đoàn (company_id null).
+        const filter = scope.companyIds === null ? {} : { $or: [{ company_id: { $in: scope.companyIds } }, { company_id: null }] };
+        const rows = await Models.ApprovalMatrix.find(filter as never).sort({ doc_kind: 1, amount_min_minor: 1 }).lean();
         const companies = await Models.Company.find({}).select({ name: 1 }).lean();
         const cmap = new Map(companies.map((c) => [String(c._id), String(c.name)]));
         return ok(
@@ -1021,9 +1024,12 @@ export function adminRoutes(app: FastifyInstance): void {
       schema: { tags: ['admin'], body: matrixUpsertBodySchema },
       handler: async (req, reply) => {
         const actor = requireActor(req);
+        const scope = requireScope(req);
         const body = validate(matrixUpsertBody, req.body);
         assertMatrixSteps(body.steps.map((s) => ({ order: s.order, role: s.role as Role, sla_hours: s.sla_hours, mandatory: s.mandatory })));
         if (body.company_id) await assertCompanyAccess(req, body.company_id);
+        // ma trận cấp tập đoàn (company_id null) chỉ cấp tập đoàn được sửa (§7.5)
+        else if (scope.companyIds !== null) throw new ApiError({ code: 'FG-RBAC-002', detail: 'Chỉ cấp tập đoàn cấu hình ma trận cấp tập đoàn' });
 
         const existing = await Models.ApprovalMatrix.findOne({
           company_id: body.company_id ?? null,
@@ -1676,8 +1682,11 @@ export function adminRoutes(app: FastifyInstance): void {
       method: 'GET',
       url: '/admin/alert-rules',
       config: { perms: ['alert:config'] as Permission[], screen: 'ADM-10', summary: 'Cấu hình 8 loại cảnh báo' },
-      handler: async (_req, reply) => {
-        const rows = await Models.Alert.find({ type: 'rule' } as never).lean();
+      handler: async (req, reply) => {
+        const scope = requireScope(req);
+        // chỉ quy tắc của công ty trong phạm vi + quy tắc cấp tập đoàn (company_id null).
+        const filter = scope.companyIds === null ? { type: 'rule' } : { type: 'rule', $or: [{ company_id: { $in: scope.companyIds } }, { company_id: null }] };
+        const rows = await Models.Alert.find(filter as never).lean();
         return ok(reply, { items: rows.map(ruleView) }, { maxAge: 30 });
       },
     }),
@@ -1691,7 +1700,10 @@ export function adminRoutes(app: FastifyInstance): void {
       schema: { tags: ['admin'], body: { type: 'object' } },
       handler: async (req, reply) => {
         const actor = requireActor(req);
+        const scope = requireScope(req);
         const body = validate(alertRuleUpsertBody, req.body);
+        if (body.company_id) await assertCompanyAccess(req, body.company_id);
+        else if (scope.companyIds !== null) throw new ApiError({ code: 'FG-RBAC-002', detail: 'Chỉ cấp tập đoàn cấu hình cảnh báo cấp tập đoàn' });
         const created = await Models.Alert.updateOne(
           { type: 'rule', alert_type: body.type, company_id: body.company_id ?? null },
           {

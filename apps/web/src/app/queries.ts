@@ -185,8 +185,9 @@ export function useForecast(horizon: string) {
 }
 
 export function useNewsletter() {
+  const { scope } = useAuth();
   return useQuery({
-    queryKey: ['newsletter'],
+    queryKey: ['newsletter', scope],
     queryFn: () => apiData<Newsletter>('/newsletter/daily'),
   });
 }
@@ -227,8 +228,9 @@ export function useAlerts() {
 }
 
 export function useSearch(q: string) {
+  const { scope } = useAuth();
   return useQuery({
-    queryKey: ['search', q],
+    queryKey: ['search', scope, q],
     enabled: q.trim().length >= 2,
     queryFn: () => apiData<{ query: string; hits: SearchHit[] }>('/search', { query: { q } }),
   });
@@ -237,8 +239,9 @@ export function useSearch(q: string) {
 /* ---------------- quản trị ---------------- */
 
 export function useMatrix() {
+  const { scope } = useAuth();
   return useQuery({
-    queryKey: ['matrix'],
+    queryKey: ['matrix', scope],
     queryFn: () => apiCall<{ items: MatrixEntry[] }>('/admin/matrix'),
   });
 }
@@ -281,8 +284,9 @@ export function useAuditLog(page = 1, q?: string) {
 }
 
 export function useCompanies() {
+  const { scope } = useAuth();
   return useQuery({
-    queryKey: ['companies'],
+    queryKey: ['companies', scope],
     staleTime: 600_000,
     queryFn: () => apiCall<{ items: import('./types.ts').CompanyRow[] }>('/companies'),
   });
