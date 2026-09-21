@@ -93,7 +93,7 @@ function ShellInner({ children }: { children: ReactNode }): ReactNode {
   const need = PATH_PERMS.find((p) => location.pathname.startsWith(p.prefix))?.perm;
   if (need && !can(need)) {
     // Tài khoản quản lý thuần (không doc:read) về khu Quản trị; còn lại về Tổng quan.
-    return <Navigate to={can('doc:read') ? '/dashboard' : '/quantri/nguoidung'} replace />;
+    return <Navigate to={can('doc:read') ? '/dashboard' : '/quantri'} replace />;
   }
   return <FgAppShell>{children}</FgAppShell>;
 }
@@ -103,7 +103,17 @@ function HomeRedirect(): ReactNode {
   const { status, can } = useAuth();
   if (status === 'loading') return <FgSpinner center />;
   if (status === 'anon') return <Navigate to="/dang-nhap" replace />;
-  return <Navigate to={can('doc:read') ? '/dashboard' : '/quantri/nguoidung'} replace />;
+  return <Navigate to={can('doc:read') ? '/dashboard' : '/quantri'} replace />;
+}
+
+/** Khu Quản trị → mở tab đầu tiên người dùng có quyền (KTT chỉ đọc audit → Audit log). */
+function AdminHomeRedirect(): ReactNode {
+  const { can } = useAuth();
+  if (can('hr:invite')) return <Navigate to="/quantri/nguoidung" replace />;
+  if (can('admin:settings')) return <Navigate to="/quantri/cong-ty" replace />;
+  if (can('admin:matrix')) return <Navigate to="/quantri/quy-trinh-duyet" replace />;
+  if (can('audit:read')) return <Navigate to="/quantri/audit" replace />;
+  return <Navigate to="/403" replace />;
 }
 
 export function AppRoutes(): ReactNode {
@@ -150,6 +160,7 @@ export function AppRoutes(): ReactNode {
       <Route path="/thong-bao" element={<Shell><NotificationsScreen /></Shell>} /> {/* NOTI-01 */}
       <Route path="/tim-kiem" element={<Shell><SearchScreen /></Shell>} /> {/* SRCH-02 */}
       <Route path="/ho-so/:loai/:id" element={<Shell><DocumentDetailScreen /></Shell>} /> {/* DOC-01 */}
+      <Route path="/quantri" element={<Shell><AdminHomeRedirect /></Shell>} />
       <Route path="/quantri/nguoidung" element={<Shell><PersonnelScreen /></Shell>} /> {/* ADM-01 */}
       <Route path="/quantri/cong-ty" element={<Shell><CompaniesScreen /></Shell>} /> {/* ADM-06/07 */}
       <Route path="/quantri/quy-trinh-duyet" element={<Shell><MatrixScreen /></Shell>} /> {/* ADM-04 */}

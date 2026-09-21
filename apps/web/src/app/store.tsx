@@ -134,7 +134,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
     const back = sessionStorage.getItem('fg.returnTo');
     sessionStorage.removeItem('fg.returnTo');
     const canDoc = Boolean(profile?.entitlements?.permissions?.includes('doc:read'));
-    const fallback = canDoc ? '/dashboard' : '/quantri/nguoidung';
+    const fallback = canDoc ? '/dashboard' : '/quantri';
     if (!back || back.startsWith('/dang-nhap') || back.startsWith('/kich-hoat') || back.startsWith('/mat-khau')) return fallback;
     if (!canDoc && !back.startsWith('/quantri') && back !== '/') return fallback;
     return back;

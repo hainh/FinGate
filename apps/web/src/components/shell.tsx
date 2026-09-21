@@ -19,7 +19,8 @@ interface NavItem {
   to: string;
   label: string;
   glyph: string;
-  perm?: string;
+  /** Một quyền hoặc nhiều quyền (hiện nếu có BẤT KỲ quyền nào trong danh sách). */
+  perm?: string | string[];
   badge?: 'awaiting' | 'unread';
   mobile?: boolean;
   match?: string[]; // đường dẫn con cùng nhóm
@@ -37,8 +38,9 @@ const NAV: NavItem[] = [
   { to: '/dong-tien', label: 'Dòng tiền', glyph: '∿', mobile: true, perm: 'forecast:read', match: ['/dong-tien'] },
   { to: '/baocao', label: 'Báo cáo', glyph: '☰', perm: 'report:view', match: ['/baocao'] },
   { to: '/ban-tin/ngay', label: 'Bản tin', glyph: '✉', perm: 'report:view', match: ['/ban-tin'] },
-  // Người có quyền mời/điều phối nhân sự (Chủ tịch · GĐ · KTT · Quản trị) — không chỉ admin:matrix.
-  { to: '/quantri/nguoidung', label: 'Quản trị', glyph: '⚙', perm: 'hr:invite', match: ['/quantri'] },
+  // Ai được vào BẤT KỲ tab Quản trị nào (nhân sự · công ty · ma trận · audit) đều thấy mục này.
+  // KTT sau khi bỏ quyền nhân sự vẫn giữ `audit:read` → vẫn xem được audit log.
+  { to: '/quantri', label: 'Quản trị', glyph: '⚙', perm: ['hr:invite', 'admin:settings', 'admin:matrix', 'audit:read'], match: ['/quantri'] },
 ];
 
 /**
@@ -109,7 +111,7 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
     if (!isOverlay) setMobileOpen(false);
   }, [isOverlay]);
   const items = useMemo(() => {
-    const visible = NAV.filter((n) => !n.perm || can(n.perm));
+    const visible = NAV.filter((n) => !n.perm || (Array.isArray(n.perm) ? n.perm.some((p) => can(p)) : can(n.perm)));
     if (!isMobile) return visible;
     return visible.filter((n) => n.mobile);
   }, [isMobile, location.pathname, can]);
