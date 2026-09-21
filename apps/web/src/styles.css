@@ -86,6 +86,25 @@ body {
   flex: none;
 }
 
+.fg-rail-close {
+  all: unset;
+  margin-inline-start: auto;
+  cursor: pointer;
+  width: var(--fg-control-md);
+  height: var(--fg-control-md);
+  display: grid;
+  place-items: center;
+  border-radius: var(--fg-radius-md);
+  color: var(--fg-fix-white);
+  font-size: 18px;
+  line-height: 1;
+  flex: none;
+}
+
+.fg-rail-close:hover {
+  background: var(--fg-bg-rail-hover);
+}
+
 .fg-rail-nav {
   flex: 1;
   padding: var(--fg-space-2) var(--fg-space-3);

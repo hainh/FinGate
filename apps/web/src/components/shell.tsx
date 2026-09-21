@@ -131,6 +131,16 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
         <div className="fg-rail-logo">
           <span className="fg-rail-mark" aria-hidden>F</span>
           <span style={{ display: collapsed && !isOverlay ? 'none' : undefined }}>FinGate</span>
+          {isOverlay ? (
+            <button
+              type="button"
+              className="fg-rail-close"
+              aria-label="Đóng menu"
+              onClick={() => setMobileOpen(false)}
+            >
+              ✕
+            </button>
+          ) : null}
         </div>
         <nav className="fg-rail-nav">
           {items.map((n) => (
