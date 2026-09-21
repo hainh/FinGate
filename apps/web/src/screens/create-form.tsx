@@ -11,7 +11,7 @@ import { DatePicker } from 'antd';
 import dayjs from 'dayjs';
 import { DOC_KIND_LABEL, formatMoney, moneyFromWire, normalizePlannedDate, statusLabel, type Money } from '@fingate/shared';
 import { ApiRequestError, apiData } from '../app/api.ts';
-import { useCurrentCompanyId } from '../app/store.tsx';
+import { SCOPE_ALL, useAuth, useCurrentCompanyId } from '../app/store.tsx';
 import { useBankAccounts, useDocument } from '../app/queries.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoneyInput, FgSelect, FgTextarea, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -64,6 +64,9 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
   const currentCompany = useCurrentCompanyId();
+  const { me, scope } = useAuth();
+  const scopeAll = scope === SCOPE_ALL;
+  const companyName = me?.assignments.find((a) => a.company_id === currentCompany)?.company_name ?? null;
   const { message } = useToast();
   const existing = useDocument(id);
   const accounts = useBankAccounts();
@@ -116,6 +119,10 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
   };
 
   const save = async () => {
+    if (scopeAll) {
+      message.error('Chưa chọn công ty — chọn công ty ở bộ chuyển phạm vi (góc trên) trước khi lưu phiếu');
+      return;
+    }
     setBusy(true);
     setErrors({});
     try {
@@ -164,12 +171,22 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
   }
 
   const canEdit = !id || loaded ? (loaded?.can.edit ?? true) : true;
+  const titlePrefix = `${id ? 'Sửa' : 'Tạo mới'} ${DOC_KIND_LABEL[kind].toLowerCase()}`;
+  const pageTitle = !scopeAll && companyName ? `${titlePrefix} cho ${companyName}` : titlePrefix;
 
   return (
     <>
-      <FgPageHeader title={`${id ? 'Sửa' : 'Tạo mới'} ${DOC_KIND_LABEL[kind].toLowerCase()}`} meta="Nháp tự lưu trên máy — gửi duyệt khi đủ chứng từ" />
+      <FgPageHeader title={pageTitle} meta="Nháp tự lưu trên máy — gửi duyệt khi đủ chứng từ" />
       {!canEdit ? (
         <FgAlert tone="warning" title="Hồ sơ đã qua cấp duyệt, không sửa được nữa" description="Chỉ người tạo có thể sửa khi còn Nháp / Yêu cầu bổ sung." style={{ marginBottom: 16 }} />
+      ) : null}
+      {scopeAll ? (
+        <FgAlert
+          tone="warning"
+          title="Chưa chọn công ty"
+          description="Phiếu phải thuộc một công ty cụ thể. Đang để “Toàn tập đoàn” — chọn công ty ở bộ chuyển phạm vi (góc trên bên phải) trước khi lưu."
+          style={{ marginBottom: 16 }}
+        />
       ) : null}
       <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'minmax(0,2fr) minmax(240px,1fr)' }}>
         <FgCard>
