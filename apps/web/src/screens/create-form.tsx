@@ -11,7 +11,7 @@ import { DatePicker } from 'antd';
 import dayjs from 'dayjs';
 import { DOC_KIND_LABEL, formatMoney, moneyFromWire, normalizePlannedDate, statusLabel, type Money } from '@fingate/shared';
 import { ApiRequestError, apiData } from '../app/api.ts';
-import { useAuth } from '../app/store.tsx';
+import { useAuth, SCOPE_ALL } from '../app/store.tsx';
 import { useBankAccounts, useDocument } from '../app/queries.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoneyInput, FgSelect, FgTextarea, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -63,7 +63,7 @@ const initial = (): FormState => ({
 export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollover' | 'internal' }): ReactNode {
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
-  const { me } = useAuth();
+  const { me, scope } = useAuth();
   const { message } = useToast();
   const existing = useDocument(id);
   const accounts = useBankAccounts();
@@ -84,7 +84,10 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
 
 
   const buildBody = () => {
-    const company = me?.scope.active_company_id ?? me?.assignments[0]?.company_id;
+    // Hồ sơ thuộc công ty đang chọn ở bộ chuyển phạm vi (§7.5), không phải công ty
+    // "active" của phiên (có thể lệch khi người dùng đổi phạm vi). Chỉ khi xem Toàn
+    // tập đoàn mới lấy công ty mặc định của phiên.
+    const company = scope !== SCOPE_ALL ? scope : (me?.scope.active_company_id ?? me?.assignments[0]?.company_id);
     const body: Record<string, unknown> = {
       kind,
       company_id: company,
