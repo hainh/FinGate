@@ -93,7 +93,12 @@ export async function apiCall<T = unknown>(path: string, opts: ApiOptions = {}):
   }
 
   const headers: Record<string, string> = { accept: 'application/json' };
-  const scope = opts.scope ?? scopeProvider();
+  // Phạm vi công ty: ưu tiên `opts.scope` (deep-link), rồi suy từ `query.scope` của chính
+  // request. Suy từ query để header LUÔN khớp tham số và queryKey — nếu chỉ dựa vào
+  // scopeProvider (đổi sau render qua effect) thì request có thể kịp gửi header cũ, server
+  // trả nhầm dữ liệu công ty cũ (màn thu chi còn hiện phiếu công ty trước đó).
+  const queryScope = opts.query?.scope;
+  const scope = opts.scope ?? (typeof queryScope === 'string' ? queryScope : undefined) ?? scopeProvider();
   if (scope) headers['x-company-scope'] = scope;
   if (opts.ifMatch !== undefined) headers['if-match'] = String(opts.ifMatch);
   let payload: string | undefined;

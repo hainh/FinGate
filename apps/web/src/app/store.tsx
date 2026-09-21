@@ -9,7 +9,6 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { keepPreviousData } from '@tanstack/react-query';
 import { App as AntdApp, ConfigProvider } from 'antd';
 import viVN from 'antd/locale/vi_VN';
 import dayjs from 'dayjs';
@@ -59,6 +58,21 @@ export const useUi = (): UiContextValue => useContext(UiContext)!;
 
 export const SCOPE_ALL = 'all';
 
+/**
+ * Phạm vi đang chọn, giữ ở module để placeholderData đọc được (queryClient ở ngoài React).
+ * Cập nhật đồng bộ trong setScope/loadMe, song song với scopeProvider.
+ */
+let activeScope: string = SCOPE_ALL;
+
+/**
+ * Giữ dữ liệu của query cũ khi đổi filter trong CÙNG phạm vi, nhưng KHÔNG bắc cầu sang
+ * phạm vi công ty khác — tránh hiện nhầm phiếu công ty A khi vừa chuyển sang B. Mọi query
+ * phụ thuộc phạm vi đều đặt scope ở queryKey[1].
+ */
+function keepDataWithinScope(prevData: unknown, prevQuery: { queryKey: readonly unknown[] } | undefined): unknown {
+  return prevQuery && prevQuery.queryKey[1] === activeScope ? prevData : undefined;
+}
+
 interface AuthContextValue {
   status: 'loading' | 'anon' | 'authed';
   me: MeProfile | null;
@@ -96,7 +110,7 @@ export const queryClient = new QueryClient({
       // handoff §4: polling 30s, không WebSocket; giữ dữ liệu khi đổi filter.
       refetchInterval: 30_000,
       refetchOnWindowFocus: true,
-      placeholderData: keepPreviousData,
+      placeholderData: keepDataWithinScope,
       retry: 0, // retry nằm ở api.ts (GET only, backoff 2s)
       staleTime: 10_000,
     },
@@ -120,6 +134,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setScopeProvider(() => (scope && scope !== SCOPE_ALL ? scope : null));
+    activeScope = scope;
   }, [scope]);
 
   const loadMe = useCallback(async (): Promise<MeProfile | null> => {
@@ -129,7 +144,12 @@ export function AppProviders({ children }: { children: ReactNode }) {
       setStatus('authed');
       const active = profile.scope?.active_company_id;
       const def = profile.prefs?.default_scope;
-      setScopeState(def === 'all' || !def ? SCOPE_ALL : active && profile.scope.company_ids.includes(def) ? def : SCOPE_ALL);
+      const next = def === 'all' || !def ? SCOPE_ALL : active && profile.scope.company_ids.includes(def) ? def : SCOPE_ALL;
+      // Đặt provider đồng bộ TRƯỚC khi setState để các query mount sau đó gửi đúng
+      // phạm vi (effect cập nhật provider chạy sau con của nó → dễ lệch ở lần tải đầu).
+      setScopeProvider(() => (next !== SCOPE_ALL ? next : null));
+      activeScope = next;
+      setScopeState(next);
       return profile;
     } catch (e) {
       if (e instanceof ApiRequestError && (e.status === 401 || e.code === 'FG-AUTH-001')) setStatus('anon');
@@ -206,6 +226,10 @@ export function AppProviders({ children }: { children: ReactNode }) {
   }, []);
 
   const setScope = useCallback((s: string) => {
+    // Cập nhật provider NGAY (đồng bộ), không chờ effect — request phát sinh ngay sau
+    // khi đổi phạm vi (invalidate + query key mới) phải gửi đúng header công ty.
+    setScopeProvider(() => (s && s !== SCOPE_ALL ? s : null));
+    activeScope = s;
     setScopeState(s);
     // đổi scope → refetch mọi số liệu, giữ nguyên filter (URL không đổi).
     queryClient.invalidateQueries();
