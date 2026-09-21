@@ -3,6 +3,8 @@ Commit và push sau khi làm xong
 
 tài liệu trong thư mục docs/
 
+các tài khoản test đều có password 123qweasdzxc
+
 <!-- CODEGRAPH_START -->
 ## CodeGraph
 
