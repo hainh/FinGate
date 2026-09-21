@@ -26,7 +26,7 @@ function perms(status: string, opts: { mine?: boolean; history?: History } = {})
   );
 }
 
-describe('approvedFromChiefAccountantUp', () => {
+describe('approvedFromChiefAccountantUp — chỉ xét vòng duyệt hiện tại', () => {
   it('false khi chưa ai duyệt', () => {
     expect(approvedFromChiefAccountantUp([])).toBe(false);
     expect(approvedFromChiefAccountantUp([{ action: 'submit', actor: { role: 'staff' } }])).toBe(false);
@@ -43,6 +43,16 @@ describe('approvedFromChiefAccountantUp', () => {
     }
     expect(approvedFromChiefAccountantUp([{ action: 'approve_with_reason', actor: { role: 'chief_accountant' } }])).toBe(true);
   });
+
+  it('gửi lại sau khi bị trả về → duyệt cũ bị vô hiệu (false)', () => {
+    const h: History = [
+      { action: 'submit', actor: { role: 'staff' } },
+      { action: 'approve', actor: { role: 'chief_accountant' } },
+      { action: 'request_changes', actor: { role: 'director' } },
+      { action: 'submit', actor: { role: 'staff' } },
+    ];
+    expect(approvedFromChiefAccountantUp(h)).toBe(false);
+  });
 });
 
 describe('documentPermissions — xoá/sửa của người lập', () => {
@@ -52,8 +62,43 @@ describe('documentPermissions — xoá/sửa của người lập', () => {
     expect(c.delete).toBe(true);
   });
 
+  it('đang chờ KTT duyệt (vòng đầu): sửa và xoá được', () => {
+    const c = perms('pending.ktt', { history: [{ action: 'submit', actor: { role: 'staff' } }] });
+    expect(c.edit).toBe(true);
+    expect(c.delete).toBe(true);
+  });
+
+  it('gửi lại sau khi bị trả về, nay chờ KTT: vẫn sửa và xoá được', () => {
+    const c = perms('pending.ktt', {
+      history: [
+        { action: 'submit', actor: { role: 'staff' } },
+        { action: 'approve', actor: { role: 'chief_accountant' } },
+        { action: 'request_changes', actor: { role: 'director' } },
+        { action: 'submit', actor: { role: 'staff' } },
+      ],
+    });
+    expect(c.edit).toBe(true);
+    expect(c.delete).toBe(true);
+  });
+
+  it('KTT đã duyệt ở vòng này (chờ PGĐ): KHÔNG sửa/xoá được', () => {
+    const c = perms('pending.pgd', {
+      history: [
+        { action: 'submit', actor: { role: 'staff' } },
+        { action: 'approve', actor: { role: 'chief_accountant' } },
+      ],
+    });
+    expect(c.edit).toBe(false);
+    expect(c.delete).toBe(false);
+  });
+
   it('yêu cầu bổ sung, chưa ai từ KTT trở lên duyệt: sửa và xoá được', () => {
-    const c = perms('changes_requested', { history: [{ action: 'request_changes', actor: { role: 'chief_accountant' } }] });
+    const c = perms('changes_requested', {
+      history: [
+        { action: 'submit', actor: { role: 'staff' } },
+        { action: 'request_changes', actor: { role: 'chief_accountant' } },
+      ],
+    });
     expect(c.edit).toBe(true);
     expect(c.delete).toBe(true);
   });
@@ -61,6 +106,7 @@ describe('documentPermissions — xoá/sửa của người lập', () => {
   it('yêu cầu bổ sung SAU khi KTT đã duyệt: KHÔNG sửa/xoá được', () => {
     const c = perms('changes_requested', {
       history: [
+        { action: 'submit', actor: { role: 'staff' } },
         { action: 'approve', actor: { role: 'chief_accountant' } },
         { action: 'request_changes', actor: { role: 'deputy_director' } },
       ],
@@ -70,7 +116,12 @@ describe('documentPermissions — xoá/sửa của người lập', () => {
   });
 
   it('bị từ chối trước khi KTT duyệt: sửa/xoá được', () => {
-    const c = perms('rejected', { history: [{ action: 'reject', actor: { role: 'chief_accountant' } }] });
+    const c = perms('rejected', {
+      history: [
+        { action: 'submit', actor: { role: 'staff' } },
+        { action: 'reject', actor: { role: 'chief_accountant' } },
+      ],
+    });
     expect(c.edit).toBe(true);
     expect(c.delete).toBe(true);
   });
@@ -78,6 +129,7 @@ describe('documentPermissions — xoá/sửa của người lập', () => {
   it('bị từ chối sau khi KTT đã duyệt: KHÔNG sửa/xoá được', () => {
     const c = perms('rejected', {
       history: [
+        { action: 'submit', actor: { role: 'staff' } },
         { action: 'approve', actor: { role: 'chief_accountant' } },
         { action: 'reject', actor: { role: 'director' } },
       ],

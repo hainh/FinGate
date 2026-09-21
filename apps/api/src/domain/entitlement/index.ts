@@ -192,19 +192,32 @@ export interface DocPermissions {
 /** Cấp duyệt "từ Kế toán trưởng trở lên" (blueprint §III). */
 const ROLES_FROM_CHIEF_ACCOUNTANT: readonly string[] = ['chief_accountant', 'deputy_director', 'director', 'chairman'];
 
+/** Trạng thái người lập còn được xoá/sửa (kết hợp gate chưa ai KTT+ duyệt ở vòng hiện tại). */
+const MAINTAINABLE_STATUSES: readonly string[] = ['draft', 'pending.ktt', 'changes_requested', 'rejected'];
+
 /**
- * Đã có ai từ Kế toán trưởng trở lên **duyệt** chưa? Đọc từ `history[]` (nguồn sự thật)
- * thay vì `steps`, vì steps bị reset khi trả về bổ sung — nhưng lần duyệt trước đó vẫn
- * tính là "đã qua tay cấp KTT+".
+ * Đã có ai từ Kế toán trưởng trở lên **duyệt** trong VÒNG DUYỆT HIỆN TẠI chưa?
+ * Đọc từ `history[]` (nguồn sự thật) và chỉ xét các lần duyệt SAU lần `submit` gần
+ * nhất — khi người lập gửi lại (vd sau khi bị trả về bổ sung) thì các duyệt cũ bị
+ * vô hiệu, phiếu coi như "chưa ai duyệt".
  */
 export function approvedFromChiefAccountantUp(
   history: readonly { action?: string | null; actor?: { role?: string | null } | null }[],
 ): boolean {
-  return history.some(
-    (h) =>
+  let lastSubmit = -1;
+  history.forEach((h, i) => {
+    if (h.action === 'submit') lastSubmit = i;
+  });
+  for (let i = lastSubmit + 1; i < history.length; i++) {
+    const h = history[i]!;
+    if (
       (h.action === 'approve' || h.action === 'approve_with_reason') &&
-      ROLES_FROM_CHIEF_ACCOUNTANT.includes(String(h.actor?.role ?? '')),
-  );
+      ROLES_FROM_CHIEF_ACCOUNTANT.includes(String(h.actor?.role ?? ''))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function documentPermissions(
@@ -224,8 +237,9 @@ export function documentPermissions(
 ): DocPermissions {
   const has = (p: Permission) => actor.permissions.includes(p);
   const mine = doc.created_by === actor.user_id;
-  // Người lập chỉ được xoá/sửa khi chưa có cấp KTT trở lên duyệt (nháp / yêu cầu bổ sung / bị từ chối).
-  const creatorMaintainable = mine && ['draft', 'changes_requested', 'rejected'].includes(doc.status) && !doc.approved_from_ktt_up;
+  // Người lập xoá/sửa được khi phiếu còn nháp, đang CHỜ Kế toán trưởng duyệt (vòng hiện tại),
+  // bị trả về bổ sung, hoặc bị từ chối — miễn chưa ai từ KTT trở lên duyệt ở vòng này.
+  const creatorMaintainable = mine && MAINTAINABLE_STATUSES.includes(doc.status) && !doc.approved_from_ktt_up;
   const editable = creatorMaintainable && has('doc:create');
   const currentSteps = doc.steps.filter((s) => s.state === 'current' || s.state === 'waiting');
   const iAmStep = currentSteps.filter(

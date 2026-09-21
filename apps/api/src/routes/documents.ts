@@ -313,11 +313,11 @@ export function documentRoutes(app: FastifyInstance): void {
         if (String(doc.created_by) !== actor.user_id) {
           throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ người lập mới sửa được hồ sơ' });
         }
-        if (!['draft', 'changes_requested', 'rejected'].includes(doc.status)) {
+        if (!['draft', 'pending.ktt', 'changes_requested', 'rejected'].includes(doc.status)) {
           throw new ApiError({ code: 'FG-WF-005', detail: 'Hồ sơ đã qua cấp duyệt, chỉ thêm chứng từ được' });
         }
         if (approvedFromChiefAccountantUp((doc.history ?? []) as { action?: string | null; actor?: { role?: string | null } | null }[])) {
-          throw new ApiError({ code: 'FG-WF-005', detail: 'Hồ sơ đã được cấp từ Kế toán trưởng trở lên duyệt — không sửa được nữa' });
+          throw new ApiError({ code: 'FG-WF-005', detail: 'Hồ sơ đã được cấp từ Kế toán trưởng trở lên duyệt ở vòng này — không sửa được nữa' });
         }
         if (doc.processed_requests?.includes(body.request_id)) {
           return ok(reply, { data: await detailOf(params.id, actor.user_id), idempotent: true });
@@ -353,7 +353,7 @@ export function documentRoutes(app: FastifyInstance): void {
           model: 'Document',
           id: params.id,
           ifMatch: body.if_match,
-          extraFilter: { status: { $in: ['draft', 'changes_requested', 'rejected'] } },
+          extraFilter: { status: { $in: ['draft', 'pending.ktt', 'changes_requested', 'rejected'] } },
           set,
           push: { history: entry },
           addToSet: { processed_requests: body.request_id },
@@ -444,7 +444,7 @@ export function documentRoutes(app: FastifyInstance): void {
     defineRoute({
       method: 'POST',
       url: '/documents/:id/delete',
-      config: { perms: ['doc:delete'] as Permission[], stepUp: true, screen: 'DOC-01', summary: 'Xoá phiếu thu/chi (nháp/trả về/từ chối của người lập, chưa qua KTT)' },
+      config: { perms: ['doc:delete'] as Permission[], stepUp: true, screen: 'DOC-01', summary: 'Xoá phiếu thu/chi (nháp/chờ KTT/trả về/từ chối của người lập, chưa qua KTT ở vòng này)' },
       schema: { tags: ['documents'], body: documentDeleteBodySchema },
       handler: async (req, reply) => {
         const actor = requireActor(req);
@@ -456,12 +456,12 @@ export function documentRoutes(app: FastifyInstance): void {
         const history = (doc.history ?? []) as { action?: string | null; actor?: { role?: string | null } | null }[];
         const allowed =
           String(doc.created_by) === actor.user_id &&
-          ['draft', 'changes_requested', 'rejected'].includes(doc.status) &&
+          ['draft', 'pending.ktt', 'changes_requested', 'rejected'].includes(doc.status) &&
           !approvedFromChiefAccountantUp(history);
         if (!allowed) {
           throw new ApiError({
             code: 'FG-RBAC-001',
-            detail: 'Chỉ người lập xoá được phiếu còn nháp / bị trả về bổ sung / bị từ chối và chưa qua cấp Kế toán trưởng trở lên',
+            detail: 'Chỉ người lập xoá được phiếu còn nháp / đang chờ Kế toán trưởng / bị trả về bổ sung / bị từ chối và chưa qua cấp Kế toán trưởng trở lên ở vòng này',
           });
         }
 
