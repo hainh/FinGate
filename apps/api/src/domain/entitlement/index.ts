@@ -224,17 +224,15 @@ export function documentPermissions(
       doc.delegatedStepOrders.includes(s.order),
   );
   const overLimit = doc.amount_minor > actor.amount_limit_minor;
-  // KTT lập phiếu → bước kiểm tra KTT do chính KTT xác nhận, không tính là "tự duyệt".
-  const selfKttCheck = mine && iAmStep.some((s) => s.role === 'chief_accountant');
 
   // cấp hiện tại = step `current` đầu tiên theo thứ tự
   const current = doc.steps.find((s) => s.state === 'current') ?? null;
 
   const inScope = doc.actor_companies.includes(doc.company_id) || actor.permissions.includes('doc:read');
+  // Người lập được tự duyệt tại mọi cấp mà chính họ phụ trách (yêu cầu nghiệp vụ).
   const approveAllowed =
     has('approval:act') &&
     iAmStep.length > 0 &&
-    (!mine || selfKttCheck) && // blueprint §III: "không tự duyệt khoản chi mình tạo"
     !overLimit &&
     (doc.evidence_missing.length === 0 || has('approval:override')) &&
     !['paid', 'rejected', 'cancelled', 'expired'].includes(doc.status);
@@ -266,13 +264,11 @@ export function documentPermissions(
     step_order: iAmStep[0]?.order ?? null,
     reason: !has('approval:act')
       ? 'Bạn không có quyền duyệt'
-      : mine && !selfKttCheck
-        ? 'Không được tự duyệt hồ sơ mình tạo'
-        : overLimit
-          ? `Vượt hạn mức duyệt ${formatMoney(money(actor.amount_limit_minor), { mode: 'compact' })}`
-          : doc.evidence_missing.length && !has('approval:override')
-            ? 'Hồ sơ thiếu chứng từ bắt buộc'
-            : undefined,
+      : overLimit
+        ? `Vượt hạn mức duyệt ${formatMoney(money(actor.amount_limit_minor), { mode: 'compact' })}`
+        : doc.evidence_missing.length && !has('approval:override')
+          ? 'Hồ sơ thiếu chứng từ bắt buộc'
+          : undefined,
   };
 }
 

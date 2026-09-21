@@ -20,6 +20,7 @@ import {
   formatMoney,
   money,
   statusLabel,
+  today,
   vnDate,
   type Action,
   type Role,
@@ -157,7 +158,7 @@ export async function submitDocument(input: {
   if (!matrix.steps.length) throw new ApiError({ code: 'FG-WF-006' });
 
   const evidence = await rebuildEvidence(doc);
-  let steps: StepRow[] = await assignUsers(
+  const steps: StepRow[] = await assignUsers(
     matrix.steps.map((s, i) => ({
       order: s.order,
       role: s.role,
@@ -178,28 +179,27 @@ export async function submitDocument(input: {
   const cal = await calendarFor(doc.company_id);
   const now = new Date();
 
-  // KTT lập phiếu → bước kiểm tra kế toán coi như đã duyệt ngay khi gửi, đẩy thẳng
-  // lên cấp cao hơn (PGĐ/GĐ/Chủ tịch). Chỉ áp dụng khi người lập đúng là người giữ
-  // bước KTT (được gán theo công ty, hoặc chưa gán người nên khớp theo vai trò).
-  const kttStep = steps.find((s) => s.role === 'chief_accountant' && s.state === 'current');
-  const kttAutoApproved =
-    !!kttStep &&
-    (kttStep.user_id == null ? actor.role === 'chief_accountant' : String(kttStep.user_id) === actor.user_id);
-  if (kttStep && kttAutoApproved) {
-    const applied = applyDecision(
-      steps.map((s) => ({ ...s })),
-      kttStep.order,
-      'approve',
-    );
-    steps = applied.steps as unknown as StepRow[];
-    const s = steps.find((x) => x.order === kttStep.order);
-    if (s) {
-      if (s.user_id == null) s.user_id = actor.user_id;
-      s.action = 'approve';
-      s.decided_at = now;
-      s.opinion = 'KTT lập phiếu — tự động xác nhận bước kế toán';
-      s.amount_at_decision = doc.amount.minor.toString();
+  // Người lập tự duyệt MỌI bước mà chính họ phụ trách (KTT và/hoặc cấp cao hơn) ngay khi
+  // gửi → phiếu đẩy tới bước thấp nhất còn lại do người khác phụ trách. Bước chưa gán
+  // người thì so khớp theo vai trò.
+  const ownsStep = (s: StepRow): boolean =>
+    s.user_id == null ? s.role === actor.role : String(s.user_id) === actor.user_id;
+  const selfApprovedSteps = steps.filter(ownsStep);
+  if (selfApprovedSteps.length) {
+    for (const s of steps) {
+      if (ownsStep(s)) {
+        if (s.user_id == null) s.user_id = actor.user_id;
+        s.state = 'done';
+        s.action = 'approve';
+        s.decided_at = now;
+        s.opinion = 'Người lập tự duyệt bước này khi gửi phiếu';
+        s.amount_at_decision = doc.amount.minor.toString();
+      } else if (s.state === 'current' || s.state === 'waiting') {
+        s.state = 'waiting';
+      }
     }
+    const nextPending = steps.filter((s) => s.state === 'waiting').sort((a, b) => a.order - b.order)[0];
+    if (nextPending) nextPending.state = 'current';
   }
 
   const first = currentStep(steps as unknown as StepState[]);
@@ -222,7 +222,7 @@ export async function submitDocument(input: {
     fields: {
       matrix_version: matrix.matrix_version,
       steps: steps.map((s) => `${s.order}:${s.role}`),
-      ...(kttAutoApproved ? { ktt_auto_approved: true } : {}),
+      ...(selfApprovedSteps.length ? { self_approved_steps: selfApprovedSteps.map((s) => s.order) } : {}),
     },
   });
 
@@ -345,6 +345,17 @@ async function applyDelegations<T extends StepRow>(steps: T[], companyId: string
   return steps;
 }
 
+/** Số dư khả dụng hiện tại của một tài khoản = bản `balances_daily` mới nhất tính đến hôm nay (closing − blocked). */
+async function availableBalanceOf(accountId: string): Promise<bigint> {
+  const rec = await Models.BalanceDaily.findOne({ account_id: accountId, date: { $lte: today() } })
+    .sort({ date: -1 })
+    .select({ closing_minor: 1, blocked_minor: 1 })
+    .lean();
+  const closing = BigInt((rec?.closing_minor as bigint | undefined) ?? 0n);
+  const blocked = BigInt((rec?.blocked_minor as bigint | undefined) ?? 0n);
+  return closing - blocked;
+}
+
 async function calendarFor(companyId: string): Promise<WorkingCalendar> {
   const c = await Models.Company.findById(companyId).select({ working_calendar: 1 }).lean();
   const wc = c?.working_calendar as { workdays?: number[]; holidays?: string[] } | undefined;
@@ -423,11 +434,6 @@ export async function transition(input: {
         )
         .sort((a, b) => a.order - b.order)[0]
     : null;
-  // tự duyệt bị chặn (blueprint §III). Ngoại lệ: bước kiểm tra KTT khi chính KTT lập
-  // phiếu → coi như KTT đã kiểm tra, chỉ chặn tự duyệt ở các cấp cao hơn (PGĐ/GĐ/Chủ tịch).
-  if (isDecision && myStep && String(doc.created_by) === actor.user_id && myStep.role !== 'chief_accountant') {
-    throw new ApiError({ code: 'FG-WF-009' });
-  }
   if (isDecision && !myStep) {
     const holder = steps.find((s) => s.state === 'current');
     throw new ApiError({
@@ -448,6 +454,32 @@ export async function transition(input: {
       )} của bạn`,
       data: { amount_limit_minor: actor.amount_limit_minor.toString(), amount_minor: doc.amount.minor.toString() },
     });
+  }
+
+  // 4b. số dư tài khoản nguồn — phiếu chi không duyệt được khi vượt số dư khả dụng (FG-WF-010)
+  if (isApproval && doc.kind === 'spend') {
+    const accountId = doc.source?.account_id
+      ? String(doc.source.account_id)
+      : doc.source?.group_account_id
+        ? String(doc.source.group_account_id)
+        : null;
+    if (accountId) {
+      const available = await availableBalanceOf(accountId);
+      if (doc.amount.minor > available) {
+        const account = await Models.BankAccount.findById(accountId)
+          .select({ bank_name: 1, account_number: 1 })
+          .lean();
+        const label = account ? `${account.bank_name} ${account.account_number ?? ''}`.trim() : 'tài khoản nguồn';
+        throw new ApiError({
+          code: 'FG-WF-010',
+          detail: `Số dư ${label} không đủ — khả dụng ${formatMoney(money(available, doc.amount.currency), { mode: 'compact' })}, cần ${formatMoney(
+            money(doc.amount.minor, doc.amount.currency),
+            { mode: 'compact' },
+          )}`,
+          data: { account_id: accountId, available_minor: available.toString(), amount_minor: doc.amount.minor.toString() },
+        });
+      }
+    }
   }
 
   // 5. chứng từ bắt buộc — trừ khi có override + lý do
