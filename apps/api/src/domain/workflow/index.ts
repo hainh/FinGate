@@ -594,6 +594,24 @@ export async function transition(input: {
     }
   }
 
+  // Bản ghi thực thi (pay) — dùng chung cho `set.execution`, `history[]` (log chi tiết)
+  // và `audit_log` để một lần ghi nhận thanh toán lưu đủ ngày/nguồn/số thực/số tiền.
+  const executionPatch =
+    action === 'pay'
+      ? {
+          paid_at: body.execution?.paid_at ?? businessDate,
+          bank_ref: body.execution?.bank_ref ?? null,
+          executed_by: actor.user_id,
+          actual_amount_minor: body.execution?.actual_amount_minor ? BigInt(body.execution.actual_amount_minor) : doc.amount.minor,
+          actual_amount: {
+            minor: BigInt(body.execution?.actual_amount_minor ?? doc.amount.minor.toString()),
+            currency: doc.amount.currency,
+            decimals: doc.amount.decimals ?? 0,
+          },
+        }
+      : null;
+  const payAccountId = executionPatch ? (body.execution?.account_id ?? nextAccountId ?? oldAccountId) : null;
+
   const entry = buildHistoryEntry({
     action,
     actor: { user_id: actor.user_id, role: actor.role, name: actor.name },
@@ -609,6 +627,17 @@ export async function transition(input: {
       ...(isDecision ? { skipped: skipped.map((s) => s.order) } : {}),
       ...(myStep ? { step_order: myStep.order } : {}),
       ...(nextAccountId && nextAccountId !== oldAccountId ? { account: { before: oldAccountId, after: nextAccountId } } : {}),
+      ...(executionPatch
+        ? {
+            execution: {
+              paid_at: executionPatch.paid_at,
+              bank_ref: executionPatch.bank_ref,
+              executed_by: actor.user_id,
+              actual_amount_minor: executionPatch.actual_amount_minor.toString(),
+              account_id: payAccountId,
+            },
+          }
+        : {}),
     },
   });
 
@@ -620,20 +649,8 @@ export async function transition(input: {
     : null;
   if (overriding) set.override = { fast_tracked: doc.override?.fast_tracked ?? action === 'approve_with_reason', reason: body.reason ?? null, by: actor.user_id };
   else if (action === 'approve_with_reason') set['override.fast_tracked'] = true;
-  if (action === 'pay') {
-    set.execution = {
-      paid_at: body.execution?.paid_at ?? businessDate,
-      bank_ref: body.execution?.bank_ref ?? null,
-      executed_by: actor.user_id,
-      actual_amount_minor: body.execution?.actual_amount_minor
-        ? BigInt(body.execution.actual_amount_minor)
-        : doc.amount.minor,
-      actual_amount: {
-        minor: BigInt(body.execution?.actual_amount_minor ?? doc.amount.minor.toString()),
-        currency: doc.amount.currency,
-        decimals: doc.amount.decimals ?? 0,
-      },
-    };
+  if (executionPatch) {
+    set.execution = executionPatch;
     if (body.execution?.account_id) set['source.account_id'] = body.execution.account_id;
   }
   if (['paid', 'rejected', 'cancelled', 'expired'].includes(nextStatus)) set.closed_at = now;
@@ -658,7 +675,21 @@ export async function transition(input: {
     subject: { type: doc.kind, id: String(doc._id), code: doc.code },
     company_id: String(doc.company_id),
     document_id: String(doc._id),
-    diff_fields: { status: { before: doc.status, after: nextStatus }, ...(isDecision ? { step: { before: myStep?.order, after: nextStepAfter?.order ?? null } } : {}) },
+    diff_fields: {
+      status: { before: doc.status, after: nextStatus },
+      ...(isDecision ? { step: { before: myStep?.order, after: nextStepAfter?.order ?? null } } : {}),
+      ...(executionPatch
+        ? {
+            execution: {
+              paid_at: executionPatch.paid_at,
+              bank_ref: executionPatch.bank_ref,
+              executed_by: actor.user_id,
+              actual_amount_minor: executionPatch.actual_amount_minor.toString(),
+              account_id: payAccountId,
+            },
+          }
+        : {}),
+    },
     request_id: body.request_id,
     ip: input.ip,
   });

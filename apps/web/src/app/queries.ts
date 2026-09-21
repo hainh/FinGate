@@ -352,6 +352,10 @@ export function useTransition() {
       qc.invalidateQueries({ queryKey: ['overview'] });
       qc.invalidateQueries({ queryKey: ['queue-processed'] });
       qc.invalidateQueries({ queryKey: ['unread-count'] });
+      // thực thi (pay) làm đổi số dư — làm tươi ngay tài khoản/dòng tiền, không đợi tải lại
+      qc.invalidateQueries({ queryKey: ['bank-accounts'] });
+      qc.invalidateQueries({ queryKey: ['bank-account'] });
+      qc.invalidateQueries({ queryKey: ['balances-history'] });
       void input;
     },
   });

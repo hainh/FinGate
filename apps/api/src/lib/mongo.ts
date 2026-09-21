@@ -65,8 +65,11 @@ export const ALL_COMPANIES: Scope = { companyIds: null };
 export function scopeFilter(scope: Scope, field = 'company_id'): Record<string, unknown> {
   if (scope.companyIds === null) return {};
   if (scope.companyIds.length === 0) return { [field]: { $in: [] } }; // không có công ty nào → rỗng
-  if (scope.companyIds.length === 1) return { [field]: scope.companyIds[0] };
-  return { [field]: { $in: scope.companyIds } };
+  // company_id là ObjectId trong mọi model: aggregate `$match` KHÔNG tự cast string → ObjectId
+  // (mongoose chỉ cast cho find/update), nên phải ép ở đây, nếu không mọi query scoped ra rỗng.
+  const ids = scope.companyIds.map((id) => (isObjectId(id) ? oid(id) : id));
+  if (ids.length === 1) return { [field]: ids[0] };
+  return { [field]: { $in: ids } };
 }
 
 /** Ghép filter của caller với tenant scope. Caller KHÔNG thể vượt scope. */
