@@ -48,6 +48,17 @@ body {
   width: var(--fg-rail-w-collapsed);
 }
 
+/* backdrop cho rail dạng overlay (tablet/mobile) — bấm ra ngoài để đóng */
+.fg-rail-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: var(--fg-z-backdrop);
+  background: var(--fg-fix-overlay);
+  border: 0;
+  cursor: pointer;
+}
+
 .fg-rail-logo {
   display: flex;
   align-items: center;
@@ -626,6 +637,9 @@ body {
   .fg-rail[data-mobile-open='true'] {
     transform: none;
     box-shadow: var(--fg-shadow-4);
+  }
+  .fg-rail-backdrop[data-open='true'] {
+    display: block;
   }
   .fg-main-wrap,
   .fg-main-wrap[data-collapsed='true'] {

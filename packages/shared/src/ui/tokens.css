@@ -241,6 +241,7 @@
   /* ---------- Z-INDEX ---------- */
   --fg-z-table-sticky: 10;
   --fg-z-header: 100;
+  --fg-z-backdrop: 150;
   --fg-z-sidebar: 200;
   --fg-z-dropdown: 900;
   --fg-z-drawer: 1000;

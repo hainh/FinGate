@@ -95,6 +95,19 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
   const isMobile = viewportW < 768;
   // <1024: rail thành overlay (khớp breakpoint CSS @media max-width 1023) — nút ☰ mở/đóng overlay.
   const isOverlay = viewportW < 1024;
+
+  // Đóng overlay khi bấm Esc hoặc khi rời chế độ overlay (phóng to cửa sổ).
+  useEffect(() => {
+    if (!isOverlay || !mobileOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobileOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOverlay, mobileOpen]);
+  useEffect(() => {
+    if (!isOverlay) setMobileOpen(false);
+  }, [isOverlay]);
   const items = useMemo(() => {
     const visible = NAV.filter((n) => !n.perm || can(n.perm));
     if (!isMobile) return visible;
@@ -108,6 +121,12 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
 
   return (
     <div className="fg-shell">
+      <div
+        className="fg-rail-backdrop"
+        data-open={isOverlay && mobileOpen ? 'true' : 'false'}
+        aria-hidden
+        onClick={() => setMobileOpen(false)}
+      />
       <aside className="fg-rail" data-collapsed={collapsed && !isOverlay ? 'true' : 'false'} data-mobile-open={mobileOpen ? 'true' : 'false'} aria-label="Điều hướng chính">
         <div className="fg-rail-logo">
           <span className="fg-rail-mark" aria-hidden>F</span>
