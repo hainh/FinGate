@@ -82,7 +82,6 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'report:view',
     'report:export',
     'alert:config',
-    'hr:invite',
     'audit:read',
   ],
   deputy_director: [

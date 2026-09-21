@@ -160,6 +160,14 @@ describe('entitlements — server trả quyền, UI chỉ ẩn nút (§19.5-4)',
     expect(e.scope_all).toBe(true);
   });
 
+  it('chỉ cấp giám đốc trở lên có quyền nhân sự — kế toán trưởng không có', () => {
+    expect(buildEntitlements({ role: 'staff', company_id: 'a'.repeat(24) }).permissions).not.toContain('hr:invite');
+    expect(buildEntitlements({ role: 'chief_accountant', company_id: 'a'.repeat(24) }).permissions).not.toContain('hr:invite');
+    expect(buildEntitlements({ role: 'deputy_director', company_id: 'a'.repeat(24) }).permissions).not.toContain('hr:invite');
+    expect(buildEntitlements({ role: 'director', company_id: 'a'.repeat(24) }).permissions).toContain('hr:invite');
+    expect(buildEntitlements({ role: 'chairman', company_id: 'a'.repeat(24) }).permissions).toContain('hr:invite');
+  });
+
   it('kế toán trưởng không có quyền quản trị matrix; giám đốc và chủ tịch có', () => {
     expect(buildEntitlements({ role: 'chief_accountant', company_id: 'a'.repeat(24) }).actions['admin:matrix']).toBe(false);
     expect(buildEntitlements({ role: 'director', company_id: 'a'.repeat(24) }).actions['admin:matrix']).toBe(true);
