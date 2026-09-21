@@ -41,7 +41,7 @@ import {
   canTransition,
   currentStep,
   EDITABLE_STATUSES,
-  FIRST_NODE,
+  FINAL_APPROVAL_STATUS,
   needsAmountRetype,
   recalcStatusFromSteps,
   requiresStepUp,
@@ -157,7 +157,7 @@ export async function submitDocument(input: {
   if (!matrix.steps.length) throw new ApiError({ code: 'FG-WF-006' });
 
   const evidence = await rebuildEvidence(doc);
-  const steps: StepRow[] = await assignUsers(
+  let steps: StepRow[] = await assignUsers(
     matrix.steps.map((s, i) => ({
       order: s.order,
       role: s.role,
@@ -175,15 +175,40 @@ export async function submitDocument(input: {
     doc,
   );
 
-  const first = currentStep(steps as unknown as StepState[]);
   const cal = await calendarFor(doc.company_id);
   const now = new Date();
+
+  // KTT lập phiếu → bước kiểm tra kế toán coi như đã duyệt ngay khi gửi, đẩy thẳng
+  // lên cấp cao hơn (PGĐ/GĐ/Chủ tịch). Chỉ áp dụng khi người lập đúng là người giữ
+  // bước KTT (được gán theo công ty, hoặc chưa gán người nên khớp theo vai trò).
+  const kttStep = steps.find((s) => s.role === 'chief_accountant' && s.state === 'current');
+  const kttAutoApproved =
+    !!kttStep &&
+    (kttStep.user_id == null ? actor.role === 'chief_accountant' : String(kttStep.user_id) === actor.user_id);
+  if (kttStep && kttAutoApproved) {
+    const applied = applyDecision(
+      steps.map((s) => ({ ...s })),
+      kttStep.order,
+      'approve',
+    );
+    steps = applied.steps as unknown as StepRow[];
+    const s = steps.find((x) => x.order === kttStep.order);
+    if (s) {
+      if (s.user_id == null) s.user_id = actor.user_id;
+      s.action = 'approve';
+      s.decided_at = now;
+      s.opinion = 'KTT lập phiếu — tự động xác nhận bước kế toán';
+      s.amount_at_decision = doc.amount.minor.toString();
+    }
+  }
+
+  const first = currentStep(steps as unknown as StepState[]);
   if (first) {
     const ms = matrix.steps.find((s) => s.role === first.role);
     steps.find((s) => s.order === first.order)!.sla_deadline = slaDeadline(now, ms?.sla_hours ?? 24, cal);
   }
 
-  const status = statusForStep(first?.role ?? 'chief_accountant') ?? FIRST_NODE[doc.kind];
+  const status = first ? statusForStep(first.role) : FINAL_APPROVAL_STATUS;
 
   const history = buildHistoryEntry({
     action: 'submit',
@@ -194,7 +219,11 @@ export async function submitDocument(input: {
     opinion: input.opinion ?? null,
     request_id: input.requestId,
     ip: input.ip,
-    fields: { matrix_version: matrix.matrix_version, steps: steps.map((s) => `${s.order}:${s.role}`) },
+    fields: {
+      matrix_version: matrix.matrix_version,
+      steps: steps.map((s) => `${s.order}:${s.role}`),
+      ...(kttAutoApproved ? { ktt_auto_approved: true } : {}),
+    },
   });
 
   const result = await cas<Record<string, unknown>>({
@@ -364,13 +393,8 @@ export async function transition(input: {
   const isApproval = action === 'approve' || action === 'approve_with_reason';
   const isDecision = isApproval || action === 'reject' || action === 'request_changes';
 
-  if (isDecision) {
-    if (!actor.permissions.includes('approval:act')) {
-      throw new ApiError({ code: 'FG-RBAC-001', detail: 'Bạn không có quyền duyệt hồ sơ' });
-    }
-    if (String(doc.created_by) === actor.user_id) {
-      throw new ApiError({ code: 'FG-WF-009' });
-    }
+  if (isDecision && !actor.permissions.includes('approval:act')) {
+    throw new ApiError({ code: 'FG-RBAC-001', detail: 'Bạn không có quyền duyệt hồ sơ' });
   }
   if (action === 'pay' && !actor.permissions.includes('payment:mark')) {
     throw new ApiError({ code: 'FG-RBAC-001', detail: 'Bạn không có quyền ghi nhận thanh toán' });
@@ -399,6 +423,11 @@ export async function transition(input: {
         )
         .sort((a, b) => a.order - b.order)[0]
     : null;
+  // tự duyệt bị chặn (blueprint §III). Ngoại lệ: bước kiểm tra KTT khi chính KTT lập
+  // phiếu → coi như KTT đã kiểm tra, chỉ chặn tự duyệt ở các cấp cao hơn (PGĐ/GĐ/Chủ tịch).
+  if (isDecision && myStep && String(doc.created_by) === actor.user_id && myStep.role !== 'chief_accountant') {
+    throw new ApiError({ code: 'FG-WF-009' });
+  }
   if (isDecision && !myStep) {
     const holder = steps.find((s) => s.state === 'current');
     throw new ApiError({
