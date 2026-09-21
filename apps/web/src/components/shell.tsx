@@ -93,6 +93,8 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
     return () => window.removeEventListener('resize', h);
   }, []);
   const isMobile = viewportW < 768;
+  // <1024: rail thành overlay (khớp breakpoint CSS @media max-width 1023) — nút ☰ mở/đóng overlay.
+  const isOverlay = viewportW < 1024;
   const items = useMemo(() => {
     const visible = NAV.filter((n) => !n.perm || can(n.perm));
     if (!isMobile) return visible;
@@ -106,10 +108,10 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
 
   return (
     <div className="fg-shell">
-      <aside className="fg-rail" data-collapsed={collapsed ? 'true' : 'false'} data-mobile-open={mobileOpen ? 'true' : 'false'} aria-label="Điều hướng chính">
+      <aside className="fg-rail" data-collapsed={collapsed && !isOverlay ? 'true' : 'false'} data-mobile-open={mobileOpen ? 'true' : 'false'} aria-label="Điều hướng chính">
         <div className="fg-rail-logo">
           <span className="fg-rail-mark" aria-hidden>F</span>
-          <span style={{ display: collapsed ? 'none' : undefined }}>FinGate</span>
+          <span style={{ display: collapsed && !isOverlay ? 'none' : undefined }}>FinGate</span>
         </div>
         <nav className="fg-rail-nav">
           {items.map((n) => (
@@ -123,7 +125,7 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
               <span className="fg-rail-icon" aria-hidden>
                 {n.glyph}
               </span>
-              <span style={{ display: collapsed && !isMobile ? 'none' : undefined }}>{n.label}</span>
+              <span style={{ display: collapsed && !isOverlay ? 'none' : undefined }}>{n.label}</span>
               {badgeCount(n.badge) > 0 ? (
                 <span className="fg-rail-badge" aria-label={`${badgeCount(n.badge)} mục chờ`}>
                   {badgeCount(n.badge)}
@@ -132,19 +134,20 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
             </NavLink>
           ))}
         </nav>
-        <div style={{ padding: 'var(--fg-space-3)', display: collapsed && !isMobile ? 'none' : undefined }}>
+        <div style={{ padding: 'var(--fg-space-3)', display: collapsed && !isOverlay ? 'none' : undefined }}>
           <FgText style="caption" color="muted">
             Nghiệp vụ {overview?.business_date ?? '—'}
           </FgText>
         </div>
       </aside>
 
-      <div className="fg-main-wrap" data-collapsed={collapsed ? 'true' : 'false'}>
+      <div className="fg-main-wrap" data-collapsed={collapsed && !isOverlay ? 'true' : 'false'}>
         <header className="fg-header" data-fg="header">
           <FgButton
             variant="ghost"
-            aria-label={isMobile ? 'Mở menu' : 'Thu gọn menu'}
-            onClick={() => (isMobile ? setMobileOpen((v) => !v) : setCollapsed((v) => !v))}
+            aria-label={isOverlay ? 'Mở menu' : 'Thu gọn menu'}
+            aria-expanded={isOverlay ? mobileOpen : undefined}
+            onClick={() => (isOverlay ? setMobileOpen((v) => !v) : setCollapsed((v) => !v))}
           >
             ☰
           </FgButton>
