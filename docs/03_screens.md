@@ -127,7 +127,7 @@ Rail cấp 2 collapse được; `Chờ tôi duyệt` luôn có `FgBadgeCount`. N
 
 | ID | Màn hình | Route | Vai trò | Component | St | Ph | Nền |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| DOC-01 | Hồ sơ (drawer desktop / trang mobile) | `/ho-so/:loai/:id` — `loai` ∈ chi · thu · dao-han · noi-bo | tất cả | §8.2: header (`FgMoney full`, `FgStatusChip withOwner`) + `FgTabs`(5) + `FgApprovalTimeline` + `FgOpinion` + `FgDocList` + `FgApprovalActionBar` (chỉ hiện khi user là cấp duyệt hiện tại) | loading, 403, đã bị duyệt (409 alert + reload), thiếu chứng từ bắt buộc → action bar cảnh báo, read-only sau khi qua cấp | **P2** | D/T/M |
+| DOC-01 | Hồ sơ (drawer desktop / trang mobile) | `/ho-so/:loai/:id` — `loai` ∈ chi · thu · dao-han · noi-bo | tất cả | §8.2: header (`FgMoney full`, `FgStatusChip withOwner`) + `FgTabs`(5) + `FgApprovalTimeline` + `FgOpinion` + `FgDocList` + `FgApprovalActionBar` (chỉ hiện khi user là cấp duyệt hiện tại; modal duyệt cho đổi tài khoản đích/nguồn trong phạm vi công ty của phiếu) | loading, 403, đã bị duyệt (409 alert + reload), thiếu chứng từ bắt buộc → action bar cảnh báo, read-only sau khi qua cấp | **P2** | D/T/M |
 
 5 tab bắt buộc:
 
@@ -164,7 +164,7 @@ Chuyển tiền nội bộ: tab `Tóm tắt` **bắt buộc** 2 cột đối ứ
 | ID | Màn hình | Route | Vai trò | Component | St | Ph | Nền |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | THU-01 | Khoản thu (danh sách) | `/thu` | KT, CV, KTT, GĐ | `FgFilterBar`, `FgTable` (§7 column order) | loading/empty/error, `draft` | P1 | D/T |
-| THU-02 | Tạo / sửa khoản thu | `/thu/moi`, `/thu/:id/sua` | KT, CV | form §VII: khách hàng, dự kiến thu, ngày, HĐ, hóa đơn, công nợ, TK nhận, nội dung | autosave, validate HĐ/công nợ | P2 | D/T |
+| THU-02 | Tạo / sửa khoản thu | `/thu/moi`, `/thu/:id/sua` | KT, CV | form §VII: khách hàng, dự kiến thu, ngày, HĐ, hóa đơn, công nợ, TK đích (nhận tiền), nội dung | autosave, validate HĐ/công nợ | P2 | D/T |
 | THU-03 | Dự kiến thu | `/thu/du-kien` | KTT, PGĐ, GĐ | `FgSegmented` [Hôm nay · 7 ngày · 30 ngày] + `FgTable` + `FgKpiCard` tổng | chưa có KH nào trong khoảng | P2 | D/M |
 | THU-04 | Thu quá hạn | `/thu/qua-han` | KTT, GĐ | `FgTable` + `FgStatusChip strong` overdue + cột "quá hạn N ngày" + CTA `Đôn đốc` | 0 khoản (success) | P2 | D/M |
 | THU-05 | Xác nhận đã thu | `/thu/:id/xac-nhan` | KT | ngày thực thu, số thực thu (`FgMoneyInput`), TK nhận, chứng từ | lệch dự kiến (delta), thu một phần nhiều lần | P2 | D/M |
@@ -333,7 +333,7 @@ Mobile **không phải desktop thu nhỏ**: không filter bar đa cột, không 
 | MOB-01 | Bảng điều hành Giám đốc (bottom tab 4 mục) | `/m` | Tiền hiện có → Cần duyệt → Cảnh báo → Đáo hạn → Dòng tiền (§5.4) | stale, offline | P4 |
 | MOB-02 | Hàng chờ của tôi | `/cho-toi-duyet` (responsive APPR-01) | card list 4 field: nội dung · số tiền · chờ N ngày · chip | 0 hồ sơ | P4 |
 | MOB-03 | Hồ sơ để duyệt | `/ho-so/:type/:id` (DOC-01 bản mobile) | **1 luồng cuộn, không tab**: header → 6 câu hỏi → chứng từ (mở rộng) → timeline → `FgActionBar` đáy (`z-approval-bar`) | thiếu chứng từ, 409 | **P4** |
-| MOB-04 | Xác nhận duyệt (bottom-sheet) | overlay | số tiền + người nhận + nguồn tiền + dư sau chi; `FgMoneyInput`-style gõ lại số tiền nếu >5 tỷ/ngoài ngân sách; sinh hiệu/PIN nếu bật 2FA | fail sinh hiệu, timeout | P4 |
+| MOB-04 | Xác nhận duyệt (bottom-sheet) | overlay | số tiền + người nhận + nguồn tiền/đích + dư sau chi + đổi tài khoản (phạm vi công ty của phiếu); `FgMoneyInput`-style gõ lại số tiền nếu >5 tỷ/ngoài ngân sách; sinh hiệu/PIN nếu bật 2FA | fail sinh hiệu, timeout | P4 |
 | MOB-05 | Xem chứng từ toàn màn hình | overlay | lightbox PDF/ảnh, pinch-zoom, tải (chỉ khi có quyền) | file lỗi, đang tải | P4 |
 | MOB-06 | Notification mở vào hồ sơ | deep link `?open=` | 1 chạm: notification → MOB-03 → duyệt | thông báo lỗi thời | P4 |
 
@@ -346,7 +346,7 @@ Yêu cầu: touch target ≥44, action bar sticky `--fg-shadow-4`, mọi CTA có
 | ID | Overlay | gọi từ | Component |
 | --- | --- | --- | --- |
 | OVL-01 | Hồ sơ chi tiết dạng drawer 6/12 | mọi `FgTable` | `FgDrawer` (giữ ngữ cảnh lọc) |
-| OVL-02 | `FgApprovalConfirm` — 6 câu hỏi kiểm soát | APPR-01, CHI-0x, DOC-01, MOB-03 | `FgModal` |
+| OVL-02 | `FgApprovalConfirm` — 6 câu hỏi kiểm soát | APPR-01, CHI-0x, DOC-01, MOB-03 | `FgModal` (kèm chọn/đổi tài khoản đích/nguồn khi duyệt — trong phạm vi công ty của phiếu) |
 | OVL-03 | Duyệt hàng loạt (review từng hồ sơ + tổng tiền) | bulk bar | `FgModal` + stepper |
 | OVL-04 | Từ chối — `FgReasonPicker` + ý kiến bắt buộc | action bar | `FgModal` |
 | OVL-05 | Yêu cầu bổ sung — chọn nội dung cần bổ sung | action bar | `FgModal` |

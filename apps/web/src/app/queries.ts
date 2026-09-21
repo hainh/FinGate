@@ -319,6 +319,8 @@ export interface TransitionInput {
   reason?: string;
   verify?: { method: 'password' | 'otp'; value: string };
   confirm_amount_minor?: string;
+  /** cấp duyệt đổi tài khoản đích/nguồn của phiếu (trong phạm vi công ty). */
+  source_account_id?: string;
   execution?: { paid_at: string; bank_ref?: string; actual_amount_minor?: string; account_id?: string };
   if_match: number;
 }

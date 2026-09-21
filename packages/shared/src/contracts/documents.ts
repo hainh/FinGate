@@ -178,6 +178,12 @@ export const transitionBody = z
       .optional(),
     /** gõ lại số tiền khi > ngưỡng hoặc ngoài ngân sách (DS §7.14 rule 4). */
     confirm_amount_minor: z.string().regex(/^\d+$/).optional(),
+    /**
+     * Cấp duyệt đổi tài khoản của phiếu ngay khi duyệt (blueprint §VIII/§XXX):
+     * phiếu thu = tài khoản đích, phiếu chi = tài khoản nguồn. Chỉ được chọn tài
+     * khoản trong phạm vi công ty của phiếu (kể cả tài khoản Tập đoàn).
+     */
+    source_account_id: objectId.optional(),
     if_match: docVersion,
     request_id: uuid,
     /** thanh toán: execution (§8.2). */

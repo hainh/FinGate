@@ -181,6 +181,12 @@ Quy trình mặc định:
 
 **Đính kèm chứng từ ngân hàng**
 
+## Đổi tài khoản ngay khi duyệt
+
+* Phiếu thu chỉ rõ **tài khoản đích** (nhận tiền); phiếu chi chỉ rõ **tài khoản nguồn** (xuất tiền).
+* **Mỗi cấp khi duyệt được đổi tài khoản** đích/nguồn của phiếu, miễn là tài khoản đó nằm trong **phạm vi của công ty lập phiếu** — tài khoản của chính công ty hoặc tài khoản Tập đoàn (mục VIII).
+* Thay đổi tài khoản ghi vào lịch sử phê duyệt/audit log (giá trị trước → sau — mục XIX); số dư dự kiến được chuyển từ tài khoản cũ sang tài khoản mới.
+
 ## Cơ chế hiển thị và duyệt vượt cấp (fast-track)
 
 * Ngay khi phiếu được gửi đi (khác trạng thái Nháp), **tất cả các cấp trong quy trình đều nhìn thấy phiếu** và có quyền duyệt ngay, không bắt buộc chờ cấp dưới xử lý xong.
@@ -305,7 +311,7 @@ Theo dõi:
 * Hợp đồng
 * Hóa đơn
 * Công nợ
-* Tài khoản nhận tiền
+* Tài khoản đích (nhận tiền)
 * Đã thu/chưa thu
 * Số tiền thực tế thu
 * Ngày thực tế thu.
@@ -349,6 +355,7 @@ Ngoài tài khoản của từng công ty con, Tập đoàn có **nhiều tài k
 
 * **Chỉ Chủ tịch HĐQT** được cấu hình (thêm/sửa/khóa) tài khoản tập đoàn: ngân hàng, số TK, tên TK, hạn mức (nếu có), người phụ trách, trạng thái hoạt động.
 * **Mỗi phiếu thu/chi phải chỉ rõ tài khoản tập đoàn nào sẽ phụ trách** (trường "Tài khoản tập đoàn phụ trách") khi giao dịch dùng nguồn tiền tập đoàn hoặc thực hiện qua tập đoàn.
+* **Cấp duyệt được đổi tài khoản đích (phiếu thu) / tài khoản nguồn (phiếu chi) ngay khi duyệt** (mục IV) — chỉ trong phạm vi công ty của phiếu hoặc tài khoản Tập đoàn; thay đổi vào audit (mục XIX).
 * Tài khoản tập đoàn theo dõi số dư như tài khoản công ty: đầu ngày, tiền vào, tiền ra, cuối ngày, phong tỏa, khả dụng — tổng hợp vào Dashboard cấp Tập đoàn.
 * Khóa tài khoản tập đoàn → cảnh báo các phiếu đang chờ xử lý có tham chiếu; không cho chọn cho phiếu mới.
 * Mọi thao tác cấu hình ghi audit log (mục XIX).
@@ -972,7 +979,7 @@ Hệ thống:
 | Nhận diện | Công ty; mã phiếu tự sinh; loại phiếu; ngày tạo; người lập; phòng ban |
 | Nghiệp vụ | Danh mục; nội dung; đối tượng nộp/nhận; mã số thuế; hợp đồng; dự án; khoản vay liên quan |
 | Số tiền | Số tiền; loại tiền; tỷ giá nếu có; thuế; số thực thu/thực chi |
-| Nguồn và đích tiền | Quỹ tiền mặt hoặc tài khoản ngân hàng; **tài khoản tập đoàn phụ trách** (bắt buộc nếu giao dịch dùng nguồn tiền/qua tài khoản Tập đoàn — mục VIII); tài khoản nguồn; tài khoản nhận; công ty/đối tác nhận |
+| Nguồn và đích tiền | Quỹ tiền mặt hoặc tài khoản ngân hàng; **phiếu thu: tài khoản đích (nhận tiền); phiếu chi: tài khoản nguồn (xuất tiền)**; **tài khoản tập đoàn phụ trách** (bắt buộc nếu giao dịch dùng nguồn tiền/qua tài khoản Tập đoàn — mục VIII); công ty/đối tác nhận |
 | Kế hoạch | Ngày dự kiến thu/chi; mức độ ưu tiên; ngân sách; kỳ thanh toán |
 | Kiểm soát | Ý kiến KTT; ý kiến PGĐ; ý kiến GĐ; ý kiến Chủ tịch HĐQT (nếu thuộc ngưỡng HĐQT); lý do vượt cấp (duyệt trước theo fast-track — mục IV); lịch sử trạng thái |
 | Thực hiện | Ngày giao dịch thực tế; số tham chiếu ngân hàng; người thực hiện; chứng từ sau thanh toán |
@@ -982,6 +989,7 @@ Quy tắc:
 * Mã phiếu **tự sinh**, không trùng, không sửa được sau khi gửi; định dạng hiển thị theo Design System (font mono cho mã).
 * Trường thuộc nhóm Kiểm soát **không nhập liệu trực tiếp** — hệ thống tự ghi từ quy trình phê duyệt và audit log (mục XIX).
 * Phiếu thiếu trường bắt buộc theo loại phiếu → không cho gửi, báo lỗi inline nêu rõ thiếu trường nào (cảnh báo "Hồ sơ thiếu chứng từ" — mục XVIII).
+* Tài khoản đích (phiếu thu) / tài khoản nguồn (phiếu chi) **được cấp duyệt đổi ngay khi duyệt**, trong phạm vi công ty của phiếu (hoặc tài khoản Tập đoàn); thay đổi ghi history/audit (mục IV, VIII, XIX).
 
 ## 2. Bộ hồ sơ đính kèm
 

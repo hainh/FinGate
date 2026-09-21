@@ -346,7 +346,7 @@ function CashTab({ doc }: { doc: DocumentDetail }): ReactNode {
       <FgText style="h4">Ảnh hưởng số dư</FgText>
       <div style={{ marginTop: 12, maxWidth: 480 }}>
         <div className="fg-stat-row">
-          <span className="fg-stat-label">Tài khoản nguồn</span>
+          <span className="fg-stat-label">{doc.kind === 'income' ? 'Tài khoản đích' : 'Tài khoản nguồn'}</span>
           <span>{doc.source.account_label ?? (doc.source.fund === 'cash' ? 'Quỹ tiền mặt' : '—')}</span>
         </div>
         <div className="fg-stat-row">

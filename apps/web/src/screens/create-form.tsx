@@ -74,7 +74,8 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
 
   const set = (k: keyof FormState, v: string | Money | null) => setF((s) => ({ ...s, [k]: v }));
 
-  // Nguồn tiền: chỉ tài khoản công ty mình hoặc Tập đoàn, đúng loại tiền mặt/ngân hàng.
+  // Tài khoản của phiếu: phiếu thu chọn tài khoản ĐÍCH (nhận tiền), phiếu chi chọn
+  // tài khoản NGUỒN (xuất tiền) — chỉ tài khoản công ty mình hoặc Tập đoàn.
   const accountOptions = (accounts.data?.items ?? [])
     .filter((a) => a.status === 'active' && a.kind === f.fund)
     .map((a) => ({
@@ -198,7 +199,7 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
                 placeholder="Chọn ngày giờ"
               />
             </FgField>
-            <FgField label="Nguồn tiền *">
+            <FgField label={kind === 'income' ? 'Hình thức nhận tiền *' : 'Nguồn tiền *'}>
               <FgSelect
                 options={[
                   { value: 'bank', label: 'Tài khoản ngân hàng' },
@@ -214,9 +215,9 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
               />
             </FgField>
             <FgField
-              label="Tài khoản nguồn *"
+              label={kind === 'income' ? 'Tài khoản đích *' : 'Tài khoản nguồn *'}
               error={errors['source.account_id'] ?? null}
-              help="Chỉ tài khoản của công ty bạn và tài khoản Tập đoàn"
+              help={kind === 'income' ? 'Tiền thu về tài khoản của công ty hoặc tài khoản Tập đoàn' : 'Chỉ tài khoản của công ty bạn và tài khoản Tập đoàn'}
             >
               <FgSelect
                 options={accountOptions}

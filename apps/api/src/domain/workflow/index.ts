@@ -37,6 +37,7 @@ import { resolveMatrix, type MatrixStep } from './matrix.ts';
 import { DEFAULT_CALENDAR, slaDeadline, type WorkingCalendar } from '../calendar/index.ts';
 import { nextDocumentCode } from '../numbering/index.ts';
 import { notifyNextApprover, rebuildEvidence, syncBalancesForDocument } from '../side-effects.ts';
+import { assertAccountAllowedForCompany } from '../accounts.ts';
 import {
   applyDecision,
   canTransition,
@@ -57,6 +58,8 @@ export interface TransitionInput {
   reason?: string;
   verify?: { method: 'password' | 'otp'; value: string };
   confirm_amount_minor?: string;
+  /** cấp duyệt đổi tài khoản đích (phiếu thu) / nguồn (phiếu chi) — trong phạm vi công ty (§VIII). */
+  source_account_id?: string;
   if_match: number;
   request_id: string;
   execution?: { paid_at: string; bank_ref?: string; actual_amount_minor?: string; account_id?: string };
@@ -414,6 +417,16 @@ export async function transition(input: {
     throw new ApiError({ code: 'FG-RBAC-001' });
   }
 
+  // 1b. đổi tài khoản đích/nguồn khi duyệt (blueprint §VIII/§XXX):
+  //     chỉ cấp duyệt (hoặc người thực thi thanh toán) được đổi, và chỉ trong
+  //     phạm vi công ty của phiếu (tài khoản công ty HOẶC tài khoản Tập đoàn).
+  const oldAccountId = doc.source?.account_id ? String(doc.source.account_id) : null;
+  const nextAccountId = body.source_account_id ? String(body.source_account_id) : null;
+  if (nextAccountId && !isApproval && action !== 'pay') {
+    throw new ApiError({ code: 'FG-VAL-001', detail: 'Chỉ cấp duyệt hoặc người thực thi thanh toán mới được đổi tài khoản của phiếu' });
+  }
+  if (nextAccountId) await assertAccountAllowedForCompany(String(doc.company_id), nextAccountId);
+
   // 2. step-up verify cho hành động nhạy cảm (§7.2) — mặc định TẮT (APPROVAL_STEP_UP=false)
   if (requiresStepUp(action) && getEnv().APPROVAL_STEP_UP === 'true') {
     await assertStepUp(actor.user_id, body.verify);
@@ -458,11 +471,13 @@ export async function transition(input: {
 
   // 4b. số dư tài khoản nguồn — phiếu chi không duyệt được khi vượt số dư khả dụng (FG-WF-010)
   if (isApproval && doc.kind === 'spend') {
-    const accountId = doc.source?.account_id
-      ? String(doc.source.account_id)
-      : doc.source?.group_account_id
-        ? String(doc.source.group_account_id)
-        : null;
+    const accountId = nextAccountId
+      ? nextAccountId
+      : doc.source?.account_id
+        ? String(doc.source.account_id)
+        : doc.source?.group_account_id
+          ? String(doc.source.group_account_id)
+          : null;
     if (accountId) {
       const available = await availableBalanceOf(accountId);
       if (doc.amount.minor > available) {
@@ -593,10 +608,12 @@ export async function transition(input: {
       ...(overriding ? { evidence_override: evidence.missing } : {}),
       ...(isDecision ? { skipped: skipped.map((s) => s.order) } : {}),
       ...(myStep ? { step_order: myStep.order } : {}),
+      ...(nextAccountId && nextAccountId !== oldAccountId ? { account: { before: oldAccountId, after: nextAccountId } } : {}),
     },
   });
 
   const set: Record<string, unknown> = { status: nextStatus };
+  if (nextAccountId && nextAccountId !== oldAccountId) set['source.account_id'] = nextAccountId;
   if (isDecision) set['approval.steps'] = nextSteps;
   if (isDecision) set.sla_deadline = nextStepAfter
     ? nextSteps.find((s) => s.order === nextStepAfter.order)?.sla_deadline ?? null
@@ -645,7 +662,13 @@ export async function transition(input: {
     request_id: body.request_id,
     ip: input.ip,
   });
-  await syncBalancesForDocument({ doc, from: doc.status, to: nextStatus, execution: set.execution as never });
+  await syncBalancesForDocument({
+    doc,
+    from: doc.status,
+    to: nextStatus,
+    execution: set.execution as never,
+    newAccountId: (set['source.account_id'] as string | undefined) ?? null,
+  });
 
   // 8. thông báo cho cấp kế tiếp (email không await — arch §6)
   if (isDecision || action === 'pay' || action === 'queue_payment') {

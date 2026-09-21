@@ -76,26 +76,43 @@ export async function syncBalancesForDocument(input: {
   from: StatusKey;
   to: StatusKey;
   execution?: { paid_at?: string | null; actual_amount_minor?: bigint | null } | null;
+  /** tài khoản mới khi cấp duyệt đổi tài khoản đích/nguồn (null = giữ nguyên). */
+  newAccountId?: string | null;
 }): Promise<void> {
   try {
     const { doc, from, to } = input;
-    const accountId = doc.source?.account_id ? String(doc.source.account_id) : null;
-    if (!accountId) return; // quỹ tiền mặt → không có dòng ngân hàng
+    const oldAccountId = doc.source?.account_id ? String(doc.source.account_id) : null;
+    const newAccountId = input.newAccountId ? String(input.newAccountId) : oldAccountId;
+    if (!oldAccountId && !newAccountId) return; // quỹ tiền mặt → không có dòng ngân hàng
 
     const amount = doc.amount?.minor ?? 0n;
     const counted = (s: StatusKey) => !['draft', 'rejected', 'cancelled', 'changes_requested'].includes(s);
     const was = counted(from);
     const is = counted(to);
-    if (was === is && !input.execution) return;
+    const accountMoved = Boolean(oldAccountId && newAccountId && oldAccountId !== newAccountId);
+    if (was === is && !input.execution && !accountMoved) return;
 
     const date = datePartOf(String(to === 'paid' ? (input.execution?.paid_at ?? doc.planned_date) : doc.planned_date));
     const isIn = doc.kind === 'income';
+    const actual = to === 'paid' ? (input.execution?.actual_amount_minor ?? amount) : 0n;
 
+    // Đổi tài khoản khi duyệt: chuyển toàn bộ ảnh hưởng (planned + actual) từ tài
+    // khoản cũ sang tài khoản mới — không để dòng tiền treo trên tài khoản cũ.
+    if (accountMoved) {
+      if (oldAccountId && was) await applyAccountDelta({ accountId: oldAccountId, doc, date, planned: -amount, isIn });
+      if (newAccountId && is) {
+        await applyAccountDelta({ accountId: newAccountId, doc, date, planned: amount, actual: to === 'paid' ? actual : 0n, isIn });
+      }
+      await mirrorInternalCounterpart(doc, to, date, actual);
+      invalidateFor(String(doc.company_id));
+      return;
+    }
+
+    const accountId = newAccountId!;
     let plannedDelta: { in: bigint; out: bigint } = { in: 0n, out: 0n };
     if (!was && is) plannedDelta = isIn ? { in: amount, out: 0n } : { in: 0n, out: amount };
     else if (was && !is) plannedDelta = isIn ? { in: -amount, out: 0n } : { in: 0n, out: -amount };
 
-    const actual = to === 'paid' ? (input.execution?.actual_amount_minor ?? amount) : 0n;
     const account = await Models.BankAccount.findById(accountId).select({ min_balance_minor: 1 }).lean();
 
     await bumpBalance({
@@ -109,15 +126,7 @@ export async function syncBalancesForDocument(input: {
       actualOut: !isIn && to === 'paid' ? actual : undefined,
     });
 
-    // chuyển tiền nội bộ: ghi đối ứng cho công ty B, KHÔNG tính doanh thu/chi phí (§XXI)
-    if (doc.kind === 'internal' && to === 'paid' && doc.target?.company_id && doc.target?.account_id) {
-      await bumpBalance({
-        company_id: String(doc.target.company_id),
-        account_id: String(doc.target.account_id),
-        date: datePartOf(String(input.execution?.paid_at ?? doc.planned_date)),
-        actualIn: actual,
-      });
-    }
+    await mirrorInternalCounterpart(doc, to, date, actual);
     invalidateFor(String(doc.company_id));
   } catch (err) {
     console.warn('[balances] sync thất bại (sẽ reconcile lại):', (err as Error).message);
@@ -126,6 +135,40 @@ export async function syncBalancesForDocument(input: {
       { $setOnInsert: { name: 'reconcile', state: 'queued', run_at: new Date(), dedupe_key: `reconcile:balance:${input.doc._id}`, payload: { document_id: String(input.doc._id) } } },
       { upsert: true },
     ).exec();
+  }
+}
+
+/** Ghi 1 delta planned/actual lên một tài khoản (dùng khi đổi tài khoản khi duyệt). */
+async function applyAccountDelta(input: {
+  accountId: string;
+  doc: DomainDoc;
+  date: string;
+  planned: bigint;
+  actual?: bigint;
+  isIn: boolean;
+}): Promise<void> {
+  const account = await Models.BankAccount.findById(input.accountId).select({ min_balance_minor: 1 }).lean();
+  await bumpBalance({
+    company_id: String(input.doc.company_id),
+    account_id: input.accountId,
+    date: input.date,
+    min_balance_minor: account?.min_balance_minor,
+    plannedIn: input.isIn ? input.planned || undefined : undefined,
+    plannedOut: !input.isIn ? input.planned || undefined : undefined,
+    actualIn: input.isIn ? input.actual || undefined : undefined,
+    actualOut: !input.isIn ? input.actual || undefined : undefined,
+  });
+}
+
+/** chuyển tiền nội bộ: ghi đối ứng cho công ty B, KHÔNG tính doanh thu/chi phí (§XXI). */
+async function mirrorInternalCounterpart(doc: DomainDoc, to: StatusKey, date: string, actual: bigint): Promise<void> {
+  if (doc.kind === 'internal' && to === 'paid' && doc.target?.company_id && doc.target?.account_id) {
+    await bumpBalance({
+      company_id: String(doc.target.company_id),
+      account_id: String(doc.target.account_id),
+      date,
+      actualIn: actual,
+    });
   }
 }
 

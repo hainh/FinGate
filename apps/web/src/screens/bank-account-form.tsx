@@ -90,7 +90,7 @@ export function BankAccountFormScreen(): ReactNode {
 
   return (
     <>
-      <FgPageHeader title="Thêm tài khoản tiền" meta="Tài khoản Tập đoàn hoặc tài khoản thuộc công ty — dùng làm nguồn tiền trong phiếu thu/chi" />
+      <FgPageHeader title="Thêm tài khoản tiền" meta="Tài khoản Tập đoàn hoặc tài khoản thuộc công ty — dùng làm tài khoản nguồn (phiếu chi) hoặc tài khoản đích (phiếu thu)" />
       <div style={{ maxWidth: 720 }}>
         <FgCard>
           <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))' }}>

@@ -665,7 +665,7 @@ Helper / Error / Counter (caption, muted | danger)
 - Search bắt buộc khi options > 10; placeholder `Chọn…`.
 - `MultiSelect`: chip đã chọn trong trigger, `x` để bỏ, `+3 nữa` khi tràn, `Chọn tất cả (128)` ở đầu menu.
 - `FgCompanyPicker` (= `FgScopeSwitcher` trigger): options = `Tất cả công ty` + từng công ty; **scope là thuộc tính phiên làm việc**, ghi nhớ theo người dùng, hiện ở header bằng `FgScopeChip`, đổi scope phải refetch mọi số liệu và giữ nguyên bộ lọc.
-- `FgGroupAccountPicker` (blueprint §VIII/§XXX): chọn **tài khoản tập đoàn phụ trách** trong phiếu thu/chi; option = `[Ngân hàng · số TK masking · tên TK · số dư khả dụng]`; tài khoản bị khóa = disabled + tooltip lý do; field `required` khi phiếu dùng nguồn tiền tập đoàn (helper: "Giao dịch qua tài khoản Tập đoàn — bắt buộc chọn"); chỉ Chủ tịch HĐQT thấy mục cấu hình danh sách này trong Quản trị.
+- `FgGroupAccountPicker` (blueprint §VIII/§XXX): chọn **tài khoản tập đoàn phụ trách** trong phiếu thu/chi; option = `[Ngân hàng · số TK masking · tên TK · số dư khả dụng]`; tài khoản bị khóa = disabled + tooltip lý do; field `required` khi phiếu dùng nguồn tiền tập đoàn (helper: "Giao dịch qua tài khoản Tập đoàn — bắt buộc chọn"); chỉ Chủ tịch HĐQT thấy mục cấu hình danh sách này trong Quản trị. Cấp duyệt (mọi cấp trong luồng) được **đổi tài khoản đích/nguồn ngay trong màn duyệt** — chỉ chọn trong phạm vi công ty của phiếu + tài khoản Tập đoàn (blueprint §IV/§VIII).
 - Keyboard: type-ahead, `Esc` đóng, `Enter` chọn, focus trap trong menu, `aria-activedescendant`.
 - !D: không dùng select cho ≤ 3 options → dùng `FgSegmented`.
 

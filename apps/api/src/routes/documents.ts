@@ -52,32 +52,18 @@ import { loadDoc, transition, assertStepUp } from '../domain/workflow/index.ts';
 import { documentPermissions, returnedByDeputyDirector } from '../domain/entitlement/index.ts';
 import { awaitingBadge, decisionPack, docHref, queryQueue } from '../domain/queries/index.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
+import { assertAccountAllowedForCompany } from '../domain/accounts.ts';
 import { invalidateFor, rebuildEvidence } from '../domain/side-effects.ts';
 import { attachmentKey, detectMagic, sha256hex, storage } from '../storage/index.ts';
 import { newRequestId } from '../lib/http.ts';
 
 /**
  * Nguồn tiền chỉ được chọn từ tài khoản của công ty mình HOẶC tài khoản Tập đoàn
- * (company_id null, is_group) — chặn ở server, không tin UI (§VIII).
+ * (company_id null, is_group) — chặn ở server, không tin UI (§VIII). Logic dùng
+ * chung với workflow (cấp duyệt đổi tài khoản) ở `domain/accounts.ts`.
  */
 async function assertSourceAccountAllowed(companyId: string, accountId: string | null | undefined): Promise<void> {
-  if (!accountId) return;
-  const acct = await Models.BankAccount.findOne({ _id: accountId })
-    .select({ company_id: 1, is_group: 1, status: 1 })
-    .lean();
-  if (!acct || acct.status !== 'active') {
-    throw new ApiError({
-      code: 'FG-VAL-001',
-      errors: { 'source.account_id': 'Tài khoản nguồn không tồn tại hoặc đã đóng/phong tỏa' },
-    });
-  }
-  const owner = acct.company_id ? String(acct.company_id) : null;
-  if (!acct.is_group && owner !== companyId) {
-    throw new ApiError({
-      code: 'FG-RBAC-002',
-      detail: 'Tài khoản nguồn không thuộc công ty của bạn hoặc Tập đoàn',
-    });
-  }
+  await assertAccountAllowedForCompany(companyId, accountId);
 }
 
 /**

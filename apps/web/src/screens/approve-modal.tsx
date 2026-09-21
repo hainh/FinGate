@@ -21,9 +21,9 @@ import {
   ZERO,
 } from '@fingate/shared';
 import { ApiRequestError } from '../app/api.ts';
-import { useDecisionPack, useTransition, type TransitionInput } from '../app/queries.ts';
+import { useBankAccounts, useDecisionPack, useTransition, type TransitionInput } from '../app/queries.ts';
 import type { DocumentDetail, QueueRow } from '../app/types.ts';
-import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgPassword, FgStatusChip, FgTextarea, FgText } from '../components/primitives.tsx';
+import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgPassword, FgSelect, FgStatusChip, FgTextarea, FgText } from '../components/primitives.tsx';
 import { FgModal } from '../components/uitk.tsx';
 import { FgDecisionPack, directionOf } from '../components/finance.tsx';
 
@@ -248,6 +248,15 @@ export function ApprovalConfirmModal({
   const pack = useDecisionPack(doc._id);
   const runner = useTransitionRunner();
   const [opinion, setOpinion] = useState('');
+  const accounts = useBankAccounts();
+  // cấp duyệt được đổi tài khoản đích (phiếu thu) / nguồn (phiếu chi) trong phạm vi
+  // công ty của phiếu (kể cả tài khoản Tập đoàn) — §VIII/§XXX.
+  const canChangeAccount = action === 'approve' || action === 'approve_with_reason';
+  const accountOptions = (accounts.data?.items ?? [])
+    .filter((a) => a.status === 'active' && a.kind === doc.source.fund && (a.is_group || a.company_id === doc.company_id))
+    .map((a) => ({ value: a._id, label: `${a.is_group ? 'Tập đoàn' : (a.company_name ?? '—')} · ${a.bank_name} ${a.account_number_masked}` }));
+  const [accountId, setAccountId] = useState<string>(doc.source.account_id ?? '');
+  const accountChanged = accountId !== (doc.source.account_id ?? '');
   // thành công (cả khi retry sau step-up/gõ lại tiền) → đóng confirm
   useEffect(() => {
     if (runner.success > 0) onDone();
@@ -272,6 +281,8 @@ export function ApprovalConfirmModal({
       action,
       if_match: doc.version,
       opinion: opinion || undefined,
+      // cấp duyệt đổi tài khoản đích/nguồn của phiếu ngay khi duyệt
+      source_account_id: canChangeAccount && accountChanged && accountId ? accountId : undefined,
       // approve thường không bắt buộc ý kiến, nhưng khi thiếu chứng từ server
       // cần `reason` >=20 ký tự (FG-WF-004) → gửi kèm để user không phải làm lại.
       reason: needsReason ? opinion : opinion && opinion.trim().length >= 20 ? opinion : undefined,
@@ -318,6 +329,23 @@ export function ApprovalConfirmModal({
             title={`Thiếu ${pack.data.evidence.missing.length} chứng từ — duyệt cần lý do ≥20 ký tự (bỏ qua có audit)`}
             description="Server chặn FG-WF-003/004 nếu ý kiến quá ngắn hoặc thiếu."
           />
+        </div>
+      ) : null}
+      {canChangeAccount && accountOptions.length ? (
+        <div style={{ marginTop: 16 }}>
+          <FgField
+            label={doc.kind === 'income' ? 'Tài khoản đích' : 'Tài khoản nguồn'}
+            help="Đổi ngay khi duyệt — chỉ trong phạm vi công ty của phiếu và tài khoản Tập đoàn"
+          >
+            <FgSelect
+              options={accountOptions}
+              value={accountId || undefined}
+              onChange={(v) => setAccountId(v ?? '')}
+              placeholder="Chọn tài khoản"
+              allowClear
+              style={{ width: '100%' }}
+            />
+          </FgField>
         </div>
       ) : null}
       <div style={{ marginTop: 16 }}>

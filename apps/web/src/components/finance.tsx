@@ -313,7 +313,7 @@ export function FgDecisionPack({
       </SumSection>
 
       <SumSection tone={pack.q6_impact.breach ? 'danger' : accent} title={isInflow ? 'Nơi nhận tiền & ảnh hưởng số dư' : 'Nguồn tiền & ảnh hưởng số dư'}>
-        <SumRow label={pack.q5_source.fund === 'bank' ? (isInflow ? 'Tài khoản nhận' : 'Tài khoản') : isInflow ? 'Quỹ nhận' : 'Quỹ'}>
+        <SumRow label={pack.q5_source.fund === 'bank' ? (isInflow ? 'Tài khoản đích' : 'Tài khoản nguồn') : isInflow ? 'Quỹ nhận' : 'Quỹ xuất'}>
           {pack.q5_source.account_label ?? '—'}
         </SumRow>
         {pack.q5_source.group_account_label ? <SumRow label="TK Tập đoàn phụ trách">{pack.q5_source.group_account_label}</SumRow> : null}
