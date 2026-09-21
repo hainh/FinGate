@@ -22,6 +22,7 @@ import { Models } from '../db/models.ts';
 import { assertCompanyScope, defineRoute, requestCtx, requireActor, requireScope, validate } from '../lib/http.ts';
 import { ok } from '../lib/serialize.ts';
 import {
+  bankAccountUpdateBody,
   bankAccountUpsertBody,
   balancesBulkBody,
   debtListQuery,
@@ -31,12 +32,38 @@ import {
   rolloverListQuery,
   statementImportBody,
 } from '@fingate/shared';
-import { bankAccountUpsertBodySchema, balancesBulkBodySchema, debtUpsertBodySchema, internalTransferBodySchema, loanUpsertBodySchema, statementImportBodySchema } from './schemas.ts';
+import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, balancesBulkBodySchema, debtUpsertBodySchema, internalTransferBodySchema, loanUpsertBodySchema, statementImportBodySchema } from './schemas.ts';
 import { accountSnapshots, asBigInt, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
 import { scopedFind } from '../lib/mongo.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
 import { nextDocumentCode } from '../domain/numbering/index.ts';
 import { invalidateFor } from '../domain/side-effects.ts';
+
+/** Chi tiết tài khoản tiền cho form sửa (BANK-02) — trả số TK đầy đủ (đã kiểm quyền ở route). */
+async function bankAccountDetail(id: string): Promise<Record<string, unknown>> {
+  const acct = await Models.BankAccount.findById(id).lean<Record<string, unknown> | null>();
+  if (!acct) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy tài khoản tiền' });
+  const company = acct.company_id ? await Models.Company.findById(acct.company_id).select({ name: 1 }).lean() : null;
+  return {
+    _id: String(acct._id),
+    company_id: acct.company_id ? String(acct.company_id) : null,
+    company_name: company ? String((company as { name?: unknown }).name ?? '') : null,
+    is_group: Boolean(acct.is_group),
+    bank_name: String(acct.bank_name ?? ''),
+    account_name: String(acct.account_name ?? ''),
+    account_number: String(acct.account_number ?? ''),
+    branch: acct.branch ? String(acct.branch) : null,
+    kind: String(acct.kind ?? 'bank'),
+    currency: String(acct.currency ?? 'VND'),
+    manager_user_id: acct.manager_user_id ? String(acct.manager_user_id) : null,
+    limit_minor: acct.limit_minor == null ? null : String(acct.limit_minor),
+    min_balance_minor: String(acct.min_balance_minor ?? '0'),
+    show_on_dashboard: acct.show_on_dashboard !== false,
+    status: String(acct.status ?? 'active'),
+    note: acct.note ? String(acct.note) : null,
+    updated_at: acct.updated_at ? new Date(acct.updated_at as string | Date).toISOString() : null,
+  };
+}
 
 export function financeRoutes(app: FastifyInstance): void {
   /* ------------------------------- BANK ------------------------------- */
@@ -141,6 +168,101 @@ export function financeRoutes(app: FastifyInstance): void {
         });
         invalidateFor(companyId);
         return ok(reply, { data: { _id: String(created._id), account_number_masked: maskAccount(body.account_number) } }, { status: 201 });
+      },
+    }),
+  );
+
+  /** BANK-02 — chi tiết tài khoản tiền để sửa (trả số TK đầy đủ; đã kiểm phạm vi). */
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/bank-accounts/:id',
+      config: { perms: ['bank:read'] as Permission[], screen: 'BANK-02', summary: 'Chi tiết tài khoản tiền (form sửa)' },
+      handler: async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const acct = await Models.BankAccount.findById(id).select({ is_group: 1, company_id: 1 }).lean();
+        if (!acct) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy tài khoản tiền' });
+        // Tài khoản Tập đoàn thấy được ở mọi phạm vi (như danh sách); tài khoản công ty phải trong phạm vi.
+        if (!acct.is_group) assertCompanyScope(req, acct.company_id ? String(acct.company_id) : null);
+        return ok(reply, { data: await bankAccountDetail(id) });
+      },
+    }),
+  );
+
+  /**
+   * BANK-02 — sửa tài khoản tiền. KHÔNG đổi công ty / cờ Tập đoàn (tránh di chuyển
+   * tài khoản giữa các công ty). Khoá tài khoản (status ≠ active) vẫn kiểm tra hồ sơ
+   * đang tham chiếu như route `/status`.
+   */
+  app.route(
+    defineRoute({
+      method: 'PATCH',
+      url: '/bank-accounts/:id',
+      config: { perms: ['bank:write'] as Permission[], screen: 'BANK-02', summary: 'Sửa tài khoản tiền' },
+      schema: { tags: ['bank'], body: bankAccountUpdateBodySchema },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const { id } = req.params as { id: string };
+        const body = validate(bankAccountUpdateBody, req.body);
+        const acct = await Models.BankAccount.findById(id).lean<Record<string, unknown> | null>();
+        if (!acct) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy tài khoản tiền' });
+        if (acct.is_group && !actor.permissions.includes('admin:group_accounts')) {
+          throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ Chủ tịch HĐQT cấu hình tài khoản Tập đoàn (§VIII)' });
+        }
+        if (!acct.is_group) assertCompanyScope(req, acct.company_id ? String(acct.company_id) : null);
+        const companyId = acct.company_id ? String(acct.company_id) : null;
+
+        if (body.account_number !== undefined && body.account_number !== String(acct.account_number ?? '')) {
+          const dup = await Models.BankAccount.findOne({ account_number: body.account_number, company_id: acct.company_id ?? null, _id: { $ne: id } }).lean();
+          if (dup) throw new ApiError({ code: 'FG-VAL-001', errors: { account_number: 'Số tài khoản này đã tồn tại trong công ty' } });
+        }
+
+        if (body.status !== undefined && body.status !== 'active' && String(acct.status) === 'active') {
+          const referencing = await Models.Document.countDocuments({
+            status: { $in: ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.chairman', 'approved', 'processing'] },
+            $or: [{ 'source.account_id': id }, { 'source.group_account_id': id }],
+          } as never);
+          if (referencing > 0) {
+            throw new ApiError({
+              code: 'FG-SYS-003',
+              status: 409,
+              detail: `${referencing} hồ sơ đang chờ xử lý tham chiếu tài khoản này. Chuyển nguồn tiền trước khi khoá.`,
+              data: { referencing_documents: referencing },
+            });
+          }
+        }
+
+        const set: Record<string, unknown> = { updated_at: new Date() };
+        const changed: string[] = [];
+        const assign = (key: string, value: unknown) => {
+          set[key] = value;
+          changed.push(key);
+        };
+        if (body.bank_name !== undefined) assign('bank_name', body.bank_name);
+        if (body.account_name !== undefined) assign('account_name', body.account_name);
+        if (body.account_number !== undefined) assign('account_number', body.account_number);
+        if (body.branch !== undefined) assign('branch', body.branch || null);
+        if (body.currency !== undefined) assign('currency', body.currency);
+        if (body.kind !== undefined) assign('kind', body.kind);
+        if (body.manager_user_id !== undefined) assign('manager_user_id', body.manager_user_id ?? null);
+        if (body.limit_minor !== undefined) assign('limit_minor', body.limit_minor ? BigInt(body.limit_minor) : null);
+        if (body.min_balance_minor !== undefined) assign('min_balance_minor', BigInt(body.min_balance_minor));
+        if (body.show_on_dashboard !== undefined) assign('show_on_dashboard', body.show_on_dashboard);
+        if (body.status !== undefined) assign('status', body.status);
+        if (body.note !== undefined) assign('note', body.note || null);
+
+        await Models.BankAccount.updateOne({ _id: id }, { $set: set }).exec();
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'bank_account.update',
+          subject: { type: 'bank_account', id, code: maskAccount(String(body.account_number ?? acct.account_number ?? '')) },
+          company_id: companyId,
+          diff_fields: { changed },
+          ip: requestCtx(req).ip,
+        });
+        invalidateFor(companyId);
+        return ok(reply, { data: await bankAccountDetail(id) });
       },
     }),
   );

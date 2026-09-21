@@ -22,6 +22,7 @@ export function BankAccountsScreen(): ReactNode {
   const query = useBankAccounts();
   const { can } = useAuth();
   const [kindFilter, setKindFilter] = useState<'all' | 'cash' | 'bank'>('all');
+  const canEdit = (r: BankAccountRow) => can('bank:write') && (!r.is_group || can('admin:group_accounts'));
   return (
     <>
       <FgPageHeader
@@ -123,6 +124,17 @@ export function BankAccountsScreen(): ReactNode {
                         ✓ Hoạt động
                       </span>
                     ),
+                },
+                {
+                  title: '',
+                  key: 'act',
+                  width: 90,
+                  render: (_v, r) =>
+                    canEdit(r) ? (
+                      <Link to={`/ngan-hang/taikhoan/${r._id}/sua`}>
+                        <FgButton size="small">Sửa</FgButton>
+                      </Link>
+                    ) : null,
                 },
               ]}
             />

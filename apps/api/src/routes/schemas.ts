@@ -12,6 +12,7 @@ import {
   attachmentConfirmBody,
   attachmentPrepareBody,
   balancesBulkBody,
+  bankAccountUpdateBody,
   bankAccountUpsertBody,
   budgetUpsertBody,
   categoryUpsertBody,
@@ -97,6 +98,7 @@ export const delegationBodySchema = j(delegationBody);
 
 // tài chính
 export const bankAccountUpsertBodySchema = j(bankAccountUpsertBody);
+export const bankAccountUpdateBodySchema = j(bankAccountUpdateBody);
 export const balancesBulkBodySchema = j(balancesBulkBody);
 export const statementImportBodySchema = j(statementImportBody);
 export const loanUpsertBodySchema = j(loanUpsertBody);

@@ -143,6 +143,7 @@ export function AppRoutes(): ReactNode {
       <Route path="/thu/:id/sua" element={<Shell><DocumentFormScreen kind="income" /></Shell>} />
       <Route path="/ngan-hang/taikhoan" element={<Shell><BankAccountsScreen /></Shell>} /> {/* BANK-01 */}
       <Route path="/ngan-hang/taikhoan/moi" element={<Shell><BankAccountFormScreen /></Shell>} /> {/* BANK-02 */}
+      <Route path="/ngan-hang/taikhoan/:id/sua" element={<Shell><BankAccountFormScreen /></Shell>} />
       <Route path="/ngan-hang/so-du" element={<Shell><BalanceEntryScreen /></Shell>} /> {/* BANK-04 */}
       <Route path="/ngan-hang/khoan-vay" element={<Shell><LoansScreen /></Shell>} /> {/* LOAN-01 */}
       <Route path="/ngan-hang/dao-han" element={<Shell><RolloversScreen /></Shell>} /> {/* RENEW-01 */}

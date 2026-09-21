@@ -30,6 +30,9 @@ export const bankAccountUpsertBody = z.object({
   note: z.string().max(500).optional(),
 });
 
+/** PATCH /bank-accounts/{id} — sửa tài khoản tiền. KHÔNG đổi công ty / tài khoản Tập đoàn. */
+export const bankAccountUpdateBody = bankAccountUpsertBody.omit({ company_id: true, is_group: true }).partial();
+
 export const bankAccountRow = z.object({
   _id: objectId,
   company_id: objectId.nullable(),

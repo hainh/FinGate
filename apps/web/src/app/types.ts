@@ -406,6 +406,26 @@ export interface BankAccountRow {
   updated_at?: string | null;
 }
 
+export interface BankAccountDetail {
+  _id: string;
+  company_id: string | null;
+  company_name: string | null;
+  is_group: boolean;
+  bank_name: string;
+  account_name: string;
+  account_number: string;
+  branch: string | null;
+  kind: string;
+  currency: string;
+  manager_user_id: string | null;
+  limit_minor: string | null;
+  min_balance_minor: string;
+  show_on_dashboard: boolean;
+  status: string;
+  note: string | null;
+  updated_at: string | null;
+}
+
 export interface LoanRow {
   _id: string;
   company_id: string;

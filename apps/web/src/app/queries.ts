@@ -10,6 +10,7 @@ import { apiCall, apiData, uuid } from './api.ts';
 import { useAuth } from './store.tsx';
 import type {
   AlertRow,
+  BankAccountDetail,
   BankAccountRow,
   DashboardOverview,
   DecisionPack,
@@ -133,6 +134,15 @@ export function useBankAccounts() {
   return useQuery({
     queryKey: ['bank-accounts', scope],
     queryFn: () => apiCall<{ items: BankAccountRow[] }>('/bank-accounts', { query: { scope } }),
+  });
+}
+
+export function useBankAccount(id: string | undefined) {
+  const { scope } = useAuth();
+  return useQuery({
+    queryKey: ['bank-account', scope, id],
+    enabled: !!id,
+    queryFn: () => apiData<BankAccountDetail>(`/bank-accounts/${id}`, { query: { scope } }),
   });
 }
 
