@@ -123,7 +123,7 @@ export async function evaluateAlerts(): Promise<Record<string, unknown>> {
           severity: rule('low_balance').severity,
           text: `${String(c.name)} còn khả dụng ${compact(total)}, dưới ngưỡng ${compact(min)}`,
           amount_minor: min - total,
-          href: '/ngan-hang/so-du',
+          href: null,
           dedupe_key: `low_balance:${String(c._id)}:${day}`,
         });
       }

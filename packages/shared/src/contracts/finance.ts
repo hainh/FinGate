@@ -5,7 +5,7 @@
 import { z } from 'zod';
 import { MATURITY_BUCKETS } from '../status/index.js';
 const lit = <T extends string>(arr: readonly T[]) => arr as unknown as [T, ...T[]];
-import { businessDate, businessDateTime, moneyField, moneyWire, objectId, uuid } from './common.js';
+import { businessDate, businessDateTime, moneyField, moneyWire, objectId } from './common.js';
 import { priority } from './documents.js';
 
 export const accountKind = z.enum(['bank', 'cash']);
@@ -53,36 +53,6 @@ export const bankAccountRow = z.object({
   stale: z.boolean().describe('Chưa có số dư cho ngày hôm nay'),
   open_docs_count: z.number().int().optional(),
   updated_at: z.string().nullable(),
-});
-
-/** BANK-04 — nhập số dư đầu ngày. Luật tự kiểm: opening + in − out = closing. */
-export const balanceEntryBody = z.object({
-  company_id: objectId,
-  account_id: objectId,
-  date: businessDate,
-  opening: moneyField,
-  inflow: moneyField,
-  outflow: moneyField,
-  closing: moneyField,
-  blocked: moneyField,
-  request_id: uuid,
-});
-
-export const balancesBulkBody = z.object({
-  date: businessDate,
-  entries: z
-    .array(
-      z.object({
-        account_id: objectId,
-        opening_minor: z.string().regex(/^-?\d+$/),
-        inflow_minor: z.string().regex(/^\d+$/),
-        outflow_minor: z.string().regex(/^\d+$/),
-        closing_minor: z.string().regex(/^-?\d+$/),
-        blocked_minor: z.string().regex(/^\d+$/),
-      }),
-    )
-    .min(1)
-    .max(200),
 });
 
 export const balanceRow = z.object({

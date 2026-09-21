@@ -35,7 +35,6 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'document.delete': 'Xoá phiếu thu/chi',
   'doc.override': 'Bước nhảy cấp',
   'attach.add': 'Thêm chứng từ',
-  'balance.entry': 'Nhập số dư',
   'report.export': 'Xuất báo cáo',
   'hr.invite': 'Mời nhân sự',
   'hr.invite_regenerate': 'Cấp lại link kích hoạt',

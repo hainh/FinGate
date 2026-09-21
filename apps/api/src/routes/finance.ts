@@ -12,8 +12,6 @@ import {
   dayEndOf,
   dayStartOf,
   daysUntil,
-  formatMoney,
-  money,
   normalizePlannedDate,
   today,
   type Permission,
@@ -24,7 +22,6 @@ import { ok } from '../lib/serialize.ts';
 import {
   bankAccountUpdateBody,
   bankAccountUpsertBody,
-  balancesBulkBody,
   debtListQuery,
   debtUpsertBody,
   internalTransferBody,
@@ -32,7 +29,7 @@ import {
   rolloverListQuery,
   statementImportBody,
 } from '@fingate/shared';
-import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, balancesBulkBodySchema, debtUpsertBodySchema, internalTransferBodySchema, loanUpsertBodySchema, statementImportBodySchema } from './schemas.ts';
+import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, debtUpsertBodySchema, internalTransferBodySchema, loanUpsertBodySchema, statementImportBodySchema } from './schemas.ts';
 import { accountSnapshots, asBigInt, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
 import { scopedFind } from '../lib/mongo.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
@@ -309,87 +306,6 @@ export function financeRoutes(app: FastifyInstance): void {
         });
         invalidateFor(acct.company_id ? String(acct.company_id) : null);
         return { data: { ok: true, status } };
-      },
-    }),
-  );
-
-  /** BANK-04 — nhập số dư đầu ngày. Tự kiểm `đầu + vào − ra = cuối`, lỗi inline per dòng. */
-  app.route(
-    defineRoute({
-      method: 'POST',
-      url: '/bank-accounts/balances',
-      config: { perms: ['bank:write'] as Permission[], screen: 'BANK-04', summary: 'Nhập số dư theo ngày' },
-      schema: { tags: ['bank'], body: balancesBulkBodySchema },
-      handler: async (req, reply) => {
-        const actor = requireActor(req);
-        const scope = requireScope(req);
-        const body = validate(balancesBulkBody, req.body);
-        const errors: { index: number; field: string; message: string }[] = [];
-        const accountIds = body.entries.map((e) => e.account_id);
-        const accounts = await Models.BankAccount.find({ _id: { $in: accountIds } as never }).select({ company_id: 1, min_balance_minor: 1 }).lean();
-        const byId = new Map(accounts.map((a) => [String(a._id), a]));
-
-        body.entries.forEach((e, i) => {
-          const opening = BigInt(e.opening_minor);
-          const inflow = BigInt(e.inflow_minor);
-          const outflow = BigInt(e.outflow_minor);
-          const closing = BigInt(e.closing_minor);
-          if (opening + inflow - outflow !== closing) {
-            errors.push({ index: i, field: 'closing_minor', message: `Không khớp: ${formatMoney(money(opening + inflow - outflow), { mode: 'compact' })} ≠ ${formatMoney(money(closing), { mode: 'compact' })}` });
-          }
-        });
-        if (errors.length) {
-          throw new ApiError({
-            code: 'FG-VAL-001',
-            detail: 'Một số dòng không cân đối đầu + vào − ra = cuối',
-            errors: Object.fromEntries(errors.map((e) => [`entries.${e.index}.${e.field}`, e.message])),
-            data: { row_errors: errors },
-          });
-        }
-
-        let saved = 0;
-        for (const e of body.entries) {
-          const acct = byId.get(e.account_id);
-          if (!acct?.company_id) continue;
-          if (scope.companyIds !== null && !scope.companyIds.includes(String(acct.company_id))) {
-            throw new ApiError({ code: 'FG-RBAC-002' });
-          }
-          const blocked = BigInt(e.blocked_minor);
-          const closing = BigInt(e.closing_minor);
-          const min = BigInt(acct.min_balance_minor ?? 0);
-          await Models.BalanceDaily.updateOne(
-            { account_id: e.account_id, date: body.date },
-            {
-              $set: {
-                company_id: acct.company_id,
-                account_id: e.account_id,
-                date: body.date,
-                opening_minor: BigInt(e.opening_minor),
-                actual_in_minor: BigInt(e.inflow_minor),
-                actual_out_minor: BigInt(e.outflow_minor),
-                closing_minor: closing,
-                blocked_minor: blocked,
-                min_balance_minor: min,
-                breach: closing - blocked < min,
-                source: 'manual',
-                updated_at: new Date(),
-              },
-              $inc: { version: 1 },
-            },
-            { upsert: true },
-          ).exec();
-          saved++;
-        }
-        await mirrorAudit({
-          at: new Date(),
-          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
-          action: 'balances.enter',
-          subject: { type: 'balances_daily', id: body.date, code: `${saved} tài khoản` },
-          company_id: null,
-          ip: requestCtx(req).ip,
-        });
-        invalidateFor(null, actor.user_id);
-        return ok(reply, { data: { saved, date: body.date } }, { status: 201 });
       },
     }),
   );

@@ -782,7 +782,6 @@ async function buildOverview(scope: ScopeLike, userId: string, role?: Role): Pro
     overdueTotal: overdue.total,
     missing,
     breachAccounts: accounts.filter((a) => a.breach).slice(0, 3),
-    staleCompanies: [...new Set(accounts.filter((a) => a.stale).map((a) => a.company_name))],
   });
 
   const byBankAgg = new Map<string, bigint>();
@@ -892,7 +891,6 @@ function buildExceptions(input: {
   overdueTotal: bigint;
   missing: number;
   breachAccounts: AccountSnapshot[];
-  staleCompanies: string[];
 }): Record<string, unknown>[] {
   const items: Record<string, unknown>[] = [];
   if (input.matToday > 0n) {
@@ -952,9 +950,6 @@ function buildExceptions(input: {
   }
   if (input.missing > 0) {
     items.push({ id: 'evidence', severity: 1, tone: 'attention', glyph: '▲', text: `${input.missing} hồ sơ thiếu chứng từ`, amount: null, compact: null, href: '/can-xu-ly', cta: 'Bổ sung' });
-  }
-  for (const name of input.staleCompanies.slice(0, 2)) {
-    items.push({ id: `stale-${name}`, severity: 1, tone: 'attention', glyph: '▲', text: `Dữ liệu ${name} chưa đồng bộ hôm nay`, amount: null, compact: null, href: '/ngan-hang/so-du', cta: 'Nhập' });
   }
   return items.sort((a, b) => Number(b.severity) - Number(a.severity));
 }

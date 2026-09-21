@@ -1,6 +1,6 @@
 /**
  * `pnpm db:rebuild-balances` — dựng lại `balances_daily` từ hồ sơ (§8.3).
- * Idempotent; giữ `opening`/`blocked` đã nhập tay ở BANK-04 để không mất dữ liệu thủ quỹ.
+ * Idempotent; giữ `opening`/`blocked` đã ghi nhận trước đó để không mất dữ liệu thủ quỹ.
  */
 
 import { datePartOf } from '@fingate/shared';

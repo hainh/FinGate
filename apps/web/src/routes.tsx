@@ -21,7 +21,7 @@ import {
   SpendPendingScreen,
 } from './screens/documents.tsx';
 import { DocumentDetailScreen } from './screens/document-detail.tsx';
-import { BalanceEntryScreen, BankAccountsScreen } from './screens/bank.tsx';
+import { BankAccountsScreen } from './screens/bank.tsx';
 import { BankAccountFormScreen } from './screens/bank-account-form.tsx';
 import { DebtsScreen, LoansScreen, RolloversScreen } from './screens/loans.tsx';
 import { ForecastScreen } from './screens/forecast.tsx';
@@ -69,7 +69,6 @@ const PATH_PERMS: { prefix: string; perm: string }[] = [
   { prefix: '/thu', perm: 'doc:read' },
   { prefix: '/ho-so', perm: 'doc:read' },
   { prefix: '/ngan-hang/taikhoan', perm: 'bank:read' },
-  { prefix: '/ngan-hang/so-du', perm: 'bank:read' },
   { prefix: '/ngan-hang/chuyen-noi-bo', perm: 'bank:read' },
   { prefix: '/ngan-hang/khoan-vay', perm: 'loan:read' },
   { prefix: '/ngan-hang/dao-han', perm: 'loan:read' },
@@ -144,7 +143,6 @@ export function AppRoutes(): ReactNode {
       <Route path="/ngan-hang/taikhoan" element={<Shell><BankAccountsScreen /></Shell>} /> {/* BANK-01 */}
       <Route path="/ngan-hang/taikhoan/moi" element={<Shell><BankAccountFormScreen /></Shell>} /> {/* BANK-02 */}
       <Route path="/ngan-hang/taikhoan/:id/sua" element={<Shell><BankAccountFormScreen /></Shell>} />
-      <Route path="/ngan-hang/so-du" element={<Shell><BalanceEntryScreen /></Shell>} /> {/* BANK-04 */}
       <Route path="/ngan-hang/khoan-vay" element={<Shell><LoansScreen /></Shell>} /> {/* LOAN-01 */}
       <Route path="/ngan-hang/dao-han" element={<Shell><RolloversScreen /></Shell>} /> {/* RENEW-01 */}
       <Route path="/ngan-hang/dao-han/phuong-an/moi" element={<Shell><DocumentFormScreen kind="rollover" /></Shell>} /> {/* RENEW-02 */}

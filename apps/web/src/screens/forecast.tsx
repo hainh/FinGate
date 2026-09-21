@@ -69,7 +69,7 @@ export function ForecastScreen(): ReactNode {
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={10} cols={7} />}>
         {(data) => {
           const rows = data.rows ?? [];
-          if (!rows.length) return <div className="fg-card"><FgEmptyState glyph="◇" title="Chưa đủ nguồn để dự báo" description="Cần nhập số dư đầu ngày (BANK-04) và có kế hoạch thu/chi." /></div>;
+          if (!rows.length) return <div className="fg-card"><FgEmptyState glyph="◇" title="Chưa đủ nguồn để dự báo" description="Cần có số dư ngân hàng và kế hoạch thu/chi." /></div>;
           return (
             <>
               {data.first_breach_date ? (

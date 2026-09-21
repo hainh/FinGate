@@ -88,18 +88,6 @@ export function DashboardScreen(): ReactNode {
             />
 
             {staleLong ? <FgAlert tone="attention" title={`Số liệu có thể cũ — cập nhật lúc ${new Date(ov.generated_at).toLocaleString('vi-VN')}`} /> : null}
-            {ov.partial_companies?.length ? (
-              <FgAlert
-                tone="warning"
-                title="Một phần dữ liệu chưa đồng bộ"
-                description={`Chưa có số dư hôm nay: ${[...new Set(ov.partial_companies.map((p) => p.name))].join(', ')} — vào Ngân hàng → Nhập số dư (BANK-04) để cập nhật.`}
-                action={
-                  <Link to="/ngan-hang/so-du">
-                    <FgButton size="small">Nhập số dư</FgButton>
-                  </Link>
-                }
-              />
-            ) : null}
 
             {/* tầng 01 — cần xử lý ngay */}
             <FgCard title={`Cần xử lý ngay${ov.exceptions.length ? ` (${ov.exceptions.length})` : ''}`} style={{ marginBottom: 'var(--fg-space-4)' }}>
