@@ -132,7 +132,7 @@ export async function submitDocument(input: {
   opinion?: string;
 }): Promise<TransitionResult> {
   const { doc, actor } = input;
-  if (!EDITABLE_STATUSES.includes(doc.status) && doc.status !== 'changes_requested') {
+  if (!EDITABLE_STATUSES.includes(doc.status)) {
     throw new ApiError({
       code: 'FG-WF-001',
       detail: `Hồ sơ đang ở trạng thái ${statusLabel(doc.status)}, không gửi lại được`,

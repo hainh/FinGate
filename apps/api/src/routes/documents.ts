@@ -49,7 +49,7 @@ import {
   attachmentConfirmBody,
 } from '@fingate/shared';
 import { loadDoc, transition, assertStepUp } from '../domain/workflow/index.ts';
-import { documentPermissions, returnedByDeputyDirector } from '../domain/entitlement/index.ts';
+import { documentPermissions, approvedFromChiefAccountantUp } from '../domain/entitlement/index.ts';
 import { awaitingBadge, decisionPack, docHref, queryQueue } from '../domain/queries/index.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
 import { assertAccountAllowedForCompany } from '../domain/accounts.ts';
@@ -310,11 +310,14 @@ export function documentRoutes(app: FastifyInstance): void {
         const body = validate(documentUpdateBody, req.body);
         const doc = await loadDoc(params.id);
         await assertVisible(req, String(doc.company_id));
-        if (String(doc.created_by) !== actor.user_id && !actor.permissions.includes('approval:override')) {
+        if (String(doc.created_by) !== actor.user_id) {
           throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ người lập mới sửa được hồ sơ' });
         }
-        if (!['draft', 'changes_requested'].includes(doc.status)) {
+        if (!['draft', 'changes_requested', 'rejected'].includes(doc.status)) {
           throw new ApiError({ code: 'FG-WF-005', detail: 'Hồ sơ đã qua cấp duyệt, chỉ thêm chứng từ được' });
+        }
+        if (approvedFromChiefAccountantUp((doc.history ?? []) as { action?: string | null; actor?: { role?: string | null } | null }[])) {
+          throw new ApiError({ code: 'FG-WF-005', detail: 'Hồ sơ đã được cấp từ Kế toán trưởng trở lên duyệt — không sửa được nữa' });
         }
         if (doc.processed_requests?.includes(body.request_id)) {
           return ok(reply, { data: await detailOf(params.id, actor.user_id), idempotent: true });
@@ -350,7 +353,7 @@ export function documentRoutes(app: FastifyInstance): void {
           model: 'Document',
           id: params.id,
           ifMatch: body.if_match,
-          extraFilter: { status: { $in: ['draft', 'changes_requested'] } },
+          extraFilter: { status: { $in: ['draft', 'changes_requested', 'rejected'] } },
           set,
           push: { history: entry },
           addToSet: { processed_requests: body.request_id },
@@ -431,9 +434,9 @@ export function documentRoutes(app: FastifyInstance): void {
   /* ----------------------------- workflow -------------------------------- */
 
   /**
-   * Xoá cứng phiếu thu/chi (yêu cầu ADM-01). Chỉ cho phép:
-   *  (a) bản nháp do CHÍNH người gọi tạo; hoặc
-   *  (b) hồ sơ đã bị Phó Giám đốc trả lại (từ chối / yêu cầu bổ sung).
+   * Xoá cứng phiếu thu/chi (yêu cầu ADM-01). Chỉ cho phép CHÍNH người lập xoá khi:
+   *  - phiếu còn nháp, bị trả về bổ sung, hoặc bị từ chối; VÀ
+   *  - chưa có ai từ Kế toán trưởng trở lên duyệt.
    * Mirror audit TRƯỚC khi xoá để còn dấu vết, nhưng KHÔNG ghi vào history hồ sơ
    * (bản ghi sắp bị xoá). Bắt buộc step-up (ADR-14) vì là thao tác phá huỷ.
    */
@@ -441,7 +444,7 @@ export function documentRoutes(app: FastifyInstance): void {
     defineRoute({
       method: 'POST',
       url: '/documents/:id/delete',
-      config: { perms: ['doc:delete'] as Permission[], stepUp: true, screen: 'DOC-01', summary: 'Xoá phiếu thu/chi (nháp của mình / PGD trả lại)' },
+      config: { perms: ['doc:delete'] as Permission[], stepUp: true, screen: 'DOC-01', summary: 'Xoá phiếu thu/chi (nháp/trả về/từ chối của người lập, chưa qua KTT)' },
       schema: { tags: ['documents'], body: documentDeleteBodySchema },
       handler: async (req, reply) => {
         const actor = requireActor(req);
@@ -450,14 +453,15 @@ export function documentRoutes(app: FastifyInstance): void {
         const doc = await loadDoc(params.id);
         await assertVisible(req, String(doc.company_id));
 
-        const steps = (doc.approval?.steps ?? []) as { role: Role; action?: string | null }[];
+        const history = (doc.history ?? []) as { action?: string | null; actor?: { role?: string | null } | null }[];
         const allowed =
-          (doc.status === 'draft' && String(doc.created_by) === actor.user_id) ||
-          ((doc.status === 'rejected' || doc.status === 'changes_requested') && returnedByDeputyDirector(steps));
+          String(doc.created_by) === actor.user_id &&
+          ['draft', 'changes_requested', 'rejected'].includes(doc.status) &&
+          !approvedFromChiefAccountantUp(history);
         if (!allowed) {
           throw new ApiError({
             code: 'FG-RBAC-001',
-            detail: 'Chỉ xoá được bản nháp của bạn, hoặc phiếu đã bị Phó Giám đốc trả lại',
+            detail: 'Chỉ người lập xoá được phiếu còn nháp / bị trả về bổ sung / bị từ chối và chưa qua cấp Kế toán trưởng trở lên',
           });
         }
 
@@ -808,6 +812,8 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
     if (al > limit) limit = al;
   }
 
+  const history = (doc.history ?? []) as { action?: string | null; actor?: { role?: string | null } | null }[];
+
   const can = documentPermissions(
     {
       user_id: userId,
@@ -824,6 +830,7 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
       company_id: String(doc.company_id),
       actor_companies: assignments.map((a) => String(a.company_id)),
       delegatedStepOrders: delegated.map((d) => steps.find((s) => String(s.user_id) === String(d.user_id))?.order ?? -1).filter((o) => o >= 0),
+      approved_from_ktt_up: approvedFromChiefAccountantUp(history),
     },
   );
 

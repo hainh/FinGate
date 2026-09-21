@@ -60,8 +60,8 @@ export const FIRST_NODE: Record<DocKind, StatusKey> = {
 
 export const FINAL_APPROVAL_STATUS: StatusKey = 'approved';
 
-/** trạng thái cho phép sửa nội dung hồ sơ (CHI-03) */
-export const EDITABLE_STATUSES: StatusKey[] = ['draft', 'changes_requested'];
+/** trạng thái cho phép người lập sửa & gửi lại nội dung hồ sơ (CHI-03) */
+export const EDITABLE_STATUSES: StatusKey[] = ['draft', 'changes_requested', 'rejected'];
 
 /** trạng thái đã "khóa" với người tạo — chỉ cấp duyệt/có quyền override mới xử lý được */
 export const LOCKED_STATUSES: StatusKey[] = [

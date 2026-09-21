@@ -189,14 +189,22 @@ export interface DocPermissions {
   step_order: number | null;
 }
 
+/** Cấp duyệt "từ Kế toán trưởng trở lên" (blueprint §III). */
+const ROLES_FROM_CHIEF_ACCOUNTANT: readonly string[] = ['chief_accountant', 'deputy_director', 'director', 'chairman'];
+
 /**
- * Hồ sơ đã bị Phó Giám đốc trả lại (từ chối / yêu cầu bổ sung) → KTT/kế toán
- * được phép xoá phiếu thu/chi (yêu cầu nghiệp vụ ADM-01).
+ * Đã có ai từ Kế toán trưởng trở lên **duyệt** chưa? Đọc từ `history[]` (nguồn sự thật)
+ * thay vì `steps`, vì steps bị reset khi trả về bổ sung — nhưng lần duyệt trước đó vẫn
+ * tính là "đã qua tay cấp KTT+".
  */
-export function returnedByDeputyDirector(
-  steps: readonly { role: Role; action?: string | null }[],
+export function approvedFromChiefAccountantUp(
+  history: readonly { action?: string | null; actor?: { role?: string | null } | null }[],
 ): boolean {
-  return steps.some((s) => s.role === 'deputy_director' && (s.action === 'reject' || s.action === 'request_changes'));
+  return history.some(
+    (h) =>
+      (h.action === 'approve' || h.action === 'approve_with_reason') &&
+      ROLES_FROM_CHIEF_ACCOUNTANT.includes(String(h.actor?.role ?? '')),
+  );
 }
 
 export function documentPermissions(
@@ -210,11 +218,15 @@ export function documentPermissions(
     company_id: string;
     actor_companies: string[];
     delegatedStepOrders: number[];
+    /** Đã có ai từ Kế toán trưởng trở lên duyệt (tính từ `history[]`). */
+    approved_from_ktt_up: boolean;
   },
 ): DocPermissions {
   const has = (p: Permission) => actor.permissions.includes(p);
   const mine = doc.created_by === actor.user_id;
-  const editable = (doc.status === 'draft' || doc.status === 'changes_requested') && mine && has('doc:create');
+  // Người lập chỉ được xoá/sửa khi chưa có cấp KTT trở lên duyệt (nháp / yêu cầu bổ sung / bị từ chối).
+  const creatorMaintainable = mine && ['draft', 'changes_requested', 'rejected'].includes(doc.status) && !doc.approved_from_ktt_up;
+  const editable = creatorMaintainable && has('doc:create');
   const currentSteps = doc.steps.filter((s) => s.state === 'current' || s.state === 'waiting');
   const iAmStep = currentSteps.filter(
     (s) =>
@@ -240,12 +252,10 @@ export function documentPermissions(
   return {
     read: inScope && has('doc:read'),
     edit: editable,
-    submit: (doc.status === 'draft' || doc.status === 'changes_requested') && mine && has('doc:submit'),
-    // Xoá cứng phiếu: (a) bản nháp do chính mình tạo; (b) hồ sơ đã bị Phó Giám đốc trả lại.
-    delete:
-      has('doc:delete') &&
-      ((doc.status === 'draft' && mine) ||
-        ((doc.status === 'rejected' || doc.status === 'changes_requested') && returnedByDeputyDirector(doc.steps))),
+    submit: (doc.status === 'draft' || doc.status === 'changes_requested' || doc.status === 'rejected') && mine && has('doc:submit'),
+    // Xoá cứng phiếu: chỉ NGƯỜI LẬP, khi phiếu còn nháp / bị trả về bổ sung / bị từ chối
+    // và chưa có ai từ Kế toán trưởng trở lên duyệt.
+    delete: has('doc:delete') && creatorMaintainable,
     approve: approveAllowed,
     reject: approveAllowed,
     request_changes: approveAllowed,
