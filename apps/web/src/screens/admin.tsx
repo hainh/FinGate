@@ -1508,7 +1508,7 @@ export function AuditLogScreen(): ReactNode {
   return (
     <>
       <AdminNav />
-      <FgPageHeader title="Audit log" meta="Ai · làm gì · lúc nào · từ IP nào — chỉ thêm, không sửa, KHÔNG có nút xóa (blueprint §XIX)" />
+      <FgPageHeader title="Audit log" meta="" />
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={10} cols={6} />}>
         {(data) => (
           <>
