@@ -11,7 +11,7 @@ import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { CURRENCY_CODES, money, moneyToWire, type Money } from '@fingate/shared';
 import { ApiRequestError, apiCall } from '../app/api.ts';
-import { useAuth, SCOPE_ALL } from '../app/store.tsx';
+import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
 import { useCompanies } from '../app/queries.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoneyInput, FgSelect, FgTextarea } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -24,13 +24,12 @@ export function BankAccountFormScreen(): ReactNode {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { message } = useToast();
-  const { me, can, scope } = useAuth();
+  const { me, can } = useAuth();
   const companies = useCompanies();
 
   const canGroup = can('admin:group_accounts');
-  // Công ty đích = phạm vi đang chọn (không phải công ty "active" của phiên, vốn
-  // có thể lệch khi đổi phạm vi); xem Toàn tập đoàn thì lấy công ty mặc định.
-  const ownCompany = (scope !== SCOPE_ALL ? scope : me?.scope.active_company_id) ?? me?.assignments[0]?.company_id ?? '';
+  // Công ty đích = phạm vi đang chọn (xem useCurrentCompanyId).
+  const ownCompany = useCurrentCompanyId() ?? me?.assignments[0]?.company_id ?? '';
 
   const [target, setTarget] = useState<string>(canGroup ? GROUP : ownCompany);
   const [kind, setKind] = useState<'bank' | 'cash'>('bank');

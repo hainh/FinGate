@@ -25,7 +25,7 @@ import {
   type Money,
 } from '@fingate/shared';
 import { useAuditLog, useCompanies, useDepartments, useMatrix, useMatrixUpsert, usePersonnel, type DepartmentRow } from '../app/queries.ts';
-import { useAuth, useUi } from '../app/store.tsx';
+import { useAuth, useUi, useCurrentCompanyId } from '../app/store.tsx';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgMultiSelect, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonTable, FgTable, FgTabs, FgTag } from '../components/uitk.tsx';
@@ -417,8 +417,10 @@ function InviteModal({
 }): ReactNode {
   const { me, can } = useAuth();
   const companies = useCompanies();
+  // Công ty đang làm việc = phạm vi đang chọn (không phải active_company_id của phiên).
+  const currentCompany = useCurrentCompanyId();
   const [email, setEmail] = useState('');
-  const [companyIds, setCompanyIds] = useState<string[]>(me?.scope.active_company_id ? [me.scope.active_company_id] : []);
+  const [companyIds, setCompanyIds] = useState<string[]>(currentCompany ? [currentCompany] : []);
   const [deptByCompany, setDeptByCompany] = useState<Record<string, string | undefined>>({});
   const [role, setRole] = useState<string>('staff');
   const [limit, setLimit] = useState<Money | null>(null);
@@ -430,8 +432,8 @@ function InviteModal({
 
   const lockedToOwnCompany = !me?.scope.all;
   useEffect(() => {
-    if (lockedToOwnCompany && me?.scope.active_company_id) setCompanyIds([me.scope.active_company_id]);
-  }, [lockedToOwnCompany, me?.scope.active_company_id]);
+    if (lockedToOwnCompany && currentCompany) setCompanyIds([currentCompany]);
+  }, [lockedToOwnCompany, currentCompany]);
 
   useEffect(() => {
     if (!open) return;

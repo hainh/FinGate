@@ -78,6 +78,18 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 export const useAuth = (): AuthContextValue => useContext(AuthContext)!;
 
+/**
+ * Công ty đang làm việc = phạm vi đang chọn ở bộ chuyển phạm vi (không phải
+ * `me.scope.active_company_id` — công ty "active" của phiên, chốt lúc đăng nhập
+ * và không đổi khi người dùng chuyển phạm vi). Chỉ khi xem "Toàn tập đoàn" mới
+ * dùng công ty mặc định của phiên. Dùng cho mọi form ghi dữ liệu theo công ty.
+ */
+export function useCurrentCompanyId(): string | null {
+  const { me, scope } = useAuth();
+  if (scope !== SCOPE_ALL) return scope;
+  return me?.scope.active_company_id ?? me?.assignments[0]?.company_id ?? null;
+}
+
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
