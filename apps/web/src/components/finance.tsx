@@ -249,14 +249,15 @@ export function FgDecisionPack({
   const bal = w(pack.q6_impact.balance_after);
   const min = w(pack.q6_impact.min_balance);
   const accent = DIRECTION_TONE[direction] ?? 'info';
+  const isInflow = direction === 'in';
   return (
     <div className="fg-sum">
-      <SumSection tone={accent} title="Đơn vị nhận">
+      <SumSection tone={accent} title={isInflow ? 'Đơn vị nộp' : 'Đơn vị nhận'}>
         <FgText style="body" strong as="div">
           {pack.q1_payee.name}
         </FgText>
         {pack.q1_payee.tax_code ? <SumRow label="MST">{pack.q1_payee.tax_code}</SumRow> : null}
-        {pack.q1_payee.bank ? <SumRow label="TK nhận">{pack.q1_payee.bank}</SumRow> : null}
+        {pack.q1_payee.bank ? <SumRow label={isInflow ? 'TK nộp' : 'TK nhận'}>{pack.q1_payee.bank}</SumRow> : null}
         {pack.q1_payee.is_internal ? (
           <SumRow label="Loại">
             <FgTooltip title="Chuyển nội bộ — không tính vào chi phí/doanh thu">
@@ -311,8 +312,8 @@ export function FgDecisionPack({
         </div>
       </SumSection>
 
-      <SumSection tone={pack.q6_impact.breach ? 'danger' : accent} title="Nguồn tiền & ảnh hưởng số dư">
-        <SumRow label={pack.q5_source.fund === 'bank' ? 'Tài khoản' : 'Quỹ'}>
+      <SumSection tone={pack.q6_impact.breach ? 'danger' : accent} title={isInflow ? 'Nơi nhận tiền & ảnh hưởng số dư' : 'Nguồn tiền & ảnh hưởng số dư'}>
+        <SumRow label={pack.q5_source.fund === 'bank' ? (isInflow ? 'Tài khoản nhận' : 'Tài khoản') : isInflow ? 'Quỹ nhận' : 'Quỹ'}>
           {pack.q5_source.account_label ?? '—'}
         </SumRow>
         {pack.q5_source.group_account_label ? <SumRow label="TK Tập đoàn phụ trách">{pack.q5_source.group_account_label}</SumRow> : null}
@@ -320,7 +321,7 @@ export function FgDecisionPack({
           <FgMoney value={w(pack.q6_impact.available_now)} mode="full" />
         </SumRow>
         <SumRow label="Sau giao dịch">
-          <FgMoney value={bal} mode="full" style={{ color: pack.q6_impact.breach ? 'var(--fg-status-danger-text)' : undefined, fontWeight: 500 }} />
+          <FgMoney value={bal} mode="full" style={{ color: pack.q6_impact.breach ? 'var(--fg-status-danger-text)' : isInflow ? 'var(--fg-status-success-text)' : undefined, fontWeight: 500 }} />
         </SumRow>
         <SumRow label="Ngưỡng tối thiểu">
           <FgMoney value={min} mode="compact" />

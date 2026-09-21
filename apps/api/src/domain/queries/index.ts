@@ -564,7 +564,9 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
 
   const available = asBigInt(balances[0]?.closing_minor ?? 0n) - asBigInt(balances[0]?.blocked_minor ?? 0n);
   const minBalance = asBigInt(account?.min_balance_minor ?? 0n);
-  const after = available - minor;
+  // phiếu thu CỘNG tiền, phiếu chi / chuyển nội bộ TRỪ tiền vào tài khoản nguồn
+  const isInflow = doc.kind === 'income';
+  const after = isInflow ? available + minor : available - minor;
   const payee = (doc.payee ?? {}) as { name?: string; tax_code?: string | null; is_internal?: boolean; bank_name?: string | null };
   const contract = (doc.contract ?? {}) as { code?: string | null; value?: unknown };
   const limit = asBigInt(budget?.limit_minor ?? 0n);
@@ -601,7 +603,7 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
       available_now: wire(available, amount.currency),
       balance_after: wire(after, amount.currency),
       min_balance: wire(minBalance, amount.currency),
-      breach: after < minBalance,
+      breach: !isInflow && after < minBalance,
     },
     q7_plan: {
       in_plan: (doc.budget as { in_plan?: boolean } | undefined)?.in_plan !== false,
