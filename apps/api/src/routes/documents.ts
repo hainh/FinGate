@@ -221,6 +221,10 @@ export function documentRoutes(app: FastifyInstance): void {
         if (scope.companyIds !== null && !scope.companyIds.includes(companyId)) {
           throw new ApiError({ code: 'FG-RBAC-002' });
         }
+        // Công ty nhận của chuyển nội bộ cũng phải nằm trong phạm vi (§7.5).
+        if (body.target?.company_id && scope.companyIds !== null && !scope.companyIds.includes(body.target.company_id)) {
+          throw new ApiError({ code: 'FG-RBAC-002', detail: 'Công ty nhận không nằm trong phạm vi của bạn' });
+        }
         await assertSourceAccountAllowed(companyId, body.source.account_id);
 
         const kind = body.kind;

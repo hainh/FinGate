@@ -580,6 +580,8 @@ export function adminRoutes(app: FastifyInstance): void {
         const body = validate(personnelDeactivateBody, req.body);
         const { id } = req.params as { id: string };
         if (id === actor.user_id) throw new ApiError({ code: 'FG-RBAC-001', detail: 'Không thể tự ngừng hoạt động tài khoản của mình' });
+        // Không ngừng hoạt động nhân sự ngoài phạm vi công ty (§7.5).
+        await assertManages(req, id);
 
         const held = await Models.Document.countDocuments({
           status: { $in: [...DECISION_STATUSES] },
@@ -834,6 +836,8 @@ export function adminRoutes(app: FastifyInstance): void {
         const body = validate(personnelTransferBody, req.body);
         const { id } = req.params as { id: string };
         await assertManages(req, id);
+        // Công ty đích phải nằm trong phạm vi hiện tại (§7.5).
+        await assertCompanyAccess(req, body.to_company_id);
         const held = await Models.Document.countDocuments({
           status: { $in: [...DECISION_STATUSES] },
           'approval.steps': { $elemMatch: { user_id: id, state: { $in: ['current', 'waiting'] } } },
@@ -938,10 +942,13 @@ export function adminRoutes(app: FastifyInstance): void {
         } as never).lean();
         if (overlap) throw new ApiError({ code: 'FG-VAL-001', errors: { valid_from: 'Đã có ủy quyền trùng khoảng thời gian này' } });
 
-        // người được ủy phải là cấp duyệt có hạn mức phù hợp (§XXIX)
-        const toAssignments = await Models.Assignment.find({ user_id: body.to_user_id, status: 'active' } as never).select({ role: 1, amount_limit_minor: 1 }).lean();
+        // người được ủy phải là cấp duyệt có hạn mức phù hợp (§XXIX), VÀ (với người
+        // bị ghim công ty) phải giữ chức danh đó trong CHÍNH công ty đang hoạt động.
+        const toAssignments = await Models.Assignment.find({ user_id: body.to_user_id, status: 'active' } as never).select({ role: 1, amount_limit_minor: 1, company_id: 1 }).lean();
         const role = body.role ?? actor.role;
-        const qualified = toAssignments.find((a) => String(a.role) === role);
+        const qualified = toAssignments.find(
+          (a) => String(a.role) === role && (actor.scope_all || String(a.company_id) === String(actor.company_id)),
+        );
         if (!qualified) throw new ApiError({ code: 'FG-VAL-001', errors: { role: 'Người được ủy không giữ chức danh này trong cùng công ty' } });
         if (BigInt(String(qualified.amount_limit_minor ?? '0')) < actor.amount_limit_minor) {
           throw new ApiError({ code: 'FG-RBAC-012', detail: 'Không ủy quyền được cấp duyệt vượt hạn mức của người nhận' });
@@ -1460,7 +1467,7 @@ export function adminRoutes(app: FastifyInstance): void {
         const catmap = new Map(cats.map((c) => [String(c._id), String(c.name)]));
         const items = [];
         for (const b of rows) {
-          const used = await budgetUsed(String(b._id));
+          const used = await budgetUsed(String(b._id), String(b.company_id));
           const limit = asBigInt(b.limit_minor);
           items.push({
             _id: String(b._id),
@@ -1584,7 +1591,18 @@ export function adminRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const actor = requireActor(req);
         const { sessionId } = requestCtx(req);
-        const rows = await Models.Session.find({ revoked_at: null, expires_at: { $gt: new Date() } } as never)
+        const scope = requireScope(req);
+        // Người có audit:read nhưng bị ghim công ty chỉ thấy phiên của nhân sự
+        // thuộc công ty mình (§7.5). Cấp tập đoàn (scope_all) thấy toàn bộ.
+        const sessionFilter: Record<string, unknown> = { revoked_at: null, expires_at: { $gt: new Date() } };
+        if (scope.companyIds !== null) {
+          const asg = await Models.Assignment.find({ company_id: { $in: scope.companyIds }, status: 'active' } as never)
+            .select({ user_id: 1 })
+            .lean();
+          const ids = [...new Set(asg.map((a) => String(a.user_id)))].map((x) => new mongoose.Types.ObjectId(x));
+          sessionFilter.user_id = { $in: ids };
+        }
+        const rows = await Models.Session.find(sessionFilter as never)
           .select({ user_id: 1, ip: 1, ua: 1, created_at: 1, last_seen: 1, expires_at: 1 })
           .sort({ last_seen: -1 })
           .limit(200)
@@ -1920,9 +1938,10 @@ function alertLabel(t: string): string {
   return map[t] ?? t;
 }
 
-async function budgetUsed(budgetId: string): Promise<bigint> {
+/** Tiền đã dùng của một ngân sách — CHỈ đếm hồ sơ CÙNG công ty (§7.5). */
+async function budgetUsed(budgetId: string, companyId: string): Promise<bigint> {
   const rows = await Models.Document.aggregate<{ total: unknown }[]>([
-    { $match: { 'budget.budget_id': budgetId, kind: 'spend', status: { $ne: 'draft' } } } as never,
+    { $match: { 'budget.budget_id': new mongoose.Types.ObjectId(budgetId), company_id: new mongoose.Types.ObjectId(companyId), kind: 'spend', status: { $ne: 'draft' } } } as never,
     { $group: { _id: null, total: { $sum: '$amount.minor' } } } as never,
   ]);
   return asBigInt((rows as unknown as { total?: unknown }[])[0]?.total ?? 0n);

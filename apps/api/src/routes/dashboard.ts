@@ -19,10 +19,10 @@ import { Models } from '../db/models.ts';
 import { defineRoute, requireActor, requireScope, validate } from '../lib/http.ts';
 import { ok } from '../lib/serialize.ts';
 import { dashboardQuery, forecastQuery, reportQuery, searchQuery, newsletterQuery, notificationListQuery } from '@fingate/shared';
-import { accountSnapshots, asBigInt, awaitingBadge, compact, dashboardOverview, forecast, maturityLadder, wire } from '../domain/queries/index.ts';
+import { accountSnapshots, asBigInt, awaitingBadge, compact, dashboardOverview, forecast, maturityLadder, scopeOf, wire } from '../domain/queries/index.ts';
 import { buildNewsletter, cachedNewsletter, storeNewsletter } from '../domain/newsletter/index.ts';
 import { reportPreset } from '../domain/reports/index.ts';
-import { scopedFind } from '../lib/mongo.ts';
+import { scopedFind, scopedOne } from '../lib/mongo.ts';
 
 export function dashboardRoutes(app: FastifyInstance): void {
   /** DASH-01 — 5 tầng, exception-first. */
@@ -276,7 +276,11 @@ export function dashboardRoutes(app: FastifyInstance): void {
       config: { perms: ['alert:config'] as Permission[], screen: 'ADM-10', summary: 'Đã xử lý cảnh báo' },
       handler: async (req) => {
         const actor = requireActor(req);
+        const scope = requireScope(req);
         const { id } = req.params as { id: string };
+        // Chỉ xác nhận cảnh báo thuộc công ty trong phạm vi hiện tại (§7.5).
+        const alert = await scopedOne<Record<string, unknown>>(Models.Alert, scopeOf(scope), { _id: id, type: 'event' });
+        if (!alert) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy cảnh báo' });
         await Models.Alert.updateOne(
           { _id: id, type: 'event' },
           { $set: { acknowledged_at: new Date(), acknowledged_by: actor.user_id } },
