@@ -111,6 +111,11 @@ export async function build(overrides: Record<string, string | undefined> = {}):
   // @fastify/multipart CHỈ cho import Excel/CSV nhỏ; presigned upload không đi qua app
   await app.register(multipart, { limits: { fileSize: 8 * 1024 * 1024, files: 5 } });
 
+  // STORAGE_DRIVER=fs: browser PUT thẳng byte lên app → nhận thô thành Buffer (route tự set bodyLimit).
+  for (const type of [/^image\//, 'application/pdf', 'application/octet-stream']) {
+    app.addContentTypeParser(type, { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
+  }
+
   // JSON Schema chỉ để tài liệu hoá — validation thật do zod trong handler (§6)
   noValidator(app);
   installHttpLayer(app);

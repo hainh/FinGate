@@ -206,6 +206,9 @@ export interface AttachmentRef {
   size: number;
   mime: string;
   added_at: string;
+  added_by?: string | null;
+  download_href?: string;
+  referenced?: boolean;
 }
 
 export interface DocumentDetail {

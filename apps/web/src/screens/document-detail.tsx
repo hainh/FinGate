@@ -23,14 +23,14 @@ import {
   type EvidenceType,
 } from '@fingate/shared';
 import { useDecisionPack, useDocument } from '../app/queries.ts';
-import type { DocumentDetail } from '../app/types.ts';
+import type { DocumentDetail, AttachmentRef } from '../app/types.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgPassword, FgStatusChip, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonParagraphs, FgSkeletonTable, FgTable, FgTabs } from '../components/uitk.tsx';
+import { AttachmentDeleteModal, AttachmentPreviewModal, AttachmentRow, AttachmentUploadModal } from '../components/attachments.tsx';
 import { FgApprovalTimeline, FgDecisionPack, OwnerLine, directionOf } from '../components/finance.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery } from '../components/pagekit.tsx';
-import { useAuth } from '../app/store.tsx';
 import { ApprovalConfirmModal, useTransitionRunner } from './approve-modal.tsx';
 import { AUDIT_ACTION_LABEL, ROLES_LABEL } from '../components/labels.ts';
 import { ApiRequestError, apiCall } from '../app/api.ts';
@@ -160,7 +160,7 @@ export function DocumentDetailScreen(): ReactNode {
                 {
                   key: 'chung-tu',
                   label: `Chứng từ (${d.attachments.length}/${d.evidence.required.length})`,
-                  children: <EvidenceTab doc={d} />,
+                  children: <EvidenceTab doc={d} onChanged={() => void query.refetch()} />,
                 },
                 {
                   key: 'lich-su',
@@ -279,14 +279,16 @@ function SummaryTab({ doc }: { doc: DocumentDetail }): ReactNode {
   );
 }
 
-function EvidenceTab({ doc }: { doc: DocumentDetail }): ReactNode {
-  const { can } = useAuth();
+function EvidenceTab({ doc, onChanged }: { doc: DocumentDetail; onChanged: () => void }): ReactNode {
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [preview, setPreview] = useState<AttachmentRef | null>(null);
+  const [remove, setRemove] = useState<AttachmentRef | null>(null);
   return (
     <FgCard>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--fg-space-3)' }}>
         <FgText style="h4">Chứng từ bắt buộc: {doc.evidence.required.length}</FgText>
-        <FgTooltip title={doc.can.attach ? 'Tải lên: prepare → PUT → confirm' : 'Bạn không có quyền thêm chứng từ vào hồ sơ đã qua bước của mình'}>
-          <FgButton size="small" disabled={!doc.can.attach} onClick={() => undefined}>
+        <FgTooltip title={doc.can.attach ? 'Tải lên ảnh hoặc PDF (tối đa 25 MB)' : 'Bạn không có quyền thêm chứng từ vào hồ sơ đã qua bước của mình'}>
+          <FgButton size="small" disabled={!doc.can.attach} onClick={() => setUploadOpen(true)}>
             + Tải chứng từ lên
           </FgButton>
         </FgTooltip>
@@ -295,30 +297,42 @@ function EvidenceTab({ doc }: { doc: DocumentDetail }): ReactNode {
         <FgAlert tone="attention" title={`Thiếu ${doc.evidence.missing.length} chứng từ bắt buộc`} description={doc.evidence.missing.map((t) => EVIDENCE_LABEL[t as EvidenceType] ?? t).join(' · ')} style={{ marginBottom: 12 }} />
       ) : null}
       {doc.attachments.length ? (
-        <FgTable
-          rowKey="id"
-          dataSource={doc.attachments}
-          columns={[
-            { title: 'Tệp', dataIndex: 'filename', key: 'f' },
-            { title: 'Loại', dataIndex: 'type', key: 't', render: (v: string) => EVIDENCE_LABEL[v as EvidenceType] ?? v },
-            { title: 'Kích thước', dataIndex: 'size', key: 's', render: (v: number) => `${Math.round(v / 1024)} KB` },
-            { title: 'Thêm lúc', dataIndex: 'added_at', key: 'a', render: (v: string) => dateTimeLabel(v) },
-            {
-              title: '',
-              key: 'dl',
-              render: (_v: unknown, r: { id: string }) => (
-                <FgTooltip title={doc.can.attach || can('doc:read') ? 'Tải về (watermark theo phiên)' : 'Không có quyền tải'}>
-                  <FgButton size="small" disabled={!doc.can.export} onClick={() => window.open(`/api/v1/attachments/${r.id}`, '_blank')}>
-                    ⤓
-                  </FgButton>
-                </FgTooltip>
-              ),
-            },
-          ]}
-        />
+        <div role="list" aria-label="Danh sách chứng từ">
+          {doc.attachments.map((a) => (
+            <AttachmentRow
+              key={a.id}
+              att={a}
+              canAttach={doc.can.attach}
+              onPreview={() => setPreview(a)}
+              onRemove={() => setRemove(a)}
+            />
+          ))}
+        </div>
       ) : (
         <FgEmptyState glyph="◇" title="Chưa có chứng từ nào" description="Hồ sơ chỉ chuyển bước khi đủ chứng từ bắt buộc (FG-WF-003)." />
       )}
+      {uploadOpen ? (
+        <AttachmentUploadModal
+          doc={doc}
+          onClose={() => setUploadOpen(false)}
+          onDone={() => {
+            setUploadOpen(false);
+            onChanged();
+          }}
+        />
+      ) : null}
+      {preview ? <AttachmentPreviewModal att={preview} onClose={() => setPreview(null)} /> : null}
+      {remove ? (
+        <AttachmentDeleteModal
+          doc={doc}
+          att={remove}
+          onClose={() => setRemove(null)}
+          onDone={() => {
+            setRemove(null);
+            onChanged();
+          }}
+        />
+      ) : null}
     </FgCard>
   );
 }

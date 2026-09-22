@@ -475,4 +475,11 @@ export const attachmentConfirmBody = z.object({
   request_id: uuid,
 });
 
+/** POST /documents/{id}/attachments/{attachmentId}/remove — chỉ khi chưa bị tham chiếu (§7.9). */
+export const attachmentRemoveBody = z.object({
+  if_match: docVersion,
+  request_id: uuid,
+  reason: z.string().trim().max(500).optional(),
+});
+
 export const DOC_KIND_VALUES = DOC_KINDS;

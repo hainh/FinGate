@@ -32,6 +32,7 @@ import { ok } from '../lib/serialize.ts';
 import {
   attachmentConfirmBodySchema,
   attachmentPrepareBodySchema,
+  attachmentRemoveBodySchema,
   documentCreateBodySchema,
   documentDeleteBodySchema,
   documentListQuerySchema,
@@ -48,6 +49,7 @@ import {
   transitionBody,
   attachmentPrepareBody,
   attachmentConfirmBody,
+  attachmentRemoveBody,
 } from '@fingate/shared';
 import { loadDoc, transition, assertStepUp } from '../domain/workflow/index.ts';
 import { documentPermissions, approvedFromChiefAccountantUp } from '../domain/entitlement/index.ts';
@@ -709,6 +711,85 @@ export function documentRoutes(app: FastifyInstance): void {
     }),
   );
 
+  /**
+   * Xoá chứng từ chưa bị cấp duyệt tham chiếu (DS §7.9). Khi `referenced_by` còn rỗng
+   * thì file chưa được dùng làm căn cứ ở bất kỳ cấp nào → được phép xoá; ngược lại giữ
+   * nguyên (chỉ thêm, không xoá) để bảo toàn audit.
+   */
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/documents/:id/attachments/:attachmentId/remove',
+      config: { perms: ['doc:create'] as Permission[], screen: 'DOC-01', summary: 'Xoá chứng từ chưa bị tham chiếu' },
+      schema: { tags: ['documents'], body: attachmentRemoveBodySchema },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const params = req.params as { id: string; attachmentId: string };
+        const body = validate(attachmentRemoveBody, req.body);
+        const doc = await loadDoc(params.id);
+        await assertVisible(req, String(doc.company_id));
+        if (['paid', 'rejected', 'cancelled'].includes(doc.status)) {
+          throw new ApiError({ code: 'FG-WF-005', detail: 'Hồ sơ đã đóng — không xoá chứng từ' });
+        }
+
+        const attachments = (doc.attachments ?? []) as unknown as {
+          id: unknown;
+          type: string;
+          key: string;
+          version?: number;
+          filename?: string;
+          referenced_by?: unknown[];
+        }[];
+        const att = attachments.find((a) => String(a.id) === params.attachmentId);
+        if (!att) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy chứng từ' });
+        if (Array.isArray(att.referenced_by) && att.referenced_by.length > 0) {
+          throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chứng từ đã được cấp duyệt tham chiếu — chỉ thêm, không xoá (audit)' });
+        }
+
+        const remaining = attachments.filter((a) => String(a.id) !== params.attachmentId);
+        const base = await rebuildEvidence({ kind: doc.kind, category_id: doc.category_id ?? null, company_id: String(doc.company_id) } as never);
+        const present = [...new Set(remaining.map((a) => String(a.type)))];
+        const evidence = { required: base.required, present, missing: base.required.filter((t) => !present.includes(t)) };
+
+        const entry = buildHistoryEntry({
+          action: 'attachment_remove',
+          actor: { user_id: actor.user_id, role: actor.role, name: actor.name },
+          from: doc.status,
+          to: doc.status,
+          reason: body.reason ?? null,
+          request_id: body.request_id,
+          ip: requestCtx(req).ip,
+          fields: { file: att.filename, version: att.version },
+        });
+        const r = await cas<Record<string, unknown>>({
+          model: 'Document',
+          id: params.id,
+          ifMatch: body.if_match,
+          set: { evidence },
+          pull: { attachments: { id: att.id } },
+          push: { history: entry },
+          addToSet: { processed_requests: body.request_id },
+        });
+        if (!r) throw new ApiError({ code: 'FG-WF-011' });
+        await Models.Attachment.deleteOne({ document_id: params.id, attachment_id: att.id } as never).exec();
+        await storage().remove(String(att.key)).catch(() => undefined);
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'document.attachment_remove',
+          subject: { type: doc.kind, id: params.id, code: doc.code },
+          company_id: String(doc.company_id),
+          document_id: params.id,
+          diff_fields: { file: att.filename, reason: body.reason ?? null },
+          request_id: body.request_id,
+          ip: requestCtx(req).ip,
+        });
+        invalidateFor(String(doc.company_id), actor.user_id);
+        return ok(reply, { data: { ok: true, evidence, version: r.version } });
+      },
+    }),
+  );
+
   /** Tải chứng từ: check quyền TỪNG LẦN rồi 302 sang URL ngắn hạn (§11). */
   app.route(
     defineRoute({
@@ -721,12 +802,30 @@ export function documentRoutes(app: FastifyInstance): void {
         const att = await Models.Attachment.findOne({ attachment_id: params.id, state: 'confirmed' }).lean();
         if (!att) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy chứng từ' });
         await assertVisible(req, String(att.company_id));
-        // đánh dấu hồ sơ đã tham chiếu file này → từ đó KHÔNG xoá được (DS §7.9)
-        void Models.Document.updateOne(
-          { _id: att.document_id, 'attachments.id': att.attachment_id },
-          { $addToSet: { 'attachments.$.referenced_by': actor.user_id } },
-        ).exec();
-        const url = await storage().presignGet(String(att.key), 60);
+        // Chỉ TẢI VỀ đích danh mới tính là "tham chiếu" và khoá xoá (DS §7.9);
+        // xem trước inline (thumbnail/lightbox) không khoá file.
+        const isDownload = String((req.query as { download?: unknown }).download ?? '') === '1';
+        if (isDownload) {
+          void Models.Document.updateOne(
+            { _id: att.document_id, 'attachments.id': att.attachment_id },
+            { $addToSet: { 'attachments.$.referenced_by': actor.user_id } },
+          ).exec();
+        }
+        const adapter = storage();
+        const disposition = isDownload ? `attachment; filename="${encodeURIComponent(String(att.filename ?? 'file'))}"` : 'inline';
+        // fs/dev: không có presigned → phục vụ bytes trực tiếp (đúng mime để xem inline).
+        if (adapter.readBytes) {
+          const bytes = await adapter.readBytes(String(att.key)).catch(() => null);
+          if (!bytes) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy tệp' });
+          return reply
+            .header('cache-control', 'private, no-store')
+            .header('content-security-policy', "frame-ancestors 'self'")
+            .header('content-disposition', disposition)
+            .type(String(att.mime ?? 'application/octet-stream'))
+            .send(bytes);
+        }
+        const url = await adapter.presignGet(String(att.key), 60);
+        reply.header('content-disposition', disposition);
         return reply.code(302).header('location', url).header('cache-control', 'private, no-store').send();
       },
     }),
@@ -737,15 +836,15 @@ export function documentRoutes(app: FastifyInstance): void {
     defineRoute({
       method: 'PUT',
       url: '/storage/put',
+      bodyLimit: 26 * 1024 * 1024,
       config: { perms: 'public', screen: 'DOC-01', summary: 'Upload cho STORAGE_DRIVER=fs (dev/Profile O)' },
       handler: async (req, reply) => {
         const key = (req.query as { key?: string }).key ?? '';
         if (!/^uploads\/[\w./-]+$/.test(key)) throw new ApiError({ code: 'FG-VAL-001', detail: 'Key không hợp lệ' });
         const actor = requireActor(req);
         await assertUploadKeyVisible(req, key);
-        const chunks: Buffer[] = [];
-        for await (const c of req.raw) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c as string));
-        const buf = Buffer.concat(chunks);
+        const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+        if (!buf.length) throw new ApiError({ code: 'FG-VAL-003', detail: 'Không nhận được nội dung tệp' });
         if (buf.length > 25 * 1024 * 1024) throw new ApiError({ code: 'FG-VAL-003' });
         const magic = detectMagic(new Uint8Array(buf.subarray(0, 8)));
         if (!magic.ok) throw new ApiError({ code: 'FG-VAL-002', detail: 'Định dạng file không được hỗ trợ' });
@@ -767,7 +866,20 @@ export function documentRoutes(app: FastifyInstance): void {
         const key = (req.query as { key?: string }).key ?? '';
         if (!/^uploads\/[\w./-]+$/.test(key)) throw new ApiError({ code: 'FG-VAL-001' });
         await assertUploadKeyVisible(req, key);
-        const url = await storage().presignGet(key, 60);
+        const adapter = storage();
+        if (adapter.readBytes) {
+          const bytes = await adapter.readBytes(key).catch(() => null);
+          if (!bytes) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy tệp' });
+          const ext = key.split('.').pop()?.toLowerCase();
+          const mime =
+            ext === 'pdf' ? 'application/pdf' : ext === 'png' ? 'image/png' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'application/octet-stream';
+          return reply
+            .header('cache-control', 'private, no-store')
+            .header('content-security-policy', "frame-ancestors 'self'")
+            .type(mime)
+            .send(bytes);
+        }
+        const url = await adapter.presignGet(key, 60);
         return reply.code(302).header('location', url).header('cache-control', 'private, no-store').send();
       },
     }),

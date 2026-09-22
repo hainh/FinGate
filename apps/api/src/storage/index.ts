@@ -34,6 +34,8 @@ export interface StorageAdapter {
   writeStream?(key: string): NodeJS.WritableStream;
   /** ghi file từ buffer/stream — đường vòng cho dev khi không có presigned. */
   putBytes?(key: string, bytes: Buffer, mime: string): Promise<void>;
+  /** chỉ dùng cho fs/dev: đọc bytes để phục vụ trực tiếp (không có presigned GET). */
+  readBytes?(key: string): Promise<Buffer>;
   remove(key: string): Promise<void>;
   usedBytes(prefix: string): Promise<number>;
 }
@@ -94,9 +96,10 @@ function createFsAdapter(): StorageAdapter {
   return {
     driver: 'fs',
     async preparePut(key, mime) {
-      // dev: browser PUT vào chính API (route /api/v1/attachments/:id/content) — không có presign
+      // dev: browser PUT vào chính API (route /api/v1/storage/put) — URL tương đối để
+      // đi đúng origin đang mở, không phụ thuộc PUBLIC_URL (hay lệch khi reverse proxy).
       await mkdir(dirname(pathOf(key)), { recursive: true });
-      const url = `${getEnv().PUBLIC_URL.replace(/\/$/, '')}/api/v1/storage/put?key=${encodeURIComponent(key)}`;
+      const url = `/api/v1/storage/put?key=${encodeURIComponent(key)}`;
       return { upload_url: url, key, method: 'PUT', required_headers: { 'content-type': mime }, expires_in: 300 };
     },
     async head(key) {
@@ -117,6 +120,10 @@ function createFsAdapter(): StorageAdapter {
       await mkdir(dirname(pathOf(key)), { recursive: true });
       const { writeFile } = await import('node:fs/promises');
       await writeFile(pathOf(key), bytes);
+    },
+    async readBytes(key) {
+      const { readFile } = await import('node:fs/promises');
+      return readFile(pathOf(key));
     },
     async remove(key) {
       await unlink(pathOf(key)).catch(() => undefined);

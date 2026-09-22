@@ -11,6 +11,7 @@ import {
   alertRuleUpsertBody,
   attachmentConfirmBody,
   attachmentPrepareBody,
+  attachmentRemoveBody,
   bankAccountUpdateBody,
   bankAccountUpsertBody,
   budgetUpsertBody,
@@ -77,6 +78,7 @@ export const documentDeleteBodySchema = j(documentDeleteBody);
 export const opinionBodySchema = j(opinionBody);
 export const attachmentPrepareBodySchema = j(attachmentPrepareBody);
 export const attachmentConfirmBodySchema = j(attachmentConfirmBody);
+export const attachmentRemoveBodySchema = j(attachmentRemoveBody);
 
 // matrix & admin
 export const matrixUpsertBodySchema = j(matrixUpsertBody);
