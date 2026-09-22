@@ -254,7 +254,12 @@ export function FgDecisionPack({
     <div className="fg-sum">
       <SumSection tone={accent} title={isInflow ? 'Đơn vị nộp' : 'Đơn vị nhận'}>
         <FgText style="body" strong as="div">
-          {pack.q1_payee.name}
+          {pack.q1_payee.name.split(' - ').map((line, i) => (
+            <span key={i}>
+              {i > 0 ? <br /> : null}
+              {line}
+            </span>
+          ))}
         </FgText>
         {pack.q1_payee.tax_code ? <SumRow label="MST">{pack.q1_payee.tax_code}</SumRow> : null}
         {pack.q1_payee.bank ? <SumRow label={isInflow ? 'TK nộp' : 'TK nhận'}>{pack.q1_payee.bank}</SumRow> : null}
