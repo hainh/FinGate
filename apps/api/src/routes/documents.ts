@@ -25,6 +25,7 @@ import {
   type StatusKey,
 } from '@fingate/shared';
 import { Models } from '../db/models.ts';
+import { scopedAggregate } from '../lib/mongo.ts';
 import { cas, alreadyProcessed } from '../db/cas.ts';
 import { defineRoute, requestCtx, requireActor, requireScope, validate } from '../lib/http.ts';
 import { ok } from '../lib/serialize.ts';
@@ -100,6 +101,28 @@ export function documentRoutes(app: FastifyInstance): void {
           limit: q.limit,
         });
         return ok(reply, { items, total, limit: q.limit }, { maxAge: 15 });
+      },
+    }),
+  );
+
+  /**
+   * CHI-02/THU-02 — gợi ý "Đơn vị nhận tiền / Khách hàng trả tiền": distinct `payee.name`
+   * của MỌI phiếu trong phạm vi để người dùng select lại thay vì gõ trùng.
+   */
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/documents/payees',
+      config: { perms: ['doc:read'] as Permission[], screen: 'CHI-02', summary: 'Tên người nhận/khách hàng đã dùng (payee.name distinct)' },
+      handler: async (req, reply) => {
+        const scope = requireScope(req);
+        const rows = await scopedAggregate<{ _id: string }>(Models.Document, scope, [
+          { $match: { 'payee.name': { $type: 'string', $ne: '' } } },
+          { $group: { _id: '$payee.name' } },
+          { $sort: { _id: 1 } },
+          { $limit: 500 },
+        ]);
+        return ok(reply, { items: rows.map((r) => r._id).filter((n) => Boolean(n) && n !== '—') }, { maxAge: 60 });
       },
     }),
   );

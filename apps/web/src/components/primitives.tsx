@@ -242,6 +242,69 @@ export function FgSelect({
   );
 }
 
+/**
+ * FgFreeSelect — SINGLE select "chọn item đã có HOẶC nhập mới": gõ giá trị chưa tồn tại
+ * thì hiện thêm lựa chọn "Thêm mới: …" và chọn nó. Dùng cho `payee_name`: các item có sẵn
+ * lấy từ mọi phiếu đã lưu, người dùng vẫn nhập được đối tượng mới (một giá trị duy nhất).
+ */
+export function FgFreeSelect({
+  options,
+  value,
+  onChange,
+  placeholder,
+  allowClear = true,
+  style,
+  ariaLabel,
+  size,
+  disabled,
+  loading,
+}: {
+  options: FgSelectOption[];
+  value?: string;
+  onChange?: (v: string) => void;
+  placeholder?: string;
+  allowClear?: boolean;
+  style?: CSSProperties;
+  ariaLabel?: string;
+  size?: 'small' | 'middle' | 'large';
+  disabled?: boolean;
+  loading?: boolean;
+}): ReactNode {
+  const [search, setSearch] = useState('');
+  const trimmed = search.trim();
+  const known = options.some((o) => o.value === value);
+  const canAdd = trimmed.length > 0 && !options.some((o) => o.value.toLowerCase() === trimmed.toLowerCase());
+  // Giá trị ngoài danh sách (vừa thêm) vẫn hiện đúng — kèm tạm thành option.
+  const merged: FgSelectOption[] = [
+    ...(value && !known ? [{ value, label: value }] : []),
+    ...options,
+    ...(canAdd ? [{ value: trimmed, label: `Thêm mới: “${trimmed}”` }] : []),
+  ];
+  return (
+    <Select
+      aria-label={ariaLabel}
+      options={merged}
+      value={value || undefined}
+      onChange={(v: string) => {
+        setSearch('');
+        onChange?.(v ?? '');
+      }}
+      onSearch={setSearch}
+      onOpenChange={(open) => {
+        if (!open) setSearch('');
+      }}
+      filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+      placeholder={placeholder}
+      allowClear={allowClear}
+      showSearch
+      style={{ minWidth: 140, ...style }}
+      size={size}
+      disabled={disabled}
+      loading={loading}
+    />
+  );
+}
+
 export function FgMultiSelect({
   options,
   value = [],

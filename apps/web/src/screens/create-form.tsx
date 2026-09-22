@@ -12,8 +12,8 @@ import dayjs from 'dayjs';
 import { DOC_KIND_LABEL, formatMoney, moneyFromWire, normalizePlannedDate, statusLabel, type Money } from '@fingate/shared';
 import { ApiRequestError, apiData } from '../app/api.ts';
 import { SCOPE_ALL, useAuth, useCurrentCompanyId } from '../app/store.tsx';
-import { useBankAccounts, useDocument } from '../app/queries.ts';
-import { FgAlert, FgButton, FgField, FgInput, FgMoneyInput, FgSelect, FgTextarea, FgText } from '../components/primitives.tsx';
+import { useBankAccounts, useDocument, usePayeeNames } from '../app/queries.ts';
+import { FgAlert, FgButton, FgField, FgFreeSelect, FgInput, FgMoneyInput, FgSelect, FgTextarea, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { useToast } from '../components/pagekit.tsx';
@@ -70,6 +70,7 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
   const { message } = useToast();
   const existing = useDocument(id);
   const accounts = useBankAccounts();
+  const payees = usePayeeNames();
   const [f, setF] = useState<FormState>(initial);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -85,6 +86,9 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
       value: a._id,
       label: `${a.is_group ? 'Tập đoàn' : (a.company_name ?? '—')} · ${a.bank_name} ${a.account_number_masked}`,
     }));
+
+  // Gợi ý đối tượng: mọi tên đã dùng ở bất kỳ phiếu nào trong phạm vi (chọn lại, hoặc nhập mới).
+  const payeeOptions = (payees.data ?? []).map((name) => ({ value: name, label: name }));
 
 
   const buildBody = () => {
@@ -199,8 +203,16 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
             <FgField label={`Tiêu đề (bỏ trống sẽ tự sinh)`} error={errors.title}>
               <FgInput value={f.title} onChange={(e) => set('title', e.target.value)} disabled={!canEdit} />
             </FgField>
-            <FgField label={kind === 'income' ? 'Khách hàng trả tiền *' : 'Đơn vị nhận tiền *'} error={errors['payee.name']}>
-              <FgInput value={f.payee_name} onChange={(e) => set('payee_name', e.target.value)} placeholder="Công ty TNHH …" disabled={!canEdit} />
+            <FgField label={kind === 'income' ? 'Khách hàng trả tiền *' : 'Đơn vị nhận tiền *'} error={errors['payee.name']} help="Chọn đối tượng đã có ở phiếu khác, hoặc gõ tên mới">
+              <FgFreeSelect
+                options={payeeOptions}
+                value={f.payee_name}
+                onChange={(v) => set('payee_name', v)}
+                placeholder="Chọn hoặc nhập mới…"
+                loading={payees.isLoading}
+                style={{ width: '100%' }}
+                disabled={!canEdit}
+              />
             </FgField>
             <FgField label="Số tiền *" error={errors.amount ?? (f.amount === null ? 'Chưa nhập' : null)} help={f.amount ? formatMoney(f.amount, { mode: 'full' }) : 'Gõ "2,5 tỷ" hoặc "850 tr" — hệ thống hiểu cả hai'}>
               <FgMoneyInput value={f.amount} onChange={(m) => set('amount', m)} disabled={!canEdit} />

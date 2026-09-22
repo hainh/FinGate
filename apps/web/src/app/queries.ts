@@ -82,6 +82,17 @@ export function useDocument(id: string | undefined) {
   });
 }
 
+/** Gợi ý tên người nhận/khách hàng (distinct payee.name của mọi phiếu trong phạm vi). */
+export function usePayeeNames() {
+  const { scope, can } = useAuth();
+  return useQuery({
+    queryKey: ['payee-names', scope],
+    enabled: can('doc:read'),
+    staleTime: 300_000,
+    queryFn: () => apiCall<{ items: string[] }>('/documents/payees').then((r) => r.items ?? []),
+  });
+}
+
 export function useDecisionPack(id: string | undefined) {
   return useQuery({
     queryKey: ['decision-pack', id],
