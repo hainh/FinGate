@@ -8,7 +8,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Alert, Button, Input, InputNumber, Select, Tooltip, Typography } from 'antd';
-import type { ButtonProps, InputRef } from 'antd';
+import type { ButtonProps, InputRef, RefSelectProps } from 'antd';
 import {
   STATUS_REGISTRY,
   formatMoney,
@@ -271,27 +271,38 @@ export function FgFreeSelect({
   loading?: boolean;
 }): ReactNode {
   const [search, setSearch] = useState('');
-  const trimmed = search.trim();
-  const known = options.some((o) => o.value === value);
-  const canAdd = trimmed.length > 0 && !options.some((o) => o.value.toLowerCase() === trimmed.toLowerCase());
-  // Giá trị ngoài danh sách (vừa thêm) vẫn hiện đúng — kèm tạm thành option.
+  const ref = useRef<RefSelectProps>(null);
+  const canAdd = search.trim().length > 0 && !options.some((o) => o.value.toLowerCase() === search.trim().toLowerCase());
+  // Giữ NGUYÊN ký tự người dùng gõ (kể cả dấu cách, ký tự đặc biệt) làm giá trị item mới.
   const merged: FgSelectOption[] = [
-    ...(value && !known ? [{ value, label: value }] : []),
     ...options,
-    ...(canAdd ? [{ value: trimmed, label: `Thêm mới: “${trimmed}”` }] : []),
+    ...(canAdd ? [{ value: search, label: `Thêm mới: “${search}”` }] : []),
   ];
+  const commit = (v: string) => {
+    setSearch('');
+    onChange?.(v);
+    ref.current?.blur();
+  };
   return (
     <Select
+      ref={ref}
       aria-label={ariaLabel}
       options={merged}
       value={value || undefined}
-      onChange={(v: string) => {
-        setSearch('');
-        onChange?.(v ?? '');
-      }}
+      onChange={(v: string) => commit(v ?? '')}
       onSearch={setSearch}
       onOpenChange={(open) => {
         if (!open) setSearch('');
+      }}
+      // Enter khi chưa highlight option nào → lấy đúng chuỗi vừa gõ làm item mới (mọi ký tự).
+      onInputKeyDown={(e) => {
+        if (e.key !== 'Enter') return;
+        const raw = (e.target as HTMLInputElement).value;
+        if (!raw || raw.trim().length === 0) return;
+        if (document.querySelector('.ant-select-item-option-active')) return; // để antd chọn option đang highlight
+        e.preventDefault();
+        const exact = options.find((o) => o.value.toLowerCase() === raw.toLowerCase());
+        commit(exact ? exact.value : raw);
       }}
       filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
       placeholder={placeholder}
