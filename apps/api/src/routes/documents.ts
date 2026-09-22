@@ -813,8 +813,8 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
   const doc = await Models.Document.findById(id).lean<Record<string, unknown> | null>();
   if (!doc) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy hồ sơ' });
 
-  const [user, company, assignments, delegated] = await Promise.all([
-    Models.User.findById(userId).select({ display_name: 1, email: 1 }).lean(),
+  const [creator, company, assignments, delegated] = await Promise.all([
+    Models.User.findById(doc.created_by).select({ display_name: 1, email: 1 }).lean(),
     Models.Company.findById(doc.company_id).select({ name: 1, code: 1 }).lean(),
     Models.Assignment.find({ user_id: userId, status: 'active' }).select({ company_id: 1, role: 1, amount_limit_minor: 1, extra_permissions: 1, denied_permissions: 1, scope_all: 1 }).lean(),
     Models.Delegation.find({ to_user_id: userId, status: 'active', valid_from: { $lte: new Date() }, valid_to: { $gte: new Date() } }).select({ user_id: 1, role: 1 }).lean(),
@@ -869,7 +869,7 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
     company_name: String(company?.name ?? ''),
     department_id: doc.department_id ? String(doc.department_id) : null,
     created_by: String(doc.created_by),
-    created_by_name: String(user?.display_name ?? user?.email ?? ''),
+    created_by_name: String(creator?.display_name ?? creator?.email ?? ''),
     status: String(doc.status) as StatusKey,
     status_label: statusLabel(String(doc.status)),
     tone: STATUS_REGISTRY[String(doc.status) as StatusKey]?.tone ?? 'neutral',
