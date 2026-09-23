@@ -586,13 +586,22 @@ export function adminRoutes(app: FastifyInstance): void {
         // Không ngừng hoạt động nhân sự ngoài phạm vi công ty (§7.5).
         await assertManages(req, id);
 
-        let reassigned = 0;
+        let reassigned: number;
         if (body.replacement_user_id) {
           const repl = await Models.User.findOne({ _id: body.replacement_user_id, status: 'active' }).lean();
           if (!repl) throw new ApiError({ code: 'FG-VAL-001', errors: { replacement_user_id: 'Người thay thế không hợp lệ' } });
           const r = await Models.Document.updateMany(
             { status: { $in: [...DECISION_STATUSES] }, 'approval.steps.user_id': id } as never,
             { $set: { 'approval.steps.$[s].user_id': body.replacement_user_id } },
+            { arrayFilters: [{ 's.user_id': id, 's.state': { $in: ['current', 'waiting'] } }] } as never,
+          ).exec();
+          reassigned = r.modifiedCount;
+        } else {
+          // Không chỉ định người thay thế: bỏ gắn bước đang chờ để bất kỳ ai cùng vai trò
+          // còn active có thể "nhận" và duyệt tiếp — tránh hồ sơ tồn đọng kẹt ở người đã ngừng.
+          const r = await Models.Document.updateMany(
+            { status: { $in: [...DECISION_STATUSES] }, 'approval.steps.user_id': id } as never,
+            { $set: { 'approval.steps.$[s].user_id': null } },
             { arrayFilters: [{ 's.user_id': id, 's.state': { $in: ['current', 'waiting'] } }] } as never,
           ).exec();
           reassigned = r.modifiedCount;
