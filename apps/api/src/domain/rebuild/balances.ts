@@ -40,16 +40,36 @@ export async function rebuildBalances(): Promise<Record<string, unknown>> {
     const minor = asBigInt((d.amount as { minor?: unknown } | undefined)?.minor);
     const isIn = String(d.kind) === 'income';
     const account = (d.source as { account_id?: unknown } | undefined)?.account_id;
+    const exec = d.execution as
+      | { paid_at?: string; actual_amount?: { minor?: unknown }; paid_minor?: unknown; installments?: { at?: string; amount_minor?: unknown }[] }
+      | undefined;
+    const installments = Array.isArray(exec?.installments) ? exec!.installments : [];
+    const installmentSum = installments.reduce((a, i) => a + asBigInt(i.amount_minor), 0n);
     const paid = status === 'paid';
-    const date = datePartOf(String(paid ? ((d.execution as { paid_at?: string } | undefined)?.paid_at ?? d.planned_date) : d.planned_date));
+    const pendingStatuses = ['approved', 'processing', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'];
+    const date = datePartOf(String(paid ? (exec?.paid_at ?? d.planned_date) : d.planned_date));
 
     if (account) {
-      const c = touch(String(account), company, date);
-      if (paid) {
-        const actual = asBigInt((d.execution as { actual_amount?: { minor?: unknown } } | undefined)?.actual_amount?.minor ?? 0n) || minor;
+      if (installments.length) {
+        // phiếu chi từng phần: mỗi kỳ ghi actual đúng ngày phát sinh, phần chưa chi vẫn là dự toán
+        for (const inst of installments) {
+          const c = touch(String(account), company, datePartOf(String(inst.at ?? d.planned_date)));
+          if (isIn) c.actual_in += asBigInt(inst.amount_minor);
+          else c.actual_out += asBigInt(inst.amount_minor);
+        }
+        const remaining = minor - installmentSum;
+        if (!paid && remaining > 0n && pendingStatuses.includes(status)) {
+          const c = touch(String(account), company, datePartOf(String(d.planned_date)));
+          if (isIn) c.planned_in += remaining;
+          else c.planned_out += remaining;
+        }
+      } else if (paid) {
+        const c = touch(String(account), company, date);
+        const actual = asBigInt(exec?.actual_amount?.minor ?? 0n) || minor;
         if (isIn) c.actual_in += actual;
         else c.actual_out += actual;
-      } else if (['approved', 'processing', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'].includes(status)) {
+      } else if (pendingStatuses.includes(status)) {
+        const c = touch(String(account), company, date);
         if (isIn) c.planned_in += minor;
         else c.planned_out += minor;
       }
@@ -64,13 +84,13 @@ export async function rebuildBalances(): Promise<Record<string, unknown>> {
     }
 
     // chuyển tiền nội bộ: đối ứng ở công ty B, KHÔNG tính doanh thu/chi phí (§XXI)
-    if (String(d.kind) === 'internal' && paid && d.target) {
+    if (String(d.kind) === 'internal' && d.target) {
       const toAccount = (d.target as { account_id?: unknown } | undefined)?.account_id;
       const toCompany = (d.target as { company_id?: unknown } | undefined)?.company_id;
       if (toAccount && toCompany) {
         const c = touch(String(toAccount), String(toCompany), date);
-        const actual = asBigInt((d.execution as { actual_amount?: { minor?: unknown } } | undefined)?.actual_amount?.minor ?? 0n) || minor;
-        c.actual_in += actual;
+        if (installments.length) for (const inst of installments) c.actual_in += asBigInt(inst.amount_minor);
+        else if (paid) c.actual_in += asBigInt(exec?.actual_amount?.minor ?? 0n) || minor;
       }
     }
   }

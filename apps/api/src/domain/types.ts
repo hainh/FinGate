@@ -103,7 +103,17 @@ export interface DomainDoc {
   approval: { matrix_id?: string | null; matrix_version?: number; matrix_label?: string | null; steps: StepRow[] };
   evidence: { required: string[]; present: string[]; missing: string[] };
   attachments?: { id: string; type: string; referenced_by?: string[] }[];
-  execution?: { paid_at?: string | null; bank_ref?: string | null; executed_by?: string | null; actual_amount_minor?: bigint | null } | null;
+  execution?: {
+    paid_at?: string | null;
+    bank_ref?: string | null;
+    executed_by?: string | null;
+    actual_amount_minor?: bigint | null;
+    actual_amount?: { minor: bigint; currency: string; decimals: number } | null;
+    /** phiếu chi từng phần — bật ở cấp duyệt cuối. */
+    allow_partial?: boolean | null;
+    paid_minor?: bigint | null;
+    installments?: { at?: string | null; amount_minor?: bigint | null; bank_ref?: string | null; account_id?: string | null; executed_by?: string | null }[];
+  } | null;
   override?: { fast_tracked?: boolean; reason?: string | null } | null;
   history?: unknown[];
   processed_requests?: string[];

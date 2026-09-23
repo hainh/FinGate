@@ -257,6 +257,16 @@ export function ApprovalConfirmModal({
     .map((a) => ({ value: a._id, label: `${a.is_group ? 'Tập đoàn' : (a.company_name ?? '—')} · ${a.bank_name} ${a.account_number_masked}` }));
   const [accountId, setAccountId] = useState<string>(doc.source.account_id ?? '');
   const accountChanged = accountId !== (doc.source.account_id ?? '');
+  // "Phiếu chi từng phần": cấp duyệt cuối bật cho phép chi nhiều lần; khi thực thi thì
+  // nhập số tiền của kỳ này (mặc định = phần còn lại).
+  const [allowPartial, setAllowPartial] = useState(false);
+  const [payAmountText, setPayAmountText] = useState('');
+  const [payErr, setPayErr] = useState<string | null>(null);
+  const partialEnabled = Boolean(doc.execution?.allow_partial);
+  const remaining = moneyFromWire(doc.execution?.remaining ?? doc.amount) ?? moneyFromWire(doc.amount)!;
+  const pendingOrders = doc.approval.steps.filter((s) => s.state === 'current' || s.state === 'waiting').map((s) => s.order);
+  const maxPending = pendingOrders.length ? Math.max(...pendingOrders) : 0;
+  const isFinalApprove = doc.can.step_order != null && doc.can.step_order === maxPending;
   // thành công (cả khi retry sau step-up/gõ lại tiền) → đóng confirm
   useEffect(() => {
     if (runner.success > 0) onDone();
@@ -276,6 +286,34 @@ export function ApprovalConfirmModal({
   const danger = action === 'reject' || action === 'cancel';
 
   const submit = async () => {
+    let execution: TransitionInput['execution'];
+    if (action === 'pay') {
+      if (partialEnabled) {
+        let minorStr = remaining.minor.toString();
+        if (payAmountText.trim()) {
+          try {
+            const typed = parseMoneyInput(payAmountText);
+            if (typed.minor <= 0n) {
+              setPayErr('Số tiền chi phải lớn hơn 0.');
+              return;
+            }
+            if (typed.minor > remaining.minor) {
+              setPayErr('Số tiền chi vượt phần còn lại của phiếu.');
+              return;
+            }
+            minorStr = typed.minor.toString();
+          } catch {
+            setPayErr('Định dạng số tiền không hợp lệ.');
+            return;
+          }
+        }
+        setPayErr(null);
+        // thực thi ghi nhận dòng tiền NGAY hôm nay (ngày nghiệp vụ VN)
+        execution = { paid_at: today(), actual_amount_minor: minorStr };
+      } else {
+        execution = { paid_at: today() };
+      }
+    }
     await runner.runAsync({
       id: doc._id,
       action,
@@ -286,8 +324,8 @@ export function ApprovalConfirmModal({
       // approve thường không bắt buộc ý kiến, nhưng khi thiếu chứng từ server
       // cần `reason` >=20 ký tự (FG-WF-004) → gửi kèm để user không phải làm lại.
       reason: needsReason ? opinion : opinion && opinion.trim().length >= 20 ? opinion : undefined,
-      // thực thi ghi nhận dòng tiền NGAY hôm nay (ngày nghiệp vụ VN), không dùng ngày dự kiến
-      execution: action === 'pay' ? { paid_at: today() } : undefined,
+      allow_partial: action === 'approve' && isFinalApprove && allowPartial ? true : undefined,
+      execution,
     });
     // onDone sẽ chạy qua useEffect(runner.success) — kể cả retry muộn
   };
@@ -344,6 +382,34 @@ export function ApprovalConfirmModal({
               placeholder="Chọn tài khoản"
               allowClear
               style={{ width: '100%' }}
+            />
+          </FgField>
+        </div>
+      ) : null}
+      {partialEnabled ? (
+        <div style={{ marginTop: 16 }}>
+          <FgAlert
+            tone="info"
+            title="Phiếu chi từng phần — kế toán thực thi nhiều lần tới khi hết"
+            description={`Đã chi ${formatMoney(moneyFromWire(doc.execution?.paid ?? doc.amount)!, { mode: 'full' })} · còn ${formatMoney(remaining, { mode: 'full' })}. Mỗi lần thực thi ghi một kỳ vào lịch sử; phiếu chỉ đóng khi chi hết.`}
+          />
+        </div>
+      ) : null}
+      {action === 'approve' && isFinalApprove ? (
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 16, fontSize: 13 }}>
+          <input type="checkbox" checked={allowPartial} onChange={(e) => setAllowPartial(e.target.checked)} style={{ width: 18, height: 18 }} />
+          Cho phép chi từng phần (kế toán thực thi nhiều lần, phiếu chỉ đóng khi chi hết)
+        </label>
+      ) : null}
+      {action === 'pay' && partialEnabled ? (
+        <div style={{ marginTop: 16 }}>
+          <FgField label="Số tiền chi kỳ này" error={payErr} help={`Bỏ trống = chi hết phần còn lại (${formatMoney(remaining, { mode: 'full' })})`}>
+            <FgInput
+              autoFocus
+              value={payAmountText}
+              onChange={(e) => setPayAmountText(e.target.value)}
+              placeholder={formatMoney(remaining, { mode: 'compact' })}
+              inputMode="numeric"
             />
           </FgField>
         </div>

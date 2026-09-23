@@ -78,12 +78,43 @@ export async function syncBalancesForDocument(input: {
   execution?: { paid_at?: string | null; actual_amount_minor?: bigint | null } | null;
   /** tài khoản mới khi cấp duyệt đổi tài khoản đích/nguồn (null = giữ nguyên). */
   newAccountId?: string | null;
+  /**
+   * Phiếu chi từng phần: số tiền thực chi của KỲ NÀY — ghi thẳng vào `actual_*` của tài
+   * khoản nguồn/đích ngay cả khi trạng thái chưa đổi sang `paid` (phiếu còn mở).
+   */
+  actualDelta?: { amount: bigint; date: string } | null;
 }): Promise<void> {
   try {
     const { doc, from, to } = input;
     const oldAccountId = doc.source?.account_id ? String(doc.source.account_id) : null;
     const newAccountId = input.newAccountId ? String(input.newAccountId) : oldAccountId;
     if (!oldAccountId && !newAccountId) return; // quỹ tiền mặt → không có dòng ngân hàng
+
+    // Kỳ chi từng phần: cộng actual ngay, KHÔNG đụng planned (kế hoạch chi đã ghi lúc duyệt).
+    if (input.actualDelta && input.actualDelta.amount > 0n) {
+      const accountId = newAccountId!;
+      const isIn = doc.kind === 'income';
+      const paidDate = datePartOf(input.actualDelta.date);
+      const account = await Models.BankAccount.findById(accountId).select({ min_balance_minor: 1 }).lean();
+      await bumpBalance({
+        company_id: String(doc.company_id),
+        account_id: accountId,
+        date: paidDate,
+        min_balance_minor: account?.min_balance_minor,
+        actualIn: isIn ? input.actualDelta.amount : undefined,
+        actualOut: !isIn ? input.actualDelta.amount : undefined,
+      });
+      if (doc.kind === 'internal' && doc.target?.company_id && doc.target?.account_id) {
+        await bumpBalance({
+          company_id: String(doc.target.company_id),
+          account_id: String(doc.target.account_id),
+          date: paidDate,
+          actualIn: input.actualDelta.amount,
+        });
+      }
+      invalidateFor(String(doc.company_id));
+      return;
+    }
 
     const amount = doc.amount?.minor ?? 0n;
     const counted = (s: StatusKey) => !['draft', 'rejected', 'cancelled', 'changes_requested'].includes(s);

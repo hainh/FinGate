@@ -264,7 +264,16 @@ export interface DocumentDetail {
   approval: { matrix_id: string | null; matrix_version: number; matrix_label?: string; steps: ApprovalStep[] };
   evidence: { required: string[]; present: string[]; missing: string[] };
   attachments: AttachmentRef[];
-  execution: { paid_at: string | null; bank_ref: string | null; executed_by: string | null; actual_amount: MoneyWire | null } | null;
+  execution: {
+    paid_at: string | null;
+    bank_ref: string | null;
+    executed_by: string | null;
+    actual_amount: MoneyWire | null;
+    allow_partial?: boolean;
+    paid?: MoneyWire | null;
+    remaining?: MoneyWire | null;
+    installments?: { at: string | null; amount: MoneyWire; bank_ref: string | null; executed_by: string | null }[];
+  } | null;
   override: { fast_tracked: boolean; reason: string | null };
   history: HistoryEntry[];
   href?: string;

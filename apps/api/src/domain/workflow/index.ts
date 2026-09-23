@@ -43,12 +43,15 @@ import {
   applyDecision,
   canTransition,
   currentStep,
+  dropVacantSteps,
   EDITABLE_STATUSES,
   FINAL_APPROVAL_STATUS,
   needsAmountRetype,
+  nextPartialStage,
   recalcStatusFromSteps,
   requiresStepUp,
   statusForStep,
+  sumInstallments,
   type StepState,
 } from './state-machine.ts';
 import type { ActorInfo, DomainDoc, StepRow } from '../types.ts';
@@ -61,6 +64,8 @@ export interface TransitionInput {
   confirm_amount_minor?: string;
   /** cấp duyệt đổi tài khoản đích (phiếu thu) / nguồn (phiếu chi) — trong phạm vi công ty (§VIII). */
   source_account_id?: string;
+  /** cấp duyệt CUỐI bật chi từng phần — giữ phiếu mở tới khi chi hết. */
+  allow_partial?: boolean;
   if_match: number;
   request_id: string;
   execution?: { paid_at: string; bank_ref?: string; actual_amount_minor?: string; account_id?: string };
@@ -74,6 +79,18 @@ export interface TransitionResult {
   next_role: Role | null;
   next_user_ids: string[];
   skipped: boolean;
+}
+
+/** Bản ghi `execution` ghi vào hồ sơ mỗi lần thực thi thanh toán. */
+interface ExecutionPatch {
+  paid_at: string;
+  bank_ref: string | null;
+  executed_by: string;
+  actual_amount_minor: bigint;
+  actual_amount: { minor: bigint; currency: string; decimals: number };
+  allow_partial: boolean;
+  paid_minor: bigint;
+  installments: Record<string, unknown>[];
 }
 
 /** đọc hồ sơ ở dạng domain (BigInt đã chuẩn hoá) */
@@ -162,7 +179,7 @@ export async function submitDocument(input: {
   if (!matrix.steps.length) throw new ApiError({ code: 'FG-WF-006' });
 
   const evidence = await rebuildEvidence(doc);
-  const steps: StepRow[] = await assignUsers(
+  const assigned: StepRow[] = await assignUsers(
     matrix.steps.map((s, i) => ({
       order: s.order,
       role: s.role,
@@ -179,6 +196,9 @@ export async function submitDocument(input: {
     })),
     doc,
   );
+  // Công ty khuyết chức danh nào → bước đó không cần duyệt, tự đẩy lên cấp cao hơn
+  // (feature "Nếu cty thiếu chức danh nào thì không cần chức danh đó phải duyệt").
+  const { steps, dropped: vacantSteps } = dropVacantSteps(assigned);
 
   const cal = await calendarFor(doc.company_id);
   const now = new Date();
@@ -227,6 +247,7 @@ export async function submitDocument(input: {
       matrix_version: matrix.matrix_version,
       steps: steps.map((s) => `${s.order}:${s.role}`),
       ...(selfApprovedSteps.length ? { self_approved_steps: selfApprovedSteps.map((s) => s.order) } : {}),
+      ...(vacantSteps.length ? { vacant_steps: vacantSteps.map((s) => `${s.order}:${s.role}`) } : {}),
     },
   });
 
@@ -562,9 +583,68 @@ export async function transition(input: {
     }
   }
 
+  // Ghi nhận thực thi (pay): phiếu thường đóng ngay; phiếu "chi từng phần" cộng dồn
+  // các kỳ chi và chỉ đóng khi đã chi hết (feature "Phiếu chi từng phần").
+  const allowPartial = Boolean(doc.execution?.allow_partial);
+  let executionPatch: ExecutionPatch | null = null;
+  let partialDelta: { amount: bigint; date: string } | null = null;
   if (action === 'pay') {
-    // "Thực thi": ngày thực chi mặc định là ngày nghiệp vụ hôm nay nếu client không gửi
-    nextStatus = 'paid';
+    const total = BigInt(doc.amount.minor);
+    const prevInstallments = doc.execution?.installments ?? [];
+    const alreadyPaid = sumInstallments(prevInstallments);
+    const requested = body.execution?.actual_amount_minor ? BigInt(body.execution.actual_amount_minor) : null;
+    const accountId = body.execution?.account_id ?? nextAccountId ?? oldAccountId;
+    const amountCurrency = { currency: doc.amount.currency, decimals: doc.amount.decimals ?? 0 };
+
+    const mapPrev = (): Record<string, unknown>[] =>
+      prevInstallments.map((i) => ({
+        at: i.at ?? null,
+        amount_minor: i.amount_minor ?? 0n,
+        amount: { minor: i.amount_minor ?? 0n, ...amountCurrency },
+        bank_ref: i.bank_ref ?? null,
+        account_id: i.account_id ?? null,
+        executed_by: i.executed_by ?? null,
+      }));
+
+    if (allowPartial) {
+      const res = nextPartialStage(total, alreadyPaid, requested);
+      if (!res.ok) throw new ApiError({ code: 'FG-VAL-001', detail: res.detail, errors: { actual_amount_minor: res.detail } });
+      const stage = res.stage;
+      // chưa chi hết → giữ phiếu mở (approved/processing); chi hết → paid
+      nextStatus = stage.finished ? 'paid' : doc.status === 'processing' ? 'processing' : 'approved';
+      executionPatch = {
+        paid_at: businessDate,
+        bank_ref: body.execution?.bank_ref ?? null,
+        executed_by: actor.user_id,
+        actual_amount_minor: stage.paid_total,
+        actual_amount: { minor: stage.paid_total, ...amountCurrency },
+        allow_partial: true,
+        paid_minor: stage.paid_total,
+        installments: [
+          ...mapPrev(),
+          { at: businessDate, amount_minor: stage.amount, amount: { minor: stage.amount, ...amountCurrency }, bank_ref: body.execution?.bank_ref ?? null, account_id: accountId, executed_by: actor.user_id },
+        ],
+      };
+      partialDelta = { amount: stage.amount, date: businessDate };
+    } else {
+      // phiếu thường: client có thể gửi số thực chi khác số đề nghị → đóng ngay như cũ
+      nextStatus = 'paid';
+      const actual = requested ?? total;
+      executionPatch = {
+        paid_at: body.execution?.paid_at ?? businessDate,
+        bank_ref: body.execution?.bank_ref ?? null,
+        executed_by: actor.user_id,
+        actual_amount_minor: actual,
+        actual_amount: { minor: actual, ...amountCurrency },
+        allow_partial: false,
+        paid_minor: actual,
+        installments: [
+          ...mapPrev(),
+          { at: businessDate, amount_minor: actual, amount: { minor: actual, ...amountCurrency }, bank_ref: body.execution?.bank_ref ?? null, account_id: accountId, executed_by: actor.user_id },
+        ],
+      };
+      partialDelta = { amount: actual, date: body.execution?.paid_at ?? businessDate };
+    }
   }
   if (action === 'queue_payment') nextStatus = 'processing';
   if (action === 'expire') nextStatus = 'expired';
@@ -603,20 +683,6 @@ export async function transition(input: {
 
   // Bản ghi thực thi (pay) — dùng chung cho `set.execution`, `history[]` (log chi tiết)
   // và `audit_log` để một lần ghi nhận thanh toán lưu đủ ngày/nguồn/số thực/số tiền.
-  const executionPatch =
-    action === 'pay'
-      ? {
-          paid_at: body.execution?.paid_at ?? businessDate,
-          bank_ref: body.execution?.bank_ref ?? null,
-          executed_by: actor.user_id,
-          actual_amount_minor: body.execution?.actual_amount_minor ? BigInt(body.execution.actual_amount_minor) : doc.amount.minor,
-          actual_amount: {
-            minor: BigInt(body.execution?.actual_amount_minor ?? doc.amount.minor.toString()),
-            currency: doc.amount.currency,
-            decimals: doc.amount.decimals ?? 0,
-          },
-        }
-      : null;
   const payAccountId = executionPatch ? (body.execution?.account_id ?? nextAccountId ?? oldAccountId) : null;
 
   const entry = buildHistoryEntry({
@@ -645,6 +711,17 @@ export async function transition(input: {
             },
           }
         : {}),
+      ...(partialDelta && executionPatch
+        ? {
+            installment: {
+              amount_minor: partialDelta.amount.toString(),
+              paid_minor: executionPatch.paid_minor.toString(),
+              remaining_minor: (BigInt(doc.amount.minor) - executionPatch.paid_minor).toString(),
+              finished: nextStatus === 'paid',
+            },
+          }
+        : {}),
+      ...(action === 'approve' && body.allow_partial && nextStatus === 'approved' ? { partial_enabled: true } : {}),
     },
   });
 
@@ -660,6 +737,8 @@ export async function transition(input: {
     set.execution = executionPatch;
     if (body.execution?.account_id) set['source.account_id'] = body.execution.account_id;
   }
+  // Cấp duyệt cuối bật chi từng phần: chỉ áp dụng khi phiếu thực sự duyệt xong.
+  if (action === 'approve' && body.allow_partial && nextStatus === 'approved') set['execution.allow_partial'] = true;
   if (['paid', 'rejected', 'cancelled', 'expired'].includes(nextStatus)) set.closed_at = now;
   if (isDecision || action === 'pay') set.evidence = evidence;
 
@@ -706,6 +785,7 @@ export async function transition(input: {
     to: nextStatus,
     execution: set.execution as never,
     newAccountId: (set['source.account_id'] as string | undefined) ?? null,
+    actualDelta: partialDelta,
   });
 
   // 8. thông báo cho cấp kế tiếp (email không await — arch §6)

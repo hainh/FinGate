@@ -20,6 +20,20 @@ const moneySchema = new Schema(
   { _id: false },
 );
 
+/** Một kỳ chi của phiếu chi từng phần (feature "Phiếu chi từng phần"). */
+const installmentEmbed = new Schema(
+  {
+    at: { type: String, required: true },
+    amount_minor: { type: BigInt, required: true },
+    amount: { type: moneySchema, default: null },
+    bank_ref: { type: String, default: null },
+    account_id: { type: Schema.Types.ObjectId, default: null },
+    executed_by: { type: Schema.Types.ObjectId, default: null },
+    created_at: { type: Date, default: () => new Date() },
+  },
+  { _id: false },
+);
+
 const historyEntry = new Schema(
   {
     at: { type: Date, required: true },
@@ -372,6 +386,11 @@ export const DocumentSchema = new Schema(
       executed_by: { type: Schema.Types.ObjectId, default: null },
       actual_amount_minor: { type: BigInt, default: null },
       actual_amount: { type: moneySchema, default: null },
+      /** phiếu chi từng phần: bật ở cấp duyệt cuối, giữ phiếu mở tới khi chi hết. */
+      allow_partial: { type: Boolean, default: false },
+      /** tổng đã chi (dồn các kỳ). */
+      paid_minor: { type: BigInt, default: 0n },
+      installments: { type: [installmentEmbed], default: [] },
     },
 
     override: {

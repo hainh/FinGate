@@ -187,3 +187,75 @@ export const RETYPE_THRESHOLD_MINOR = 5_000_000_000n;
 export function needsAmountRetype(amountMinor: bigint, inPlan: boolean, thresholdMinor: bigint = RETYPE_THRESHOLD_MINOR): boolean {
   return amountMinor > thresholdMinor || !inPlan;
 }
+
+/* ------------------------------------------------------------------ *
+ * Feature: "Nếu cty thiếu chức danh nào thì không cần chức danh đó phải duyệt"
+ * ------------------------------------------------------------------ */
+
+export interface VacantFilterableStep {
+  order: number;
+  role: Role;
+  user_id?: string | null;
+}
+
+/**
+ * Bỏ khỏi chuỗi duyệt những bước KHÔNG có người phụ trách (công ty khuyết chức danh);
+ * hồ sơ tự động đẩy lên cấp cao hơn. Trả kèm danh sách bước bị bỏ để ghi `history`.
+ * Các bước còn lại được đánh số lại liên tục từ 1.
+ */
+export function dropVacantSteps<T extends VacantFilterableStep>(
+  steps: T[],
+): { steps: T[]; dropped: { order: number; role: Role }[] } {
+  const kept = steps.filter((s) => s.user_id != null);
+  const dropped = steps.filter((s) => s.user_id == null).map((s) => ({ order: s.order, role: s.role }));
+  return { steps: kept.map((s, i) => ({ ...s, order: i + 1 }) as T), dropped };
+}
+
+/* ------------------------------------------------------------------ *
+ * Feature: "Phiếu chi từng phần" — chi nhiều kỳ, giữ phiếu mở tới khi chi hết
+ * ------------------------------------------------------------------ */
+
+export interface InstallmentLike {
+  amount_minor?: unknown;
+}
+
+function toBigInt(v: unknown): bigint {
+  if (typeof v === 'bigint') return v;
+  if (typeof v === 'number' && Number.isSafeInteger(v)) return BigInt(v);
+  const s = String(v ?? '0');
+  return /^-?\d+$/.test(s.trim()) ? BigInt(s.trim()) : 0n;
+}
+
+/** Tổng đã chi qua các kỳ. */
+export function sumInstallments(rows: readonly InstallmentLike[] | null | undefined): bigint {
+  return (rows ?? []).reduce((sum, r) => sum + toBigInt(r.amount_minor), 0n);
+}
+
+export interface PartialStage {
+  /** tổng đã chi sau kỳ này. */
+  paid_total: bigint;
+  /** phần còn lại sau kỳ này. */
+  remaining: bigint;
+  /** kỳ này có làm phiếu chi hết không. */
+  finished: boolean;
+  /** số tiền của kỳ này. */
+  amount: bigint;
+}
+
+/**
+ * Tính kỳ chi tiếp theo của phiếu chi từng phần. `requested` = null → chi hết phần còn lại.
+ * Trả `{ ok:false, detail }` khi số tiền không hợp lệ (route dịch thành FG-VAL-001).
+ */
+export function nextPartialStage(
+  total: bigint,
+  alreadyPaid: bigint,
+  requested: bigint | null,
+): { ok: true; stage: PartialStage } | { ok: false; detail: string } {
+  const remaining = total - alreadyPaid;
+  if (remaining <= 0n) return { ok: false, detail: 'Phiếu đã được chi đủ' };
+  const amount = requested ?? remaining;
+  if (amount <= 0n) return { ok: false, detail: 'Số tiền chi phải lớn hơn 0' };
+  if (amount > remaining) return { ok: false, detail: 'Số tiền chi vượt phần còn lại của phiếu' };
+  const paidTotal = alreadyPaid + amount;
+  return { ok: true, stage: { paid_total: paidTotal, remaining: total - paidTotal, finished: paidTotal >= total, amount } };
+}

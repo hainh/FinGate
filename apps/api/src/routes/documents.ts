@@ -1025,14 +1025,40 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
       download_href: `/api/v1/attachments/${String(a.id)}`,
       referenced: Array.isArray(a.referenced_by) && a.referenced_by.length > 0,
     })),
-    execution: doc.execution
-      ? {
-          paid_at: (doc.execution as { paid_at?: string }).paid_at ?? null,
-          bank_ref: (doc.execution as { bank_ref?: string }).bank_ref ?? null,
-          executed_by: (doc.execution as { executed_by?: unknown }).executed_by ? String((doc.execution as { executed_by: unknown }).executed_by) : null,
-          actual_amount: wireAmount((doc.execution as { actual_amount?: unknown }).actual_amount),
-        }
-      : null,
+    execution: (() => {
+      const ex = doc.execution as
+        | {
+            paid_at?: string | null;
+            bank_ref?: string | null;
+            executed_by?: unknown;
+            actual_amount?: unknown;
+            allow_partial?: boolean;
+            paid_minor?: unknown;
+            installments?: { at?: string | null; amount?: unknown; bank_ref?: string | null; executed_by?: unknown }[];
+          }
+        | null
+        | undefined;
+      if (!ex) return null;
+      const paidMinor = BigInt(String(ex.paid_minor ?? (ex.actual_amount as { minor?: unknown } | undefined)?.minor ?? '0'));
+      const remainingMinor = amountMinor - paidMinor > 0n ? amountMinor - paidMinor : 0n;
+      const currency = String((doc.amount as { currency?: unknown })?.currency ?? 'VND');
+      const decimals = Number((doc.amount as { decimals?: unknown })?.decimals ?? 0);
+      return {
+        paid_at: ex.paid_at ?? null,
+        bank_ref: ex.bank_ref ?? null,
+        executed_by: ex.executed_by ? String(ex.executed_by) : null,
+        actual_amount: wireAmount(ex.actual_amount),
+        allow_partial: Boolean(ex.allow_partial),
+        paid: { minor: paidMinor.toString(), currency, decimals },
+        remaining: { minor: remainingMinor.toString(), currency, decimals },
+        installments: (ex.installments ?? []).map((i) => ({
+          at: i.at ?? null,
+          amount: wireAmount(i.amount),
+          bank_ref: i.bank_ref ?? null,
+          executed_by: i.executed_by ? String(i.executed_by) : null,
+        })),
+      };
+    })(),
     override: (doc.override as { fast_tracked?: boolean; reason?: string | null }) ?? { fast_tracked: false, reason: null },
     history: ((doc.history ?? []) as unknown as Record<string, unknown>[]).map((h) => ({
       at: h.at ? new Date(String(h.at)).toISOString() : null,

@@ -342,6 +342,8 @@ export interface TransitionInput {
   confirm_amount_minor?: string;
   /** cấp duyệt đổi tài khoản đích/nguồn của phiếu (trong phạm vi công ty). */
   source_account_id?: string;
+  /** cấp duyệt cuối bật chi từng phần. */
+  allow_partial?: boolean;
   execution?: { paid_at: string; bank_ref?: string; actual_amount_minor?: string; account_id?: string };
   if_match: number;
 }
