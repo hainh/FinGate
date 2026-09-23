@@ -27,7 +27,7 @@ import { DebtsScreen, LoansScreen, RolloversScreen } from './screens/loans.tsx';
 import { ForecastScreen } from './screens/forecast.tsx';
 import { ReportLibraryScreen, ReportRunnerScreen } from './screens/reports.tsx';
 import { PersonnelScreen, MatrixScreen, AuditLogScreen, SettingsScreen, CompaniesScreen } from './screens/admin.tsx';
-import { NeedsAttentionScreen, NewsletterScreen, NotificationsScreen, SearchScreen } from './screens/misc.tsx';
+import { NewsletterScreen, NotificationsScreen, SearchScreen } from './screens/misc.tsx';
 import { DocumentFormScreen } from './screens/create-form.tsx';
 import { ForbiddenScreen, NotFoundScreen } from './screens/errors.tsx';
 import { FgSpinner } from './components/uitk.tsx';
@@ -130,7 +130,7 @@ export function AppRoutes(): ReactNode {
       <Route path="/cho-toi-duyet" element={<Shell><ApprovalQueueScreen /></Shell>} /> {/* APPR-01 */}
       <Route path="/toi-da-duyet" element={<Shell><ProcessedScreen /></Shell>} /> {/* APPR-02 */}
       <Route path="/can-bo-sung" element={<Shell><ChangesRequestedScreen /></Shell>} /> {/* APPR-03 */}
-      <Route path="/can-xu-ly" element={<Shell><NeedsAttentionScreen /></Shell>} /> {/* DASH-05 */}
+      <Route path="/can-xu-ly" element={<Shell><NotificationsScreen /></Shell>} /> {/* DASH-05 — hiển thị màn Thông báo */}
       <Route path="/chi" element={<Shell><SpendListScreen /></Shell>} /> {/* CHI-01 */}
       <Route path="/chi/cho-duyet" element={<Shell><SpendPendingScreen /></Shell>} /> {/* CHI-04 */}
       <Route path="/chi/da-thanh-toan" element={<Shell><SpendPaidScreen /></Shell>} /> {/* CHI-07 */}

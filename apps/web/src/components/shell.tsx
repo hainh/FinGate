@@ -228,8 +228,8 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
             onSearch={(q) => q.trim() && navigate(`/tim-kiem?q=${encodeURIComponent(q)}`)}
           />
 
-          <Link to="/thong-bao" aria-label="Thông báo" style={{ color: 'var(--fg-text-secondary)' }}>
-            <Badge count={unread?.count ?? 0} size="small" offset={[2, -2]}>
+          <Link to="/cho-toi-duyet" aria-label="Chờ tôi duyệt" style={{ color: 'var(--fg-text-secondary)' }}>
+            <Badge count={overview?.counts?.awaiting_me ?? 0} size="small" offset={[2, -2]}>
               <span style={{ fontSize: 18 }}>✉</span>
             </Badge>
           </Link>
