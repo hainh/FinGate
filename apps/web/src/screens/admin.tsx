@@ -186,10 +186,6 @@ export function PersonnelScreen(): ReactNode {
                           onClick={async () => {
                             const reason = window.prompt(`Ngừng hoạt động ${r.display_name}? Nêu lý do (bắt buộc, có audit):`);
                             if (!reason || reason.trim().length < 5) return;
-                            if (r.holding_docs > 0) {
-                              window.alert(`${r.display_name} đang giữ ${r.holding_docs} hồ sơ chờ duyệt — phải chỉ định người thay thế (FG-HR-003). Vào hồ sơ để chuyển bàn.`);
-                              return;
-                            }
                             setBusy(r.user_id);
                             try {
                               await apiCall(`/personnel/${r.user_id}/deactivate`, { method: 'POST', body: { reason } });

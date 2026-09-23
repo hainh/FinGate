@@ -586,25 +586,16 @@ export function adminRoutes(app: FastifyInstance): void {
         // Không ngừng hoạt động nhân sự ngoài phạm vi công ty (§7.5).
         await assertManages(req, id);
 
-        const held = await Models.Document.countDocuments({
-          status: { $in: [...DECISION_STATUSES] },
-          'approval.steps': { $elemMatch: { user_id: id, state: { $in: ['current', 'waiting'] } } },
-        } as never);
-        if (held > 0 && !body.replacement_user_id) {
-          throw new ApiError({
-            code: 'FG-HR-003',
-            detail: `${held} hồ sơ đang chờ người này duyệt — chỉ định người thay thế trước khi ngừng hoạt động`,
-            data: { holding_docs: held, need_replacement: true },
-          });
-        }
+        let reassigned = 0;
         if (body.replacement_user_id) {
           const repl = await Models.User.findOne({ _id: body.replacement_user_id, status: 'active' }).lean();
           if (!repl) throw new ApiError({ code: 'FG-VAL-001', errors: { replacement_user_id: 'Người thay thế không hợp lệ' } });
-          await Models.Document.updateMany(
+          const r = await Models.Document.updateMany(
             { status: { $in: [...DECISION_STATUSES] }, 'approval.steps.user_id': id } as never,
             { $set: { 'approval.steps.$[s].user_id': body.replacement_user_id } },
             { arrayFilters: [{ 's.user_id': id, 's.state': { $in: ['current', 'waiting'] } }] } as never,
           ).exec();
+          reassigned = r.modifiedCount;
         }
 
         await Models.User.updateOne(
@@ -619,10 +610,10 @@ export function adminRoutes(app: FastifyInstance): void {
           action: 'hr.deactivate',
           subject: { type: 'user', id, code: null },
           company_id: actor.company_id,
-          diff_fields: { reason: body.reason, replacement: body.replacement_user_id ?? null, reassigned: held },
+          diff_fields: { reason: body.reason, replacement: body.replacement_user_id ?? null, reassigned },
           ip: requestCtx(req).ip,
         });
-        return { data: { ok: true, reassigned_documents: held } };
+        return { data: { ok: true, reassigned_documents: reassigned } };
       },
     }),
   );
@@ -721,17 +712,6 @@ export function adminRoutes(app: FastifyInstance): void {
         const companyChanged = actor.scope_all && Boolean(nextCompanyIds.length && !sameSet(currentIds, nextCompanyIds));
         if (companyChanged) {
           requirePerm(req, 'hr:transfer');
-          const held = await Models.Document.countDocuments({
-            status: { $in: [...DECISION_STATUSES] },
-            'approval.steps': { $elemMatch: { user_id: id, state: { $in: ['current', 'waiting'] } } },
-          } as never);
-          if (held > 0) {
-            throw new ApiError({
-              code: 'FG-HR-003',
-              detail: `${held} hồ sơ đang chờ người này — chuyển bàn xử lý trước khi đổi công ty`,
-              data: { holding_docs: held },
-            });
-          }
         }
 
         const nextRole = String(body.role ?? primary?.role ?? 'staff');
