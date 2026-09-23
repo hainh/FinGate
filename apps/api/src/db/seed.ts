@@ -55,8 +55,9 @@ const PLAN: SeedPlan = {
     { company: null, bank: 'Quỹ tiền mặt Tập đoàn', number: 'CASH-GROUP', name: 'Quỹ tiền mặt Tập đoàn', balance: 2_000_000_000, is_group: true },
   ],
   users: [
-    { email: 'chairman@fingate.local', name: 'Trần Đình Sơn', role: 'chairman', company: null, limitTy: 999_999 },
-    { email: 'admin@fingate.local', name: 'Hệ thống Quản trị', role: 'admin', company: null, limitTy: 0 },
+    { email: 'chairman@fingate.local', name: 'Trần Đình Sơn', role: 'chairman', company: 'GROUP', limitTy: 999_999 },
+    { email: 'ptgd@fingate.local', name: 'Vũ Minh Khoa', role: 'deputy_chairman', company: 'GROUP', limitTy: 999_999 },
+    { email: 'admin@fingate.local', name: 'Hệ thống Quản trị', role: 'admin', company: 'GROUP', limitTy: 0 },
     { email: 'giám đốc.mp@fingate.local', name: 'Nguyễn Văn Minh', role: 'director', company: 'MP', limitTy: 50 },
     { email: 'pgd.mp@fingate.local', name: 'Lê Thị Hương', role: 'deputy_director', company: 'MP', limitTy: 20 },
     { email: 'ktt.mp@fingate.local', name: 'Phạm Quang Đức', role: 'chief_accountant', company: 'MP', limitTy: 10 },
@@ -147,6 +148,18 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
     companyIds.set(c.code, String(doc._id));
     companyCodes.push(c.code);
   }
+  // Pháp nhân Tập đoàn DUY NHẤT — tạo sẵn, chỉ sửa không tạo thêm (yêu cầu mới).
+  {
+    const existing = await Models.Company.findOne({ code: 'GROUP' }).lean();
+    const group = existing ?? (await Models.Company.create({
+      name: 'Tập đoàn',
+      code: 'GROUP',
+      is_group: true,
+      min_balance_minor: 0n,
+      status: 'active',
+    } as never));
+    companyIds.set('GROUP', String((group as { _id: unknown })._id));
+  }
   stats.companies = companyIds.size;
 
   const deptIds = new Map<string, string>();
@@ -191,7 +204,7 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
       display_name: u.name,
       password: demoPassword,
       status: 'active',
-      mfa_required: ['chief_accountant', 'deputy_director', 'director', 'chairman', 'admin'].includes(u.role),
+      mfa_required: ['chief_accountant', 'deputy_director', 'director', 'deputy_chairman', 'chairman', 'admin'].includes(u.role),
     } as never);
     userIds.set(u.email, String(doc._id));
     record(u.role, u.company, String(doc._id));
@@ -228,12 +241,12 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
   stats.categories = catIds.size;
 
   /* approval matrix — khớp blueprint §XX: <50tr / 50tr–5tỷ / >5tỷ */
-  for (const code of companyIds.keys()) {
-    const id = companyIds.get(code) as string;
+  for (const c of PLAN.companies) {
+    const id = companyIds.get(c.code) as string;
     const tiers = [
       { min: 0, max: moneyMinor(0.05), steps: ['chief_accountant', 'deputy_director'] },
-      { min: moneyMinor(0.05), max: moneyMinor(5), steps: ['chief_accountant', 'deputy_director', 'director'] },
-      { min: moneyMinor(5), max: null, steps: ['chief_accountant', 'deputy_director', 'director'] },
+      { min: moneyMinor(0.05), max: moneyMinor(5), steps: ['chief_accountant', 'deputy_director', 'director', 'deputy_chairman'] },
+      { min: moneyMinor(5), max: null, steps: ['chief_accountant', 'deputy_director', 'director', 'deputy_chairman'] },
     ];
     for (const t of tiers) {
       await Models.ApprovalMatrix.create({
@@ -245,7 +258,7 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
         steps: t.steps.map((role, i) => ({ order: i + 1, role, sla_hours: 24, mandatory: true })),
         version: 1,
         effective_from: new Date('2026-01-01T00:00:00Z'),
-        label: t.max === null ? 'Khoản > 5 tỷ — qua Chủ tịch HĐQT' : t.min === 0n ? 'Khoản < 50 triệu' : 'Khoản 50 triệu – 5 tỷ',
+        label: t.max === null ? 'Khoản > 5 tỷ — qua Tổng Giám đốc' : t.min === 0n ? 'Khoản < 50 triệu' : 'Khoản 50 triệu – 5 tỷ',
         active: true,
       } as never);
     }
@@ -256,10 +269,11 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
       steps: [
         { order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true },
         { order: 2, role: 'director', sla_hours: 48, mandatory: true },
+        { order: 3, role: 'deputy_chairman', sla_hours: 48, mandatory: true },
       ],
       version: 1,
       effective_from: new Date('2026-01-01T00:00:00Z'),
-      label: 'Khoản thu — KTT → GĐ',
+      label: 'Khoản thu — KTT → GĐ → P.TGĐ',
       active: true,
     } as never);
     await Models.ApprovalMatrix.create({
@@ -270,18 +284,19 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
         { order: 1, role: 'chief_accountant', sla_hours: 12, mandatory: true },
         { order: 2, role: 'deputy_director', sla_hours: 24, mandatory: true },
         { order: 3, role: 'director', sla_hours: 24, mandatory: true },
+        { order: 4, role: 'deputy_chairman', sla_hours: 48, mandatory: true },
       ],
       version: 1,
       effective_from: new Date('2026-01-01T00:00:00Z'),
-      label: 'Đảo hạn — KTT → PGĐ → GĐ',
+      label: 'Đảo hạn — KTT → PGĐ → GĐ → P.TGĐ',
       active: true,
     } as never);
   }
-  stats.approval_matrix = companyIds.size * 5;
+  stats.approval_matrix = PLAN.companies.length * 5;
 
   /* settings — ngưỡng chairman, yêu cầu chứng từ mặc định */
   const settings = [
-    { key: 'approval.chairman_threshold_minor', value: { amount_minor: moneyMinor(5).toString() }, description: 'Hồ sơ > ngưỡng phải qua Chủ tịch HĐQT (§XX)' },
+    { key: 'approval.chairman_threshold_minor', value: { amount_minor: moneyMinor(5).toString() }, description: 'Hồ sơ > ngưỡng phải qua Tổng Giám đốc (Chủ tịch) (§XX)' },
     { key: 'evidence.required.spend', value: { types: [] }, description: 'Chứng từ bắt buộc phiếu chi — hoá đơn/hợp đồng không còn bắt buộc' },
     { key: 'evidence.required.income', value: { types: [] }, description: 'Chứng từ bắt buộc phiếu thu — hoá đơn/hợp đồng không còn bắt buộc' },
     { key: 'newsletter.recipients', value: { roles: ['director', 'deputy_director', 'chief_accountant'] }, description: 'Người nhận bản tin 06:30' },
@@ -368,7 +383,8 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
     'pending.ktt': 1,
     'pending.pgd': 2,
     'pending.gd': 3,
-    'pending.chairman': 4,
+    'pending.ptg': 4,
+    'pending.chairman': 5,
     processing: 99,
     approved: 99,
     paid: 99,
@@ -458,7 +474,7 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
     if (!company) continue;
     const kind = (i % 7 === 0 ? 'income' : 'spend') as 'spend' | 'income';
     const amountTy = 0.05 + ((i * 37) % 900) / 100;
-    const statusPool = ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'approved', 'processing', 'paid', 'changes_requested'];
+    const statusPool = ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'approved', 'processing', 'paid', 'changes_requested'];
     const status = statusPool[i % statusPool.length] as string;
     const matrix = await resolveMatrix({ company_id: company, kind, amount_minor: moneyMinor(amountTy) });
     const creator = pick('staff', companyCode) ?? anyUser;

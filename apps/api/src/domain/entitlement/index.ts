@@ -9,6 +9,7 @@ import {
   buildEntitlements,
   formatMoney,
   hasPermission,
+  isGroupOnlyRole,
   money,
   PERMISSIONS,
   ROLE_LABEL,
@@ -114,8 +115,8 @@ export async function resolveIdentity(
     if (a.scope_all) scope_all = true;
   }
   for (const a of assignments) for (const p of a.denied_permissions) permissions.delete(p);
-  // chairman/admin thấy mọi công ty của tập đoàn (blueprint §XXIX)
-  if (assignments.some((a) => a.role === 'chairman' || a.role === 'admin')) scope_all = true;
+  // chức danh cấp Tập đoàn (P.TGĐ, TGĐ) + quản trị thấy mọi công ty của tập đoàn (blueprint §XXIX)
+  if (assignments.some((a) => isGroupOnlyRole(a.role) || a.role === 'admin')) scope_all = true;
 
   return {
     user,
@@ -190,7 +191,7 @@ export interface DocPermissions {
 }
 
 /** Cấp duyệt "từ Kế toán trưởng trở lên" (blueprint §III). */
-const ROLES_FROM_CHIEF_ACCOUNTANT: readonly string[] = ['chief_accountant', 'deputy_director', 'director', 'chairman'];
+const ROLES_FROM_CHIEF_ACCOUNTANT: readonly string[] = ['chief_accountant', 'deputy_director', 'director', 'deputy_chairman', 'chairman'];
 
 /** Trạng thái người lập còn được xoá/sửa (kết hợp gate chưa ai KTT+ duyệt ở vòng hiện tại). */
 const MAINTAINABLE_STATUSES: readonly string[] = ['draft', 'pending.ktt', 'changes_requested', 'rejected'];

@@ -11,7 +11,7 @@ import { loadEnv } from './env.ts';
 import { connectDb, disconnectDb, dbUp } from './lib/mongo.ts';
 import { applyIndexes } from './db/indexes.ts';
 import { seedIfEmpty } from './db/seed.ts';
-import { bootstrapAdminIfEmpty } from './db/bootstrap.ts';
+import { bootstrapAdminIfEmpty, ensureGroupCompany } from './db/bootstrap.ts';
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -20,6 +20,8 @@ async function main(): Promise<void> {
   try {
     await connectDb();
     await applyIndexes((msg) => app.log.info(msg));
+    // Hệ thống chỉ có MỘT pháp nhân Tập đoàn — tạo sẵn (idempotent) cho mọi DB.
+    await ensureGroupCompany();
     if (env.SEED_ON_BOOT === 'true') await seedIfEmpty(app.log);
     // DB trắng (chưa seed demo) → luôn có tài khoản quản trị đầu tiên để đăng nhập.
     else if (env.BOOTSTRAP_ON_BOOT === 'true') await bootstrapAdminIfEmpty(app.log);

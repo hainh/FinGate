@@ -18,6 +18,7 @@ import {
   ROLE_LABEL,
   STATUS_REGISTRY,
   formatMoney,
+  isGroupOnlyRole,
   money,
   statusLabel,
   today,
@@ -301,11 +302,17 @@ async function assignUsers<T extends StepRow>(steps: T[], doc: DomainDoc): Promi
   const companies = [String(doc.company_id)];
   if (doc.kind === 'internal' && doc.target?.company_id) companies.push(String(doc.target.company_id));
 
+  const stepRoles = steps.map((s) => s.role);
+  // Chức danh cấp Tập đoàn (P.TGĐ, TGĐ) thuộc công ty Tập đoàn nhưng có quyền với mọi
+  // công ty con → tìm người theo vai trò bất kể công ty của hồ sơ.
+  const groupRoles = stepRoles.filter((r) => isGroupOnlyRole(r));
   const assignments = await Models.Assignment.find({
-    company_id: { $in: companies },
     status: 'active',
-    role: { $in: steps.map((s) => s.role) },
-  })
+    $or: [
+      { company_id: { $in: companies }, role: { $in: stepRoles } },
+      ...(groupRoles.length ? [{ role: { $in: groupRoles } }] : []),
+    ],
+  } as never)
     .select({ user_id: 1, role: 1, company_id: 1, amount_limit_minor: 1 })
     .lean();
 

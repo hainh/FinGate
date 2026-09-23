@@ -49,7 +49,7 @@ export async function rebuildBalances(): Promise<Record<string, unknown>> {
         const actual = asBigInt((d.execution as { actual_amount?: { minor?: unknown } } | undefined)?.actual_amount?.minor ?? 0n) || minor;
         if (isIn) c.actual_in += actual;
         else c.actual_out += actual;
-      } else if (['approved', 'processing', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.chairman'].includes(status)) {
+      } else if (['approved', 'processing', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'].includes(status)) {
         if (isIn) c.planned_in += minor;
         else c.planned_out += minor;
       }

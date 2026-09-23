@@ -41,6 +41,7 @@ export const DECISION_STATUSES = [
   'pending.ktt',
   'pending.pgd',
   'pending.gd',
+  'pending.ptg',
   'pending.chairman',
 ] as const;
 

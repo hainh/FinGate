@@ -65,7 +65,7 @@ export async function evaluateAlerts(): Promise<Record<string, unknown>> {
   /* 1 · chờ duyệt quá lâu */
   if (on('approval_overdue')) {
     const rows = await Models.Document.find({
-      status: { $in: ['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.chairman'] },
+      status: { $in: ['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'] },
       'approval.steps.sla_deadline': { $ne: null, $lt: new Date() },
     } as never)
       .select({ code: 1, company_id: 1, amount: 1 })
@@ -184,7 +184,7 @@ export async function evaluateAlerts(): Promise<Record<string, unknown>> {
   if (on('missing_evidence')) {
     const rows = await Models.Document.find({
       'evidence.missing.0': { $exists: true },
-      status: { $in: ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.chairman'] },
+      status: { $in: ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'] },
     } as never)
       .select({ code: 1, company_id: 1 })
       .limit(200)

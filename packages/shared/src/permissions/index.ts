@@ -6,6 +6,7 @@
  */
 
 import type { Role } from '../status/index.js';
+import { isGroupOnlyRole } from '../status/index.js';
 
 export const PERMISSIONS = [
   'doc:read',
@@ -120,7 +121,30 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'audit:read',
     'admin:matrix',
   ],
-  // Chủ tịch HĐQT: phê duyệt + giám sát toàn hệ thống + nhân sự + cấu hình/tài khoản tập đoàn
+  // Phó Tổng Giám đốc (Phó Chủ tịch) — chức danh cấp Tập đoàn, giám sát mọi công ty con;
+  // duyệt cấp cao nhưng KHÔNG nhập liệu hồ sơ (không `doc:create`).
+  deputy_chairman: [
+    'doc:read',
+    'approval:act',
+    'approval:override',
+    'bank:read',
+    'bank:write',
+    'loan:read',
+    'rollover:act',
+    'debt:read',
+    'budget:read',
+    'forecast:read',
+    'report:view',
+    'report:export',
+    'alert:config',
+    'hr:invite',
+    'hr:disable',
+    'hr:transfer',
+    'admin:matrix',
+    'admin:group_accounts',
+    'audit:read',
+  ],
+  // Tổng Giám đốc (Chủ tịch): phê duyệt + giám sát toàn hệ thống + nhân sự + cấu hình/tài khoản tập đoàn
   // + ma trận duyệt. Có `admin:settings` để tự tạo công ty con (ADM-06) — KHÔNG nhập liệu hồ sơ.
   chairman: [
     'doc:read',
@@ -162,11 +186,12 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
 };
 
 export const ROLE_LABEL: Record<Role, string> = {
-  staff: 'Nhân viên kế toán',
+  staff: 'Kế toán viên',
   chief_accountant: 'Kế toán trưởng',
-  deputy_director: 'Phó Giám đốc phụ trách',
-  director: 'Giám đốc / Tổng Giám đốc',
-  chairman: 'Chủ tịch HĐQT',
+  deputy_director: 'Phó Giám đốc',
+  director: 'Giám đốc',
+  deputy_chairman: 'Phó Tổng Giám đốc (Phó Chủ tịch)',
+  chairman: 'Tổng Giám đốc (Chủ tịch)',
   admin: 'Quản trị hệ thống',
 };
 
@@ -245,6 +270,7 @@ export const MFA_REQUIRED_ROLES: readonly Role[] = [
   'chief_accountant',
   'deputy_director',
   'director',
+  'deputy_chairman',
   'chairman',
   'admin',
 ] as const;
@@ -254,6 +280,7 @@ export const APPROVER_ROLES: readonly Role[] = [
   'chief_accountant',
   'deputy_director',
   'director',
+  'deputy_chairman',
   'chairman',
 ] as const;
 
@@ -289,6 +316,7 @@ export const DEFAULT_AMOUNT_LIMIT_MINOR: Record<Role, string> = {
   chief_accountant: '50000000000',
   deputy_director: '50000000000',
   director: '50000000000',
+  deputy_chairman: '999999999000000000', // không chặn
   chairman: '999999999000000000', // không chặn
   admin: '0',
 };
@@ -368,6 +396,7 @@ export function buildEntitlements(input: {
       reason: can(c.permission) ? undefined : c.reason,
     })),
     mfa_required: MFA_REQUIRED_ROLES.includes(input.role),
-    scope_all: input.scope_all ?? (input.role === 'chairman' || input.role === 'admin'),
+    // Chức danh cấp Tập đoàn (P.TGĐ, TGĐ) + quản trị: thấy mọi công ty của tập đoàn.
+    scope_all: input.scope_all ?? (isGroupOnlyRole(input.role) || input.role === 'admin'),
   };
 }

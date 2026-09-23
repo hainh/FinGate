@@ -122,9 +122,9 @@ export function financeRoutes(app: FastifyInstance): void {
         const scope = requireScope(req);
         const body = validate(bankAccountUpsertBody, req.body);
         if (body.is_group && !actor.permissions.includes('admin:group_accounts')) {
-          throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ Chủ tịch HĐQT cấu hình tài khoản Tập đoàn (§VIII)' });
+          throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ cấp Tập đoàn (P.TGĐ/TGĐ) cấu hình tài khoản Tập đoàn (§VIII)' });
         }
-        // Tài khoản Tập đoàn chỉ tạo từ tầm nhìn toàn tập đoàn (chairman/admin).
+        // Tài khoản Tập đoàn chỉ tạo từ tầm nhìn toàn tập đoàn (P.TGĐ/TGĐ/admin).
         if (body.is_group && scope.companyIds !== null) {
           throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ cấp Tập đoàn mới tạo được tài khoản Tập đoàn' });
         }
@@ -204,7 +204,7 @@ export function financeRoutes(app: FastifyInstance): void {
         const acct = await Models.BankAccount.findById(id).lean<Record<string, unknown> | null>();
         if (!acct) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy tài khoản tiền' });
         if (acct.is_group && !actor.permissions.includes('admin:group_accounts')) {
-          throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ Chủ tịch HĐQT cấu hình tài khoản Tập đoàn (§VIII)' });
+          throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ cấp Tập đoàn (P.TGĐ/TGĐ) cấu hình tài khoản Tập đoàn (§VIII)' });
         }
         if (!acct.is_group) assertCompanyScope(req, acct.company_id ? String(acct.company_id) : null);
         const companyId = acct.company_id ? String(acct.company_id) : null;
@@ -216,7 +216,7 @@ export function financeRoutes(app: FastifyInstance): void {
 
         if (body.status !== undefined && body.status !== 'active' && String(acct.status) === 'active') {
           const referencing = await Models.Document.countDocuments({
-            status: { $in: ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.chairman', 'approved', 'processing'] },
+            status: { $in: ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman', 'approved', 'processing'] },
             $or: [{ 'source.account_id': id }, { 'source.group_account_id': id }],
           } as never);
           if (referencing > 0) {
@@ -283,7 +283,7 @@ export function financeRoutes(app: FastifyInstance): void {
         if (!acct.is_group) assertCompanyScope(req, acct.company_id ? String(acct.company_id) : null);
         if (status !== 'active') {
           const referencing = await Models.Document.countDocuments({
-            status: { $in: ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.chairman', 'approved', 'processing'] },
+            status: { $in: ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman', 'approved', 'processing'] },
             $or: [{ 'source.account_id': id }, { 'source.group_account_id': id }],
           } as never);
           if (referencing > 0) {

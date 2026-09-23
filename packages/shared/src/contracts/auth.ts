@@ -310,8 +310,6 @@ export const companyUpsertBody = z.object({
   tax_code: z.string().max(20).optional(),
   address: z.string().max(300).optional(),
   contact_email: email.optional(),
-  /** true = pháp nhân cấp Tập đoàn (nhóm), không phải công ty con (ADM-06). */
-  is_group: z.boolean().default(false),
   min_balance_minor: z.string().regex(/^\d+$/).default('0').describe('Ngưỡng tiền tối thiểu — dưới ngưỡng là cảnh báo đỏ'),
   working_calendar: z
     .object({

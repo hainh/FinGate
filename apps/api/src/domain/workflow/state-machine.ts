@@ -1,7 +1,7 @@
 /**
  * Máy trạng thái hồ sơ — CHỖ DUY NHẤT được đổi `status` (K-16, ADR-11).
  *
- *   draft → pending.ktt → pending.pgd → pending.gd → pending.chairman
+ *   draft → pending.ktt → pending.pgd → pending.gd → pending.ptg → pending.chairman
  *             ↓ changes_requested (resubmit → node đầu)
  *             ↓ rejected · cancelled · expired
  *                                   payment_queued → paid
@@ -28,8 +28,14 @@ export const TRANSITIONS: Record<StatusKey, Partial<Record<Action, StatusKey>>> 
     request_changes: 'changes_requested',
   },
   'pending.gd': {
-    approve: 'approved',
-    approve_with_reason: 'approved',
+    approve: 'pending.ptg',
+    approve_with_reason: 'pending.ptg',
+    reject: 'rejected',
+    request_changes: 'changes_requested',
+  },
+  'pending.ptg': {
+    approve: 'pending.chairman',
+    approve_with_reason: 'pending.chairman',
     reject: 'rejected',
     request_changes: 'changes_requested',
   },
@@ -68,6 +74,7 @@ export const LOCKED_STATUSES: StatusKey[] = [
   'pending.ktt',
   'pending.pgd',
   'pending.gd',
+  'pending.ptg',
   'pending.chairman',
   'approved',
   'processing',
@@ -99,6 +106,8 @@ export function statusForStep(role: Role): StatusKey {
       return 'pending.pgd';
     case 'director':
       return 'pending.gd';
+    case 'deputy_chairman':
+      return 'pending.ptg';
     case 'chairman':
       return 'pending.chairman';
     default:

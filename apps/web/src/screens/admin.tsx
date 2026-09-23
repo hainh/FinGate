@@ -13,6 +13,7 @@ import { Checkbox } from 'antd';
 import {
   accountStatusFor,
   formatMoney,
+  isGroupOnlyRole,
   money,
   ddmmyyyy,
   dateTimeLabel,
@@ -20,6 +21,7 @@ import {
   PERMISSION_GROUPS,
   PERMISSION_LABEL,
   permissionsForRole,
+  ROLE_LEVEL,
   type Permission,
   type Role,
   type Money,
@@ -36,6 +38,17 @@ import { AUDIT_ACTION_LABEL, ROLES_LABEL } from '../components/labels.ts';
 import { ApiRequestError, apiCall } from '../app/api.ts';
 import { APPROVAL_ORDER, DOC_KIND_LABEL, DOC_KINDS, type DocKind } from '@fingate/shared';
 import type { CompanyRow, InviteLinkResult, MatrixEntry, PersonnelRow } from '../app/types.ts';
+
+/** Chọn chức danh theo CẤP BẬC từ thấp → cao (1 Kế toán viên … 6 Tổng Giám đốc; admin ngoài thang). */
+const ROLE_OPTIONS: { value: string; label: string }[] = (Object.keys(ROLES_LABEL) as Role[])
+  .sort((a, b) => (ROLE_LEVEL[a] ?? 99) - (ROLE_LEVEL[b] ?? 99))
+  .map((value) => {
+    const level = ROLE_LEVEL[value];
+    return { value, label: level && level < 90 ? `${level}. ${ROLES_LABEL[value]}` : ROLES_LABEL[value] };
+  });
+
+/** Chỉ chức danh cấp Tập đoàn (P.TGĐ, TGĐ) — dùng khi không được hạ về cấp công ty con. */
+const GROUP_ROLE_OPTIONS = ROLE_OPTIONS.filter((o) => isGroupOnlyRole(o.value));
 
 /* ================= Khu Quản trị — điều hướng chung ================= */
 
@@ -431,9 +444,13 @@ function InviteModal({
   const [allDepts, setAllDepts] = useState<{ _id: string; name: string; company_id: string }[]>([]);
 
   const lockedToOwnCompany = !me?.scope.all;
+  const groupId = (companies.data?.items ?? []).find((c) => c.is_group)?._id;
+  const groupRoleSelected = isGroupOnlyRole(role);
+  const companyLocked = lockedToOwnCompany || groupRoleSelected;
   useEffect(() => {
-    if (lockedToOwnCompany && currentCompany) setCompanyIds([currentCompany]);
-  }, [lockedToOwnCompany, currentCompany]);
+    if (groupRoleSelected && groupId) setCompanyIds([groupId]);
+    else if (lockedToOwnCompany && currentCompany) setCompanyIds([currentCompany]);
+  }, [groupRoleSelected, groupId, lockedToOwnCompany, currentCompany]);
 
   useEffect(() => {
     if (!open) return;
@@ -533,10 +550,14 @@ function InviteModal({
               });
             }}
             placeholder="Chọn một hoặc nhiều công ty"
-            disabled={lockedToOwnCompany}
+            disabled={companyLocked}
             style={{ width: '100%' }}
           />
-          {lockedToOwnCompany ? (
+          {groupRoleSelected ? (
+            <FgText style="caption" color="muted">
+              Chức danh cấp Tập đoàn chỉ gán cho pháp nhân Tập đoàn.
+            </FgText>
+          ) : lockedToOwnCompany ? (
             <FgText style="caption" color="muted">
               Bạn chỉ mời được nhân sự cho công ty của mình
             </FgText>
@@ -544,12 +565,12 @@ function InviteModal({
         </FgField>
         <FgField label="Vai trò (phân quyền)" required>
           <FgSelect
-            options={Object.entries(ROLES_LABEL).map(([value, label]) => ({ label, value }))}
+            options={ROLE_OPTIONS}
             value={role}
             onChange={(v) => setRole(v ?? 'staff')}
             style={{ width: '100%' }}
           />
-          {['chief_accountant', 'deputy_director', 'director', 'chairman', 'admin'].includes(role) ? (
+          {['chief_accountant', 'deputy_director', 'director', 'deputy_chairman', 'chairman', 'admin'].includes(role) ? (
             <FgText style="caption" color="muted">
               Vai trò này thuộc nhóm bắt buộc 2FA — người nhận tự bật Xác thực 2 lớp trong Cài đặt sau khi kích hoạt.
             </FgText>
@@ -625,6 +646,16 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
   const deptOptionsFor = (cid: string): { label: string; value: string }[] =>
     allDepts.filter((d) => d.company_id === cid).map((d) => ({ label: d.name, value: d._id }));
 
+  // Chức danh cấp Tập đoàn (P.TGĐ/TGĐ): không hạ về cấp công ty con, khóa công ty về Tập đoàn.
+  const roleLocked = isGroupOnlyRole(row.role);
+  const groupId = (companies.data?.items ?? []).find((c) => c.is_group)?._id;
+  const roleOpts = roleLocked ? GROUP_ROLE_OPTIONS : ROLE_OPTIONS;
+  const groupRoleSelected = isGroupOnlyRole(role);
+  const companyLockedToGroup = roleLocked || groupRoleSelected;
+  useEffect(() => {
+    if (companyLockedToGroup && groupId) setCompanyIds([groupId]);
+  }, [companyLockedToGroup, groupId]);
+
   const roleDefaults = useMemo(() => permissionsForRole((role || 'staff') as Role), [role]);
 
   const permissionState = (p: Permission): { checked: boolean; override: 'extra' | 'denied' | null } => {
@@ -698,19 +729,24 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
               });
             }}
             placeholder="Chọn một hoặc nhiều công ty"
-            disabled={!canMoveCompany}
+            disabled={!canMoveCompany || companyLockedToGroup}
             style={{ width: '100%' }}
           />
-          {!canMoveCompany ? (
+          {companyLockedToGroup ? (
             <FgText style="caption" color="muted">
-              Bạn không có quyền chuyển công ty — liên hệ Chủ tịch/Quản trị hệ thống
+              Chức danh cấp Tập đoàn không đổi được công ty — luôn thuộc pháp nhân Tập đoàn.
+            </FgText>
+          ) : !canMoveCompany ? (
+            <FgText style="caption" color="muted">
+              Bạn không có quyền chuyển công ty — liên hệ Tổng Giám đốc/Quản trị hệ thống
             </FgText>
           ) : null}
         </FgField>
         <FgField label="Vai trò (phân quyền)" required>
           <FgSelect
-            options={Object.entries(ROLES_LABEL).map(([value, label]) => ({ label, value }))}
+            options={roleOpts}
             value={role}
+            disabled={roleLocked}
             onChange={(v) => {
               const next = v ?? 'staff';
               if (next !== role) {
@@ -721,7 +757,12 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
             }}
             style={{ width: '100%' }}
           />
-          {['chief_accountant', 'deputy_director', 'director', 'chairman', 'admin'].includes(role) ? (
+          {roleLocked ? (
+            <FgText style="caption" color="muted">
+              Đang giữ chức danh cấp Tập đoàn — không hạ được về cấp công ty con.
+            </FgText>
+          ) : null}
+          {['chief_accountant', 'deputy_director', 'director', 'deputy_chairman', 'chairman', 'admin'].includes(role) ? (
             <FgText style="caption" color="muted">
               Vai trò này thuộc nhóm bắt buộc 2FA — người dùng tự bật Xác thực 2 lớp trong Cài đặt.
             </FgText>
@@ -805,7 +846,7 @@ export function CompaniesScreen(): ReactNode {
       <AdminNav />
       <FgPageHeader
         title="Công ty & bộ phận"
-        meta="1 Tập đoàn → nhiều công ty con · ngưỡng tiền tối thiểu · bộ phận dùng khi mời nhân sự"
+        meta="1 Tập đoàn duy nhất (tạo sẵn) → nhiều công ty con · ngưỡng tiền tối thiểu · bộ phận dùng khi mời nhân sự"
         actions={
           can('admin:settings') ? (
             <FgButton
@@ -815,7 +856,7 @@ export function CompaniesScreen(): ReactNode {
                 setModalOpen(true);
               }}
             >
-              + Thêm công ty
+              + Thêm công ty con
             </FgButton>
           ) : null
         }
@@ -826,8 +867,8 @@ export function CompaniesScreen(): ReactNode {
             <div className="fg-card">
               <FgEmptyState
                 glyph="▤"
-                title="Chưa có công ty nào"
-                description="Tạo pháp nhân Tập đoàn và các công ty con để bắt đầu mời nhân sự."
+                title="Chưa có công ty con nào"
+                description="Tập đoàn đã được tạo sẵn; thêm công ty con để bắt đầu mời nhân sự."
               />
             </div>
           ) : (
@@ -902,7 +943,6 @@ function CompanyModal({ open, editing, onClose }: { open: boolean; editing: Comp
   const [taxCode, setTaxCode] = useState('');
   const [address, setAddress] = useState('');
   const [contactEmail, setContactEmail] = useState('');
-  const [isGroup, setIsGroup] = useState('false');
   const [minBalance, setMinBalance] = useState<Money | null>(null);
   const [status, setStatus] = useState('active');
   const [busy, setBusy] = useState(false);
@@ -916,7 +956,6 @@ function CompanyModal({ open, editing, onClose }: { open: boolean; editing: Comp
     setTaxCode(editing?.tax_code ?? '');
     setAddress(editing?.address ?? '');
     setContactEmail(editing?.contact_email ?? '');
-    setIsGroup(editing?.is_group ? 'true' : 'false');
     setMinBalance(editing?.min_balance ? money(editing.min_balance) : null);
     setStatus(editing?.status ?? 'active');
     setError(null);
@@ -936,7 +975,6 @@ function CompanyModal({ open, editing, onClose }: { open: boolean; editing: Comp
           tax_code: taxCode.trim() || undefined,
           address: address.trim() || undefined,
           contact_email: contactEmail.trim() || undefined,
-          is_group: isGroup === 'true',
           min_balance_minor: minBalance ? moneyToWire(minBalance).minor : '0',
           status,
         },
@@ -957,10 +995,10 @@ function CompanyModal({ open, editing, onClose }: { open: boolean; editing: Comp
   return (
     <FgModal
       open={open}
-      title={editing ? `Sửa công ty · ${editing.code}` : 'Thêm công ty'}
+      title={editing ? (editing.is_group ? `Sửa Tập đoàn · ${editing.code}` : `Sửa công ty · ${editing.code}`) : 'Thêm công ty con'}
       onCancel={onClose}
       onOk={() => void submit()}
-      okText={editing ? 'Lưu' : 'Tạo công ty'}
+      okText={editing ? 'Lưu' : 'Tạo công ty con'}
       confirmLoading={busy}
       width={560}
     >
@@ -984,17 +1022,6 @@ function CompanyModal({ open, editing, onClose }: { open: boolean; editing: Comp
         </FgField>
         <FgField label="Email liên hệ" error={fieldErrors.contact_email ?? null}>
           <FgInput value={contactEmail} onChange={(e: { target: { value: string } }) => setContactEmail(e.target.value)} placeholder="info@congty.vn" />
-        </FgField>
-        <FgField label="Pháp nhân cấp Tập đoàn (nhóm)">
-          <FgSelect
-            options={[
-              { label: 'Không — đây là công ty con', value: 'false' },
-              { label: 'Có — pháp nhân Tập đoàn', value: 'true' },
-            ]}
-            value={isGroup}
-            onChange={(v) => setIsGroup(v ?? 'false')}
-            style={{ width: '100%' }}
-          />
         </FgField>
         <FgField label="Ngưỡng tiền tối thiểu (VND)" help="Dưới ngưỡng → cảnh báo đỏ trên dashboard/dòng tiền">
           <FgMoneyInput value={minBalance} onChange={setMinBalance} ariaLabel="Ngưỡng tiền tối thiểu" />

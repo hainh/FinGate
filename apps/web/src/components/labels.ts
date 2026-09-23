@@ -5,11 +5,12 @@
 import { ACTION_LABEL, EVIDENCE_LABEL, type Action, type EvidenceType } from '@fingate/shared';
 
 export const ROLES_LABEL: Record<string, string> = {
-  staff: 'Nhân viên kế toán',
+  staff: 'Kế toán viên',
   chief_accountant: 'Kế toán trưởng',
   deputy_director: 'Phó Giám đốc',
-  director: 'Giám đốc / Tổng Giám đốc',
-  chairman: 'Chủ tịch HĐQT',
+  director: 'Giám đốc',
+  deputy_chairman: 'Phó Tổng Giám đốc (Phó Chủ tịch)',
+  chairman: 'Tổng Giám đốc (Chủ tịch)',
   admin: 'Quản trị hệ thống',
 };
 

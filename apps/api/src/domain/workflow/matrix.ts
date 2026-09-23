@@ -54,36 +54,40 @@ function big(v: unknown): bigint {
 export const DEFAULT_STEPS: Record<DocKind, { amount: string; steps: MatrixStep[]; label: string }> = {
   spend: {
     amount: '0',
-    label: 'Mặc định: KTT → PGĐ → GĐ',
+    label: 'Mặc định: KTT → PGĐ → GĐ → P.TGĐ',
     steps: [
       { order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true },
       { order: 2, role: 'deputy_director', sla_hours: 24, mandatory: true },
       { order: 3, role: 'director', sla_hours: 48, mandatory: true },
+      { order: 4, role: 'deputy_chairman', sla_hours: 48, mandatory: true },
     ],
   },
   income: {
     amount: '0',
-    label: 'Mặc định: KTT → GĐ',
+    label: 'Mặc định: KTT → GĐ → P.TGĐ',
     steps: [
       { order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true },
       { order: 2, role: 'director', sla_hours: 48, mandatory: true },
+      { order: 3, role: 'deputy_chairman', sla_hours: 48, mandatory: true },
     ],
   },
   rollover: {
     amount: '0',
-    label: 'Đảo hạn: KTT → PGĐ → GĐ',
+    label: 'Đảo hạn: KTT → PGĐ → GĐ → P.TGĐ',
     steps: [
       { order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true },
       { order: 2, role: 'deputy_director', sla_hours: 24, mandatory: true },
       { order: 3, role: 'director', sla_hours: 48, mandatory: true },
+      { order: 4, role: 'deputy_chairman', sla_hours: 48, mandatory: true },
     ],
   },
   internal: {
     amount: '0',
-    label: 'Chuyển nội bộ: KTT → GĐ (2 công ty)',
+    label: 'Chuyển nội bộ: KTT → GĐ → P.TGĐ (2 công ty)',
     steps: [
       { order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true },
       { order: 2, role: 'director', sla_hours: 48, mandatory: true },
+      { order: 3, role: 'deputy_chairman', sla_hours: 48, mandatory: true },
     ],
   },
 };

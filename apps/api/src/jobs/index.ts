@@ -115,7 +115,7 @@ const DISPATCH: Record<TaskName, () => Promise<Record<string, unknown>>> = {
       built.push(s.label);
     }
     // email tới giám đốc các công ty
-    const directors = await Models.Assignment.find({ role: { $in: ['director', 'deputy_director', 'chief_accountant'] }, status: 'active' } as never)
+    const directors = await Models.Assignment.find({ role: { $in: ['director', 'deputy_director', 'chief_accountant', 'deputy_chairman'] }, status: 'active' } as never)
       .select({ user_id: 1 })
       .lean();
     const recipients = [...new Set(directors.map((d) => String(d.user_id)))].slice(0, 60);

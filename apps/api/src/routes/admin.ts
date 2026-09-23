@@ -12,6 +12,7 @@ import ExcelJS from 'exceljs';
 import {
   ApiError,
   DEFAULT_AMOUNT_LIMIT_MINOR,
+  isGroupOnlyRole,
   MFA_REQUIRED_ROLES,
   ROLE_LABEL,
   today,
@@ -191,6 +192,8 @@ export function adminRoutes(app: FastifyInstance): void {
           companyIds = actor.company_id ? [actor.company_id] : companyIds;
         }
         if (!companyIds.length) throw new ApiError({ code: 'FG-HR-002', detail: 'Chưa xác định công ty' });
+        // chức danh cấp Tập đoàn chỉ gán cho pháp nhân Tập đoàn
+        await assertGroupOnlyRoleCompany(String(body.role), companyIds);
         const primaryCompanyId = companyIds[0] as string;
         const departments: Record<string, string | null> = {};
         for (const cid of companyIds) {
@@ -732,6 +735,28 @@ export function adminRoutes(app: FastifyInstance): void {
         }
 
         const nextRole = String(body.role ?? primary?.role ?? 'staff');
+        // Chức danh cấp Tập đoàn: không đổi công ty, không hạ về cấp công ty con (yêu cầu mới).
+        const currentRole = String(primary?.role ?? 'staff');
+        if (isGroupOnlyRole(currentRole)) {
+          // Chỉ cho phép gộp về đúng pháp nhân Tập đoàn (di trú dữ liệu cũ), KHÔNG đổi sang công ty con.
+          const gid = await groupCompanyId();
+          const onlyConsolidatingToGroup = Boolean(gid) && nextCompanyIds.length === 1 && nextCompanyIds[0] === gid;
+          if (companyChanged && !onlyConsolidatingToGroup) {
+            throw new ApiError({
+              code: 'FG-VAL-001',
+              detail: 'Không đổi được công ty của chức danh cấp Tập đoàn',
+              errors: { company_ids: 'Chức danh cấp Tập đoàn không đổi công ty' },
+            });
+          }
+          if (!isGroupOnlyRole(nextRole)) {
+            throw new ApiError({
+              code: 'FG-VAL-001',
+              detail: 'Không hạ được chức danh cấp Tập đoàn về cấp công ty con',
+              errors: { role: 'Chức danh cấp Tập đoàn không hạ cấp' },
+            });
+          }
+        }
+        await assertGroupOnlyRoleCompany(nextRole, nextCompanyIds);
         const nextLimit = body.amount_limit_minor !== undefined ? BigInt(body.amount_limit_minor) : asBigInt(primary?.amount_limit_minor);
         const prevExtra = (primary?.extra_permissions ?? []) as string[];
         const prevDenied = (primary?.denied_permissions ?? []) as string[];
@@ -838,6 +863,7 @@ export function adminRoutes(app: FastifyInstance): void {
         await assertManages(req, id);
         // Công ty đích phải nằm trong phạm vi hiện tại (§7.5).
         await assertCompanyAccess(req, body.to_company_id);
+        await assertGroupOnlyRoleCompany(String(body.role ?? actor.role), [body.to_company_id]);
         const held = await Models.Document.countDocuments({
           status: { $in: [...DECISION_STATUSES] },
           'approval.steps': { $elemMatch: { user_id: id, state: { $in: ['current', 'waiting'] } } },
@@ -1894,6 +1920,25 @@ async function assertCompanyAccess(req: FastifyRequest, companyId: string): Prom
   const { scope } = requestCtx(req);
   if (scope.companyIds === null) return;
   if (!scope.companyIds.includes(companyId)) throw new ApiError({ code: 'FG-RBAC-002' });
+}
+
+/** Id pháp nhân Tập đoàn duy nhất (`is_group = true`) — chức danh cấp Tập đoàn gắn vào đây. */
+async function groupCompanyId(): Promise<string | null> {
+  const c = await Models.Company.findOne({ is_group: true } as never).select({ _id: 1 }).lean();
+  return c ? String((c as { _id: unknown })._id) : null;
+}
+
+/** Chức danh cấp Tập đoàn (P.TGĐ/TGĐ) chỉ được gán cho đúng pháp nhân Tập đoàn. */
+async function assertGroupOnlyRoleCompany(role: string, companyIds: string[]): Promise<void> {
+  if (!isGroupOnlyRole(role)) return;
+  const gid = await groupCompanyId();
+  if (!gid || companyIds.length !== 1 || companyIds[0] !== gid) {
+    throw new ApiError({
+      code: 'FG-VAL-001',
+      detail: 'Chức danh cấp Tập đoàn (Phó Tổng Giám đốc / Tổng Giám đốc) chỉ gán được cho pháp nhân Tập đoàn',
+      errors: { role: 'Chức danh cấp Tập đoàn chỉ áp dụng cho Tập đoàn' },
+    });
+  }
 }
 
 function normaliseDiff(v: unknown): { field: string; before: unknown; after: unknown }[] {

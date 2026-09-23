@@ -253,11 +253,12 @@ export function docHref(kind: DocKind, id: string): string {
 
 function roleLabel(role: Role): string {
   const map: Record<Role, string> = {
-    staff: 'Nhân viên kế toán',
+    staff: 'Kế toán viên',
     chief_accountant: 'Kế toán trưởng',
     deputy_director: 'Phó Giám đốc',
     director: 'Giám đốc',
-    chairman: 'Chủ tịch HĐQT',
+    deputy_chairman: 'Phó Tổng Giám đốc',
+    chairman: 'Tổng Giám đốc (Chủ tịch)',
     admin: 'Quản trị hệ thống',
   };
   return map[role] ?? role;

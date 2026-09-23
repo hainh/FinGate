@@ -16,22 +16,47 @@ export type Tone = 'neutral' | 'info' | 'success' | 'warning' | 'attention' | 'd
 export const TONES = ['neutral', 'info', 'success', 'warning', 'attention', 'danger'] as const;
 
 /** Vai trò (blueprint §III). `KTT` là bước kiểm tra đầu tiên ở mọi quy trình (blueprint §XX). */
-export type Role = 'staff' | 'chief_accountant' | 'deputy_director' | 'director' | 'chairman' | 'admin';
+export type Role = 'staff' | 'chief_accountant' | 'deputy_director' | 'director' | 'deputy_chairman' | 'chairman' | 'admin';
 
+/** Sắp theo cấp bậc từ thấp → cao: 1 Kế toán viên … 6 Tổng Giám đốc (Chủ tịch); `admin` tách riêng. */
 export const ROLES: readonly Role[] = [
   'staff',
   'chief_accountant',
   'deputy_director',
   'director',
+  'deputy_chairman',
   'chairman',
   'admin',
 ] as const;
+
+/**
+ * Chức danh CHỈ tồn tại ở cấp Tập đoàn (cấp 5–6): có quyền hạn với mọi công ty con.
+ * Không gán cho công ty con; người giữ chức danh này không bị đổi công ty hay hạ vai trò
+ * về cấp công ty con khi sửa hồ sơ nhân sự.
+ */
+export const GROUP_ONLY_ROLES: readonly Role[] = ['deputy_chairman', 'chairman'] as const;
+
+export function isGroupOnlyRole(role: string): boolean {
+  return (GROUP_ONLY_ROLES as readonly string[]).includes(role);
+}
+
+/** Cấp bậc chức danh từ thấp → cao (dùng để sắp xếp/hiển thị). `admin` ngoài thang. */
+export const ROLE_LEVEL: Record<Role, number> = {
+  staff: 1,
+  chief_accountant: 2,
+  deputy_director: 3,
+  director: 4,
+  deputy_chairman: 5,
+  chairman: 6,
+  admin: 99,
+};
 
 /** Cấp duyệt theo thứ tự quy trình (bước KTT kiểm tra nằm đầu, xem matrix resolver). */
 export const APPROVAL_ORDER: readonly Role[] = [
   'chief_accountant',
   'deputy_director',
   'director',
+  'deputy_chairman',
   'chairman',
 ] as const;
 
@@ -40,6 +65,7 @@ export type StatusKey =
   | 'pending.ktt'
   | 'pending.pgd'
   | 'pending.gd'
+  | 'pending.ptg'
   | 'pending.chairman'
   | 'approved'
   | 'processing'
@@ -95,9 +121,18 @@ export const STATUS_REGISTRY: Record<StatusKey, StatusDef> = {
     terminal: false,
     pending: true,
   },
+  'pending.ptg': {
+    key: 'pending.ptg',
+    labelVi: 'Chờ Phó Tổng Giám đốc',
+    glyph: '◍',
+    tone: 'warning',
+    ownerRole: 'deputy_chairman',
+    terminal: false,
+    pending: true,
+  },
   'pending.chairman': {
     key: 'pending.chairman',
-    labelVi: 'Chờ Chủ tịch HĐQT',
+    labelVi: 'Chờ Tổng Giám đốc (Chủ tịch)',
     glyph: '◍',
     tone: 'warning',
     ownerRole: 'chairman',
@@ -174,6 +209,8 @@ export function pendingStatusForRole(role: Role): StatusKey | undefined {
       return 'pending.pgd';
     case 'director':
       return 'pending.gd';
+    case 'deputy_chairman':
+      return 'pending.ptg';
     case 'chairman':
       return 'pending.chairman';
     default:
