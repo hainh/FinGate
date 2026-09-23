@@ -10,7 +10,7 @@
  * thứ tự chỉ xác định cấp CAO NHẤT BẮT BUỘC. Status luôn phản ánh cấp thấp nhất chưa duyệt.
  */
 
-import type { Action, DocKind, Role, StatusKey } from '@fingate/shared';
+import { APPROVAL_ORDER, type Action, type DocKind, type Role, type StatusKey } from '@fingate/shared';
 
 /** đồ thị chuyển trạng thái — test mọi cạnh (arch §15 unit). */
 export const TRANSITIONS: Record<StatusKey, Partial<Record<Action, StatusKey>>> = {
@@ -209,6 +209,20 @@ export function dropVacantSteps<T extends VacantFilterableStep>(
   const kept = steps.filter((s) => s.user_id != null);
   const dropped = steps.filter((s) => s.user_id == null).map((s) => ({ order: s.order, role: s.role }));
   return { steps: kept.map((s, i) => ({ ...s, order: i + 1 }) as T), dropped };
+}
+
+/**
+ * Bước CAO NHẤT của matrix khuyết chức danh → không được bỏ hẳn (nếu bỏ hết thì hồ sơ
+ * "duyệt xong ngay khi gửi"). Thay vào đó đẩy yêu cầu duyệt lên chức danh cao hơn kế tiếp
+ * CÓ người phụ trách (theo `APPROVAL_ORDER`). Trả `null` khi không còn cấp nào cao hơn.
+ */
+export function escalatedTopRole(topRole: Role, availableRoles: Iterable<Role>): Role | null {
+  const available = availableRoles instanceof Set ? availableRoles : new Set(availableRoles);
+  for (let i = APPROVAL_ORDER.indexOf(topRole) + 1; i < APPROVAL_ORDER.length; i++) {
+    const role = APPROVAL_ORDER[i]!;
+    if (available.has(role)) return role;
+  }
+  return null;
 }
 
 /* ------------------------------------------------------------------ *

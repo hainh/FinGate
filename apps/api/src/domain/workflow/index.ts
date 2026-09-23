@@ -14,6 +14,7 @@
 
 import {
   ACTION_REQUIRES_OPINION,
+  APPROVAL_ORDER,
   ApiError,
   ROLE_LABEL,
   STATUS_REGISTRY,
@@ -45,6 +46,7 @@ import {
   currentStep,
   dropVacantSteps,
   EDITABLE_STATUSES,
+  escalatedTopRole,
   FINAL_APPROVAL_STATUS,
   needsAmountRetype,
   nextPartialStage,
@@ -179,25 +181,11 @@ export async function submitDocument(input: {
   if (!matrix.steps.length) throw new ApiError({ code: 'FG-WF-006' });
 
   const evidence = await rebuildEvidence(doc);
-  const assigned: StepRow[] = await assignUsers(
-    matrix.steps.map((s, i) => ({
-      order: s.order,
-      role: s.role,
-      user_id: null as string | null,
-      state: (i === 0 ? 'current' : 'waiting') as StepRow['state'],
-      sla_deadline: null as Date | null,
-      action: null,
-      decided_at: null,
-      opinion: null,
-      reason: null,
-      amount_at_decision: null,
-      delegated_from: null,
-      fast_tracked: false,
-    })),
-    doc,
-  );
+  const assigned = await assignUsers(matrix.steps.map((s, i) => newStep(s.order, s.role, i === 0 ? 'current' : 'waiting')), doc);
   // Công ty khuyết chức danh nào → bước đó không cần duyệt, tự đẩy lên cấp cao hơn
   // (feature "Nếu cty thiếu chức danh nào thì không cần chức danh đó phải duyệt").
+  // Bước cao nhất khuyết đã được `assignUsers` đẩy lên cấp cao hơn còn người TRƯỚC khi bỏ,
+  // nên chuỗi không bao giờ rỗng vì lý do khuyết chức danh.
   const { steps, dropped: vacantSteps } = dropVacantSteps(assigned);
 
   const cal = await calendarFor(doc.company_id);
@@ -226,7 +214,21 @@ export async function submitDocument(input: {
     if (nextPending) nextPending.state = 'current';
   }
 
-  const first = currentStep(steps as unknown as StepState[]);
+  let first = currentStep(steps as unknown as StepState[]);
+  // Tự duyệt KHÔNG BAO GIỜ được làm hồ sơ "duyệt xong": nếu sau khi tự duyệt không còn bước
+  // nào khác (không có cấp trên phụ trách), giữ bước cao nhất của người lập ở trạng thái chờ
+  // để có người xử lý thay vì nhảy thẳng sang "Đã duyệt" (→ tránh thực thi ngay khi tạo).
+  if (!first && selfApprovedSteps.length) {
+    const highestOwned = steps.filter(ownsStep).sort((a, b) => b.order - a.order)[0];
+    if (highestOwned) {
+      highestOwned.state = 'current';
+      highestOwned.action = null;
+      highestOwned.decided_at = null;
+      highestOwned.opinion = null;
+      highestOwned.amount_at_decision = null;
+      first = highestOwned;
+    }
+  }
   if (first) {
     const ms = matrix.steps.find((s) => s.role === first.role);
     steps.find((s) => s.order === first.order)!.sla_deadline = slaDeadline(now, ms?.sla_hours ?? 24, cal);
@@ -318,19 +320,39 @@ function requiredFieldsMissing(doc: DomainDoc): string[] {
   return missing;
 }
 
+/** Bước duyệt rỗng (chưa gán người) — snapshot matrix hoặc đẩy bước khuyết lên cấp cao hơn. */
+function newStep(order: number, role: Role, state: StepRow['state']): StepRow {
+  return {
+    order,
+    role,
+    user_id: null,
+    state,
+    sla_deadline: null,
+    action: null,
+    decided_at: null,
+    opinion: null,
+    reason: null,
+    amount_at_decision: null,
+    delegated_from: null,
+    fast_tracked: false,
+  };
+}
+
 /** Gán người duyệt cụ thể cho từng step: assignment theo công ty + role (+ delegation). */
-async function assignUsers<T extends StepRow>(steps: T[], doc: DomainDoc): Promise<T[]> {
+async function assignUsers(steps: StepRow[], doc: DomainDoc): Promise<StepRow[]> {
   const companies = [String(doc.company_id)];
   if (doc.kind === 'internal' && doc.target?.company_id) companies.push(String(doc.target.company_id));
 
-  const stepRoles = steps.map((s) => s.role);
+  // Nạp người phụ trách cho MỌI cấp duyệt (không chỉ các bước trong matrix) để biết cấp nào
+  // còn người, phục vụ đẩy bước khuyết chức danh lên cao hơn thay vì bỏ hẳn.
+  const allRoles = [...APPROVAL_ORDER];
   // Chức danh cấp Tập đoàn (P.TGĐ, TGĐ) thuộc công ty Tập đoàn nhưng có quyền với mọi
   // công ty con → tìm người theo vai trò bất kể công ty của hồ sơ.
-  const groupRoles = stepRoles.filter((r) => isGroupOnlyRole(r));
+  const groupRoles = allRoles.filter((r) => isGroupOnlyRole(r));
   const assignments = await Models.Assignment.find({
     status: 'active',
     $or: [
-      { company_id: { $in: companies }, role: { $in: stepRoles } },
+      { company_id: { $in: companies }, role: { $in: allRoles } },
       ...(groupRoles.length ? [{ role: { $in: groupRoles } }] : []),
     ],
   } as never)
@@ -342,12 +364,26 @@ async function assignUsers<T extends StepRow>(steps: T[], doc: DomainDoc): Promi
     .lean();
   const active = new Set(users.map((u) => String(u._id)));
 
-  for (const step of steps) {
-    const candidates = assignments.filter((a) => String(a.role) === step.role && active.has(String(a.user_id)));
+  const activeAssignments = assignments.filter((a) => active.has(String(a.user_id)));
+  const pickUser = (role: Role): string | null => {
     // ưu tiên người cùng công ty nguồn; internal transfer: đủ người 2 công ty -> lấy công ty nguồn
-    const chosen = candidates[0];
-    step.user_id = chosen ? String(chosen.user_id) : null;
+    const chosen = activeAssignments.find((a) => String(a.role) === role);
+    return chosen ? String(chosen.user_id) : null;
+  };
+
+  for (const step of steps) step.user_id = pickUser(step.role);
+
+  // Bước CAO NHẤT của matrix khuyết chức danh → đẩy yêu cầu duyệt lên cấp cao hơn còn người
+  // thay vì bỏ hẳn (tránh hồ sơ "duyệt xong ngay khi gửi"). Thêm TRƯỚC delegation để bước
+  // mới cũng được áp ủy quyền.
+  const top = steps.at(-1);
+  if (top && top.user_id == null) {
+    const available = new Set(activeAssignments.map((a) => a.role as Role));
+    const role = escalatedTopRole(top.role, available);
+    const uid = role ? pickUser(role) : null;
+    if (role && uid) steps.push({ ...newStep(steps.length + 1, role, 'waiting'), user_id: uid });
   }
+
   return applyDelegations(steps, doc.company_id);
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dropVacantSteps, nextPartialStage, sumInstallments } from './state-machine.ts';
+import { dropVacantSteps, escalatedTopRole, nextPartialStage, sumInstallments } from './state-machine.ts';
 
 describe('dropVacantSteps — khuyết chức danh thì bỏ bước, đẩy lên cấp cao hơn', () => {
   it('bỏ bước không có người phụ trách và đánh số lại liên tục', () => {
@@ -23,13 +23,30 @@ describe('dropVacantSteps — khuyết chức danh thì bỏ bước, đẩy lê
     expect(steps.map((s) => s.role)).toEqual(['chief_accountant']);
   });
 
-  it('không có người phụ trách nào → chuỗi rỗng (duyệt xong ngay khi gửi)', () => {
+  it('không có người phụ trách nào → chuỗi rỗng (workflow phải xử lý, KHÔNG tự duyệt)', () => {
     const { steps, dropped } = dropVacantSteps([
       { order: 1, role: 'chief_accountant', user_id: null },
       { order: 2, role: 'director', user_id: null },
     ]);
     expect(steps).toEqual([]);
     expect(dropped).toHaveLength(2);
+  });
+});
+
+describe('escalatedTopRole — bước khuyết chức danh đẩy lên cấp cao hơn còn người', () => {
+  it('PGĐ khuyết → đẩy lên GĐ', () => {
+    expect(escalatedTopRole('deputy_director', ['chief_accountant', 'director'])).toBe('director');
+  });
+
+  it('bỏ qua cả những cấp cao hơn cũng khuyết', () => {
+    expect(escalatedTopRole('deputy_director', ['chief_accountant', 'deputy_chairman'])).toBe('deputy_chairman');
+    expect(escalatedTopRole('director', ['chief_accountant', 'chairman'])).toBe('chairman');
+  });
+
+  it('không còn cấp nào cao hơn có người → null', () => {
+    expect(escalatedTopRole('chairman', ['director'])).toBeNull();
+    expect(escalatedTopRole('chief_accountant', ['chief_accountant'])).toBeNull();
+    expect(escalatedTopRole('chief_accountant', [])).toBeNull();
   });
 });
 
