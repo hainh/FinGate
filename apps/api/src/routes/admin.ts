@@ -93,7 +93,12 @@ export function adminRoutes(app: FastifyInstance): void {
         // status tài khoản (invited/active/deactivated) nằm ở User, không phải Assignment
         const userStatus = q.status;
 
-        const assignments = await Models.Assignment.find(filter as never).select({ user_id: 1, company_id: 1, department_id: 1, role: 1, amount_limit_minor: 1, extra_permissions: 1, denied_permissions: 1, status: 1 }).lean();
+        // Nạp cả assignment đã kết thúc (valid_to/status) để: hiển thị ưu tiên phân công ĐANG
+        // hiệu lực (tránh hiện vai trò/công ty cũ sau khi đổi), nhưng vẫn giữ tài khoản đã ngừng
+        // hoạt động trong danh sách (mọi phân công của họ đã `ended`).
+        const assignments = await Models.Assignment.find(filter as never)
+          .select({ user_id: 1, company_id: 1, department_id: 1, role: 1, amount_limit_minor: 1, extra_permissions: 1, denied_permissions: 1, status: 1, valid_to: 1, valid_from: 1, created_at: 1 })
+          .lean();
         const userIds = [...new Set(assignments.map((a) => String(a.user_id)))];
         const userFilter: Record<string, unknown> = { _id: { $in: userIds } };
         if (userStatus) userFilter.status = userStatus;
@@ -126,8 +131,18 @@ export function adminRoutes(app: FastifyInstance): void {
       }
 
         const now = new Date();
+        const isActiveAsg = (x: { status?: unknown; valid_to?: unknown }): boolean =>
+          String(x.status ?? 'active') === 'active' && (x.valid_to == null || new Date(String(x.valid_to)) > now);
+        const asgTime = (x: { valid_from?: unknown; created_at?: unknown }): number =>
+          new Date(String(x.valid_from ?? x.created_at ?? 0)).getTime();
         const items = users.map((u) => {
-          const asg = byUser.get(String(u._id)) ?? [];
+          const allAsg = byUser.get(String(u._id)) ?? [];
+          // Ưu tiên phân công ĐANG hiệu lực (ẩn vai trò/công ty cũ sau khi đổi). Tài khoản đã
+          // ngừng hoạt động — mọi phân công `ended` — vẫn hiện phân công gần nhất để kích hoạt lại.
+          const chosen = allAsg.filter((x) => isActiveAsg(x as { status?: unknown; valid_to?: unknown }));
+          const asg = (chosen.length ? chosen : allAsg)
+            .slice()
+            .sort((x, y) => asgTime(y as { valid_from?: unknown; created_at?: unknown }) - asgTime(x as { valid_from?: unknown; created_at?: unknown }));
           const a = asg[0];
           const companies = asg.map((x) => ({
             company_id: String(x.company_id),
