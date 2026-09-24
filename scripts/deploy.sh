@@ -7,7 +7,7 @@
 set -euo pipefail
 
 REMOTE="${DEPLOY_REMOTE:-dev}"                 # host trong ~/.ssh/config
-SERVER_DIR="${SERVER_DIR:-~/tabloom}"          # thư mục repo trên server
+SERVER_DIR="${SERVER_DIR:-~/FinGate}"          # thư mục repo trên server
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 COMMIT_MSG=""
 DO_BUILD="--build"
@@ -47,10 +47,10 @@ SHA="$(git rev-parse --short HEAD)"
 
 # 3. Deploy trên server
 step "Deploy $SHA lên $REMOTE:$SERVER_DIR"
-ssh "$REMOTE" bash -ls -- "$BRANCH" "$SHA" "$DO_BUILD" <<'EOF'
+ssh "$REMOTE" bash -ls -- "$BRANCH" "$SHA" "$DO_BUILD" "$SERVER_DIR" <<'EOF'
 set -euo pipefail
-BRANCH="$1"; SHA="$2"; BUILD_FLAG="$3"
-cd ~/FinGate
+BRANCH="$1"; SHA="$2"; BUILD_FLAG="$3"; SERVER_DIR="${4/#\~/$HOME}"
+cd "$SERVER_DIR"
 echo "[server] Pull $BRANCH..."
 git fetch origin "$BRANCH"
 git checkout "$BRANCH"
@@ -58,10 +58,10 @@ git reset --hard "origin/$BRANCH"
 echo "[server] Build & up..."
 docker compose -f deploy/compose.yml --profile onprem up -d ${BUILD_FLAG}
 echo "[server] Trạng thái container:"
-docker compose ps
+docker compose -f deploy/compose.yml ps
 echo "[server] Log gần nhất:"
 sleep 3
-docker compose logs --tail=15 ${BUILD_FLAG:+app}
+docker compose -f deploy/compose.yml logs --tail=15 app
 EOF
 
 # 4. Kiểm tra sức khỏe qua ssh

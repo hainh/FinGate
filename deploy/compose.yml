@@ -4,7 +4,7 @@
 #   Server thật (Profile O): docker compose -f deploy/compose.yml --profile onprem up -d --build
 #   Kèm HTTPS qua Caddy:     docker compose -f deploy/compose.yml --profile onprem --profile tls up -d
 #
-# `pnpm infra:up` / `pnpm infra:down` chỉ tác động service `mongo` (dev local).
+# `pnpm infra:up` chỉ tác động service `mongo` (dev local); `pnpm infra:down` hạ cả stack.
 
 services:
   mongo:
@@ -82,7 +82,7 @@ services:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:9380/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        - "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 15s
       timeout: 5s
       retries: 5

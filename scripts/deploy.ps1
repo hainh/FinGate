@@ -70,10 +70,10 @@ git reset --hard origin/$Branch
 echo "[server] Build & up..."
 docker compose -f deploy/compose.yml --profile onprem up -d $BuildFlag
 echo "[server] Trang thai container:"
-docker compose ps
+docker compose -f deploy/compose.yml ps
 echo "[server] Log gan nhat:"
 sleep 3
-docker compose logs --tail=15 app
+docker compose -f deploy/compose.yml logs --tail=15 app
 "@
 # Duong ong PowerShell toi ssh luon them `r -> ghi file tach (LF-only) roi dung cmd redirection de giu nguyen bytes.
 $tf = Join-Path ([System.IO.Path]::GetTempPath()) "deploy-remote-$PID.sh"
