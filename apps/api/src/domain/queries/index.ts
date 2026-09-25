@@ -605,7 +605,10 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
   const minBalance = asBigInt(account?.min_balance_minor ?? 0n);
   // phiếu thu CỘNG tiền, phiếu chi / chuyển nội bộ TRỪ tiền vào tài khoản nguồn
   const isInflow = doc.kind === 'income';
-  const after = isInflow ? available + minor : available - minor;
+  // Phiếu đã thực thi (paid) → tiền đã vào sổ cái nên `available` đã gồm giao dịch;
+  // không cộng/trừ thêm lần nữa, tránh đếm trùng số dư sau giao dịch.
+  const executed = doc.status === 'paid';
+  const after = executed ? available : isInflow ? available + minor : available - minor;
   const payee = (doc.payee ?? {}) as { name?: string; tax_code?: string | null; is_internal?: boolean; bank_name?: string | null };
   const contract = (doc.contract ?? {}) as { code?: string | null; value?: unknown };
   const limit = asBigInt(budget?.limit_minor ?? 0n);
