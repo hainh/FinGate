@@ -19,6 +19,7 @@ import { materializeRecurring } from '../domain/recurring/index.ts';
 import { rebuildLedgerAndBalances } from '../domain/rebuild/balances.ts';
 import type { ScopeLike } from '../domain/types.ts';
 import { checkTie } from '../domain/tie/index.ts';
+import { createBackup, pruneBackups } from '../domain/backup/index.ts';
 
 export type TaskName =
   | 'newsletter'
@@ -31,7 +32,8 @@ export type TaskName =
   | 'rebuild-audit'
   | 'check-tie'
   | 'archive'
-  | 'cleanup';
+  | 'cleanup'
+  | 'backup';
 
 export interface JobResult {
   task: string;
@@ -95,6 +97,9 @@ function defaultWindow(name: TaskName): string {
   const now = new Date();
   if (name === 'sla-scan' || name === 'alerts' || name === 'reconcile') {
     return `${now.toISOString().slice(0, 13)}:${String(Math.floor(now.getUTCMinutes() / 15) * 10).padStart(2, '0')}`;
+  }
+  if (name === 'backup') {
+    return `${now.toISOString().slice(0, 13)}:${String(Math.floor(now.getUTCMinutes() / 30) * 30).padStart(2, '0')}`;
   }
   return today();
 }
@@ -214,6 +219,13 @@ const DISPATCH: Record<TaskName, () => Promise<Record<string, unknown>>> = {
   'check-tie': async () => (await checkTie()) as unknown as Record<string, unknown>,
   archive: async () => archiveOldDocuments(),
   cleanup: async () => cleanupOrphans(),
+
+  /** Sao lưu dữ liệu mỗi 30' (cron GH Actions) + dọn bản cũ hơn 1 ngày. */
+  backup: async () => {
+    const created = await createBackup();
+    const pruned = await pruneBackups();
+    return { created: created.file, bytes: created.size, pruned: pruned.removed };
+  },
 };
 
 /** Hồ sơ đóng > 24 tháng → NDJSON sang R2 rồi mới xoá (§8.7). */

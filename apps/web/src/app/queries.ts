@@ -313,6 +313,26 @@ export function useCompanies() {
   });
 }
 
+/* ---------------- sao lưu dữ liệu (ADM-14) ---------------- */
+
+export function useBackups(enabled = true) {
+  const { can } = useAuth();
+  return useQuery({
+    queryKey: ['backups'],
+    enabled: enabled && can('admin:backup'),
+    queryFn: () => apiData<{ items: import('./types.ts').BackupFile[]; retain_hours: number }>('/system/backups'),
+  });
+}
+
+/** Tạo bản sao lưu ngay; trả metadata để FE mở link tải. */
+export function useCreateBackup() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiData<import('./types.ts').BackupFile>('/system/backups', { method: 'POST', body: {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['backups'] }),
+  });
+}
+
 export interface DepartmentRow {
   _id: string;
   company_id: string;

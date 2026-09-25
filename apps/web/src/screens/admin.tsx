@@ -58,9 +58,10 @@ const ADMIN_TABS: { to: string; label: string; perm: string }[] = [
   { to: '/quantri/cong-ty', label: 'Công ty & bộ phận', perm: 'admin:settings' },
   { to: '/quantri/quy-trinh-duyet', label: 'Ma trận duyệt', perm: 'admin:matrix' },
   { to: '/quantri/audit', label: 'Audit log', perm: 'audit:read' },
+  { to: '/quantri/sao-luu', label: 'Sao lưu', perm: 'admin:backup' },
 ];
 
-function AdminNav(): ReactNode {
+export function AdminNav(): ReactNode {
   const { can } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();

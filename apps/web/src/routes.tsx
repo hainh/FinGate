@@ -27,6 +27,7 @@ import { DebtsScreen, LoansScreen, RolloversScreen } from './screens/loans.tsx';
 import { ForecastScreen } from './screens/forecast.tsx';
 import { ReportLibraryScreen, ReportRunnerScreen } from './screens/reports.tsx';
 import { PersonnelScreen, MatrixScreen, AuditLogScreen, SettingsScreen, CompaniesScreen } from './screens/admin.tsx';
+import { BackupScreen } from './screens/backup.tsx';
 import { NewsletterScreen, NotificationsScreen, SearchScreen } from './screens/misc.tsx';
 import { DocumentFormScreen } from './screens/create-form.tsx';
 import { ForbiddenScreen, NotFoundScreen } from './screens/errors.tsx';
@@ -76,6 +77,7 @@ const PATH_PERMS: { prefix: string; perm: string | string[] }[] = [
   { prefix: '/dong-tien', perm: 'forecast:read' },
   { prefix: '/baocao', perm: 'report:view' },
   { prefix: '/ban-tin', perm: 'report:view' },
+  { prefix: '/quantri/sao-luu', perm: 'admin:backup' },
 ];
 
 function Shell({ children }: { children: ReactNode }): ReactNode {
@@ -113,6 +115,7 @@ function AdminHomeRedirect(): ReactNode {
   if (can('admin:settings')) return <Navigate to="/quantri/cong-ty" replace />;
   if (can('admin:matrix')) return <Navigate to="/quantri/quy-trinh-duyet" replace />;
   if (can('audit:read')) return <Navigate to="/quantri/audit" replace />;
+  if (can('admin:backup')) return <Navigate to="/quantri/sao-luu" replace />;
   return <Navigate to="/403" replace />;
 }
 
@@ -165,6 +168,7 @@ export function AppRoutes(): ReactNode {
       <Route path="/quantri/cong-ty" element={<Shell><CompaniesScreen /></Shell>} /> {/* ADM-06/07 */}
       <Route path="/quantri/quy-trinh-duyet" element={<Shell><MatrixScreen /></Shell>} /> {/* ADM-04 */}
       <Route path="/quantri/audit" element={<Shell><AuditLogScreen /></Shell>} /> {/* ADM-12 */}
+      <Route path="/quantri/sao-luu" element={<Shell><BackupScreen /></Shell>} /> {/* ADM-14 */}
       <Route path="/ca-nhan" element={<Shell><SettingsScreen /></Shell>} /> {/* PREF-01 */}
 
       <Route path="*" element={<NotFoundScreen />} />

@@ -1,0 +1,16 @@
+name: data-backup
+
+# Sao lưu dữ liệu mỗi 30 phút; bản cũ hơn 1 ngày bị job `backup` tự dọn.
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/v1/tasks/backup
+        run: |
+          curl -fsS -X POST "${{ vars.PUBLIC_URL }}/api/v1/tasks/backup" \
+            -H "x-task-token: ${{ secrets.TASK_TOKEN }}"

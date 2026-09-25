@@ -635,3 +635,12 @@ export interface TransitionResult {
   data: { _id: string; code: string; status: string; version: number };
   transition: { action: string; from: string; to: string; next_role: string | null };
 }
+
+/* ---------------- sao lưu dữ liệu (ADM-14) ---------------- */
+
+export interface BackupFile {
+  file: string;
+  key: string;
+  size: number;
+  created_at: string;
+}

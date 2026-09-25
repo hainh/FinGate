@@ -12,6 +12,7 @@ import { LoadingOutlined } from '@ant-design/icons';
 import { Badge, Dropdown, Input } from 'antd';
 import { useAuth, useUi, SCOPE_ALL } from '../app/store.tsx';
 import { useOverview, useUnreadCount } from '../app/queries.ts';
+import { apiData, openDownload } from '../app/api.ts';
 import { FgButton, FgText } from './primitives.tsx';
 import { useToast } from './pagekit.tsx';
 
@@ -87,8 +88,23 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
   const { data: overview } = useOverview();
   const { data: unread } = useUnreadCount();
   const { message } = useToast();
+  const [backupBusy, setBackupBusy] = useState(false);
 
   useEffect(() => setMobileOpen(false), [location.pathname]);
+
+  /** ADM-14 — tạo bản sao lưu ngay rồi mở link tải (nút ở sidebar). */
+  const runBackup = async (): Promise<void> => {
+    setBackupBusy(true);
+    try {
+      const created = await apiData<{ file: string }>('/system/backups', { method: 'POST', body: {} });
+      message.success('Đã tạo bản sao lưu — đang tải về…');
+      openDownload(`/system/backups/${encodeURIComponent(created.file)}`);
+    } catch (e) {
+      message.error((e as { problem?: { title?: string } }).problem?.title ?? 'Không tạo được bản sao lưu');
+    } finally {
+      setBackupBusy(false);
+    }
+  };
 
   const [viewportW, setViewportW] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1440));
   useEffect(() => {
@@ -174,6 +190,13 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
             </NavLink>
           ))}
         </nav>
+        {can('admin:backup') ? (
+          <div style={{ padding: 'var(--fg-space-3)', display: collapsed && !isOverlay ? 'none' : undefined }}>
+            <FgButton variant="soft" block loading={backupBusy} onClick={() => void runBackup()} aria-label="Sao lưu & tải dữ liệu">
+              ⤓ Sao lưu &amp; tải về
+            </FgButton>
+          </div>
+        ) : null}
         <div style={{ padding: 'var(--fg-space-3)', display: collapsed && !isOverlay ? 'none' : undefined }}>
           <FgText style="caption" color="muted">
             Nghiệp vụ {overview?.business_date ?? '—'}

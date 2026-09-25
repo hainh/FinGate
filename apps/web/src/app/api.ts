@@ -193,3 +193,16 @@ export async function downloadFile(path: string, body: Record<string, unknown>, 
   a.click();
   URL.revokeObjectURL(a.href);
 }
+
+/**
+ * Mở URL tải file bằng điều hướng trình duyệt — theo được 302 presigned của storage
+ * (S3/R2) mà `fetch` không đọc được do CORS. Dùng cho sao lưu dữ liệu.
+ */
+export function openDownload(path: string): void {
+  const a = document.createElement('a');
+  a.href = `${API_BASE}${path}`;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}

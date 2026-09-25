@@ -446,6 +446,7 @@ export const TASK_NAMES = [
   'check-tie',
   'archive',
   'cleanup',
+  'backup',
 ] as const;
 export type TaskName = (typeof TASK_NAMES)[number];
 

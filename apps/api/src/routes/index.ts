@@ -6,6 +6,7 @@ import { documentRoutes } from './documents.ts';
 import { dashboardRoutes } from './dashboard.ts';
 import { financeRoutes } from './finance.ts';
 import { adminRoutes } from './admin.ts';
+import { backupRoutes } from './backup.ts';
 
 export function apiRoutes(app: FastifyInstance): void {
   authRoutes(app);
@@ -13,4 +14,5 @@ export function apiRoutes(app: FastifyInstance): void {
   dashboardRoutes(app);
   financeRoutes(app);
   adminRoutes(app);
+  backupRoutes(app);
 }

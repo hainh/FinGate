@@ -212,3 +212,21 @@ gunzip -c deploy/backups/fingate-<stamp>.archive.gz \
 
 Sau restore: `pnpm check:tie` + mở 5 hồ sơ ngẫu nhiên.
 
+### 7.4 Sao lưu trong ứng dụng (mọi profile)
+
+Ngoài `mongodump` ở trên, app tự **dump logic** (EJSON canonical — giữ nguyên
+ObjectId/Date/Int64) ra `backups/fingate-YYYYMMDD-HHmmss-mmm.json.gz` qua
+`StorageAdapter`: Profile O ghi vào `UPLOAD_DIR`, cloud ghi R2/S3.
+
+- **Job `backup` mỗi 30'**: workflow `.github/workflows/data-backup.yml`
+  (`*/30 * * * *`) → `POST /api/v1/tasks/backup`; Profile O thêm cron
+  `*/30 * * * * curl -fsS -X POST http://localhost:8080/api/v1/tasks/backup -H "x-task-token: $TASK_TOKEN"`.
+- **Retain 1 ngày**: mỗi lần chạy job xoá bản cũ hơn 24h (`pruneBackups`).
+- **API (chỉ `admin:backup` — tài khoản Quản trị hệ thống)**:
+  - `GET  /api/v1/system/backups` → danh sách bản còn giữ
+  - `POST /api/v1/system/backups` → tạo ngay
+  - `GET  /api/v1/system/backups/:file` → tải bản (fs: bytes; s3: 302 presigned)
+- **UI**: nút **“⤓ Sao lưu & tải về”** ở sidebar (chỉ hiện với `admin:backup`)
+  tạo + tải ngay; màn **Quản trị → Sao lưu** (`/quantri/sao-luu`) liệt kê & tải lại bản cũ.
+
+

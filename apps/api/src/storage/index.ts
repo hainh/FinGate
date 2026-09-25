@@ -38,6 +38,14 @@ export interface StorageAdapter {
   readBytes?(key: string): Promise<Buffer>;
   remove(key: string): Promise<void>;
   usedBytes(prefix: string): Promise<number>;
+  /** liệt kê object theo prefix (dùng cho retention sao lưu). */
+  list(prefix: string): Promise<StorageObject[]>;
+}
+
+export interface StorageObject {
+  key: string;
+  size: number;
+  lastModified: Date;
 }
 
 export function attachmentKey(input: {
@@ -128,6 +136,20 @@ function createFsAdapter(): StorageAdapter {
     async remove(key) {
       await unlink(pathOf(key)).catch(() => undefined);
     },
+    async list(prefix) {
+      const { readdir, stat: st } = await import('node:fs/promises');
+      const clean = prefix.replace(/^[/\\]+/, '').replace(/[/\\]+$/, '');
+      const base = resolve(root, clean);
+      const entries = await readdir(base, { withFileTypes: true }).catch(() => []);
+      const out: StorageObject[] = [];
+      for (const e of entries) {
+        if (!e.isFile()) continue;
+        const info = await st(join(base, e.name)).catch(() => null);
+        if (!info) continue;
+        out.push({ key: `${clean}/${e.name}`, size: info.size, lastModified: info.mtime });
+      }
+      return out;
+    },
     async usedBytes(prefix) {
       const { readdir, stat: st } = await import('node:fs/promises');
       let total = 0;
@@ -203,6 +225,23 @@ function createS3Adapter(): StorageAdapter {
       const { DeleteObjectCommand } = await import('@aws-sdk/client-s3');
       const client = await clientPromise;
       await client.send(new DeleteObjectCommand({ Bucket: env.R2_BUCKET, Key: key })).catch(() => undefined);
+    },
+    async list(prefix) {
+      const { ListObjectsV2Command } = await import('@aws-sdk/client-s3');
+      const client = await clientPromise;
+      const out: StorageObject[] = [];
+      let token: string | undefined;
+      do {
+        const r = await client.send(
+          new ListObjectsV2Command({ Bucket: env.R2_BUCKET, Prefix: prefix, ContinuationToken: token }),
+        );
+        for (const o of r.Contents ?? []) {
+          if (!o.Key) continue;
+          out.push({ key: o.Key, size: o.Size ?? 0, lastModified: o.LastModified ?? new Date(0) });
+        }
+        token = r.NextContinuationToken;
+      } while (token);
+      return out;
     },
     async usedBytes(prefix) {
       const { ListObjectsV2Command } = await import('@aws-sdk/client-s3');

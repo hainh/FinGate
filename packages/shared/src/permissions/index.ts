@@ -37,6 +37,7 @@ export const PERMISSIONS = [
   'admin:matrix',
   'admin:settings',
   'admin:group_accounts',
+  'admin:backup',
   'audit:read',
 ] as const;
 
@@ -180,6 +181,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'admin:matrix',
     'admin:settings',
     'admin:group_accounts',
+    'admin:backup',
     'alert:config',
     'audit:read',
   ],
@@ -225,6 +227,7 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   'admin:matrix': 'Sửa ma trận duyệt',
   'admin:settings': 'Cấu hình hệ thống / công ty',
   'admin:group_accounts': 'Tài khoản tập đoàn',
+  'admin:backup': 'Sao lưu & tải dữ liệu',
   'audit:read': 'Xem audit log',
 };
 
@@ -246,7 +249,7 @@ export const PERMISSION_GROUPS: readonly PermissionGroup[] = [
   { key: 'report', label: 'Báo cáo', permissions: ['report:view', 'report:export'] },
   { key: 'alert', label: 'Cảnh báo', permissions: ['alert:config'] },
   { key: 'hr', label: 'Nhân sự', permissions: ['hr:invite', 'hr:disable', 'hr:transfer'] },
-  { key: 'admin', label: 'Quản trị hệ thống', permissions: ['admin:matrix', 'admin:settings', 'admin:group_accounts'] },
+  { key: 'admin', label: 'Quản trị hệ thống', permissions: ['admin:matrix', 'admin:settings', 'admin:group_accounts', 'admin:backup'] },
   { key: 'audit', label: 'Audit', permissions: ['audit:read'] },
 ];
 
