@@ -41,7 +41,7 @@ await withDb(async (_env, log) => {
   if (!yes) {
     log(`! Sẽ xoá ${total} document trong ${purge.length} collection, giữ ${KEEP.size} collection: ${[...KEEP].join(', ')}.`);
     log(`  ${purge.map((n) => `${n}=${before[n]}`).join(' · ')}`);
-    log('  Thêm --yes để xác nhận.');
+    log('  ⚠ CHƯA xoá gì cả. Thêm --yes để xác nhận.');
     return { aborted: true, documents: total };
   }
 

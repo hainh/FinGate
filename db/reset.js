@@ -18,8 +18,9 @@ await withDb(async (_env, log) => {
   const total = Object.values(before).reduce((a, b) => a + b, 0);
 
   if (!yes) {
-    log(`! Sẽ xoá ${total} document trong ${names.length} collection. Thêm --yes để xác nhận.`);
+    log(`! Sẽ xoá ${total} document trong ${names.length} collection.`);
     log(`  ${names.map((n) => `${n}=${before[n]}`).join(' · ')}`);
+    log('  ⚠ CHƯA xoá gì cả. Thêm --yes để xác nhận.');
     return { aborted: true, documents: total };
   }
 

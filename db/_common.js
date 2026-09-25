@@ -36,6 +36,10 @@ export async function withDb(fn) {
 
   try {
     const result = await fn(env, log);
+    if (result && typeof result === 'object' && result.aborted) {
+      process.exitCode = 1;
+      return result;
+    }
     log(`✓ xong${result ? ': ' + JSON.stringify(result) : ''}`);
     return result;
   } finally {
