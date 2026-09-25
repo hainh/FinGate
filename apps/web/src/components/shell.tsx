@@ -23,6 +23,8 @@ interface NavItem {
   perm?: string | string[];
   badge?: 'awaiting' | 'unread';
   mobile?: boolean;
+  /** Nhãn "Đang phát triển" — tính năng chưa hoàn thiện. */
+  dev?: boolean;
   match?: string[]; // đường dẫn con cùng nhóm
 }
 
@@ -33,10 +35,10 @@ const NAV: NavItem[] = [
   { to: '/chi', label: 'Chi', glyph: '↗', perm: 'doc:read', match: ['/chi'] },
   { to: '/thu', label: 'Thu', glyph: '↙', perm: 'doc:read', match: ['/thu'] },
   { to: '/ngan-hang/taikhoan', label: 'Ngân hàng', glyph: '▤', perm: 'bank:read', match: ['/ngan-hang', '/ngan-hang/khoan-vay'] },
-  { to: '/ngan-hang/dao-han', label: 'Đáo hạn', glyph: '⧗', mobile: true, perm: 'loan:read', match: ['/ngan-hang/dao-han'] },
-  { to: '/cong-no/phai-thu', label: 'Công nợ', glyph: '≡', perm: 'debt:read', match: ['/cong-no'] },
-  { to: '/dong-tien', label: 'Dòng tiền', glyph: '∿', mobile: true, perm: 'forecast:read', match: ['/dong-tien'] },
-  { to: '/baocao', label: 'Báo cáo', glyph: '☰', perm: 'report:view', match: ['/baocao'] },
+  { to: '/ngan-hang/dao-han', label: 'Đáo hạn', glyph: '⧗', mobile: true, perm: 'loan:read', dev: true, match: ['/ngan-hang/dao-han'] },
+  { to: '/cong-no/phai-thu', label: 'Công nợ', glyph: '≡', perm: 'debt:read', dev: true, match: ['/cong-no'] },
+  { to: '/dong-tien', label: 'Dòng tiền', glyph: '∿', mobile: true, perm: 'forecast:read', dev: true, match: ['/dong-tien'] },
+  { to: '/baocao', label: 'Báo cáo', glyph: '☰', perm: 'report:view', dev: true, match: ['/baocao'] },
   { to: '/ban-tin/ngay', label: 'Bản tin', glyph: '✉', perm: 'report:view', match: ['/ban-tin'] },
   // Ai được vào BẤT KỲ tab Quản trị nào (nhân sự · công ty · ma trận · audit) đều thấy mục này.
   // KTT sau khi bỏ quyền nhân sự vẫn giữ `audit:read` → vẫn xem được audit log.
@@ -157,6 +159,13 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
                 {n.glyph}
               </span>
               <span style={{ display: collapsed && !isOverlay ? 'none' : undefined }}>{n.label}</span>
+              {n.dev ? (
+                collapsed && !isOverlay ? (
+                  <span className="fg-rail-dev-dot" title="Đang phát triển" aria-label="Đang phát triển" />
+                ) : (
+                  <span className="fg-rail-dev">Đang phát triển</span>
+                )
+              ) : null}
               {badgeCount(n.badge) > 0 ? (
                 <span className="fg-rail-badge" aria-label={`${badgeCount(n.badge)} mục chờ`}>
                   {badgeCount(n.badge)}

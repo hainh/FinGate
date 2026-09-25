@@ -169,6 +169,28 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.fg-rail-dev {
+  margin-inline-start: auto;
+  padding: 1px 8px;
+  border-radius: var(--fg-radius-full);
+  background: var(--fg-attention-100);
+  color: var(--fg-attention-700);
+  font-size: 10px;
+  font-weight: var(--fg-weight-medium);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex: none;
+}
+
+.fg-rail-dev-dot {
+  margin-inline-start: auto;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--fg-radius-full);
+  background: var(--fg-attention-500);
+  flex: none;
+}
+
 .fg-main-wrap {
   flex: 1;
   margin-inline-start: var(--fg-rail-w);
