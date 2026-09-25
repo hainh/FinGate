@@ -287,7 +287,7 @@ export const decisionPack = z.object({
     group_managed: z.boolean(),
   }),
   q6_impact: z.object({
-    available_now: moneyWire,
+    balance_before: moneyWire,
     balance_after: moneyWire,
     min_balance: moneyWire,
     breach: z.boolean(),

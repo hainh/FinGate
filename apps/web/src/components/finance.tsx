@@ -322,8 +322,8 @@ export function FgDecisionPack({
           {pack.q5_source.account_label ?? '—'}
         </SumRow>
         {pack.q5_source.group_account_label ? <SumRow label="TK Tập đoàn phụ trách">{pack.q5_source.group_account_label}</SumRow> : null}
-        <SumRow label="Số dư khả dụng ngay">
-          <FgMoney value={w(pack.q6_impact.available_now)} mode="full" />
+        <SumRow label="Số dư trước giao dịch">
+          <FgMoney value={w(pack.q6_impact.balance_before)} mode="full" />
         </SumRow>
         <SumRow label="Sau giao dịch">
           <FgMoney value={bal} mode="full" style={{ color: pack.q6_impact.breach ? 'var(--fg-status-danger-text)' : isInflow ? 'var(--fg-status-success-text)' : undefined, fontWeight: 500 }} />

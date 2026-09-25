@@ -581,6 +581,41 @@ export async function maturityLadder(
  * 4. Decision-pack — 7 câu hỏi, server tính 100% (§9.2, §19.5-1)
  * ================================================================== */
 
+/**
+ * Số dư tài khoản ngay TRƯỚC và SAU khi phiếu đã thực thi ghi sổ — cộng dồn sổ cái
+ * tới đúng bút toán của phiếu (theo `date` rồi `created_at`). Trả `null` nếu phiếu
+ * chưa có bút toán (đồng bộ sổ cái best-effort lỗi, chờ reconcile).
+ */
+async function balanceAroundExecution(accountId: string, docId: string): Promise<{ before: bigint; after: bigint } | null> {
+  const entry = await Models.CashEntry.findOne({ account_id: oid(accountId), document_id: oid(docId), mirror_of: null })
+    .select({ date: 1, created_at: 1, direction: 1, amount_minor: 1 })
+    .lean<{ date?: string; created_at?: Date; direction?: string; amount_minor?: unknown } | null>();
+  if (!entry || !entry.date) return null;
+
+  const rows = await Models.CashEntry.aggregate([
+    {
+      $match: {
+        account_id: oid(accountId),
+        $or: [
+          { date: { $lt: String(entry.date) } },
+          { date: String(entry.date), created_at: { $lte: entry.created_at ?? new Date(0) } },
+        ],
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        in_minor: { $sum: { $cond: [{ $eq: ['$direction', 'in'] }, '$amount_minor', 0] } },
+        out_minor: { $sum: { $cond: [{ $eq: ['$direction', 'out'] }, '$amount_minor', 0] } },
+      },
+    },
+  ] as never[]);
+  const agg = (rows as { in_minor?: unknown; out_minor?: unknown }[])[0];
+  const after = asBigInt(agg?.in_minor) - asBigInt(agg?.out_minor);
+  const signed = (entry.direction === 'in' ? 1n : -1n) * asBigInt(entry.amount_minor);
+  return { before: after - signed, after };
+}
+
 export async function decisionPack(doc: Record<string, unknown>, canReadTax: boolean): Promise<Record<string, unknown>> {
   const amount = wireOf(doc.amount) ?? wire(0n);
   const minor = asBigInt(amount.minor);
@@ -605,10 +640,22 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
   const minBalance = asBigInt(account?.min_balance_minor ?? 0n);
   // phiếu thu CỘNG tiền, phiếu chi / chuyển nội bộ TRỪ tiền vào tài khoản nguồn
   const isInflow = doc.kind === 'income';
-  // Phiếu đã thực thi (paid) → tiền đã vào sổ cái nên `available` đã gồm giao dịch;
-  // không cộng/trừ thêm lần nữa, tránh đếm trùng số dư sau giao dịch.
-  const executed = doc.status === 'paid';
-  const after = executed ? available : isInflow ? available + minor : available - minor;
+  const delta = isInflow ? minor : -minor;
+  // Số dư tại thời điểm TRƯỚC và SAU thực thi: phiếu đã ghi sổ (`paid`) → lấy đúng
+  // bút toán trong sổ cái; còn lại → số dư khả dụng hiện tại + dự kiến sau thực thi.
+  let balanceBefore = available;
+  let after = available + delta;
+  if (doc.status === 'paid' && source.account_id) {
+    const around = await balanceAroundExecution(String(source.account_id), String(doc._id));
+    if (around) {
+      balanceBefore = around.before;
+      after = around.after;
+    } else {
+      // chưa có bút toán (đồng bộ sổ cái best-effort lỗi) → suy từ số dư hiện tại
+      balanceBefore = available - delta;
+      after = available;
+    }
+  }
   const payee = (doc.payee ?? {}) as { name?: string; tax_code?: string | null; is_internal?: boolean; bank_name?: string | null };
   const contract = (doc.contract ?? {}) as { code?: string | null; value?: unknown };
   const limit = asBigInt(budget?.limit_minor ?? 0n);
@@ -642,7 +689,7 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
       group_managed: Boolean(source.group_managed),
     },
     q6_impact: {
-      available_now: wire(available, amount.currency),
+      balance_before: wire(balanceBefore, amount.currency),
       balance_after: wire(after, amount.currency),
       min_balance: wire(minBalance, amount.currency),
       breach: !isInflow && after < minBalance,

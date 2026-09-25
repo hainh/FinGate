@@ -491,7 +491,7 @@ draft → pending.ktt → pending.pgd → pending.gd → pending.chairman
 
 ### 9.2 Decision-pack — 7 câu hỏi §XXVII
 
-`GET /v1/documents/{id}/decision-pack` trả **server-computed**: `payee · amount(+USD) · purpose+contract · evidence(required/present/missing) · source(account masked, group_managed) · impact(available_now, balance_after, min_balance, breach) · plan(budget, used/limit, percent, period)`.
+`GET /v1/documents/{id}/decision-pack` trả **server-computed**: `payee · amount(+USD) · purpose+contract · evidence(required/present/missing) · source(account masked, group_managed) · impact(balance_before, balance_after, min_balance, breach) · plan(budget, used/limit, percent, period)`.
 → `DOC-01 tab Tóm tắt` + `OVL-02`. **Zero** logic tiền/ngân sách ở FE.
 
 ### 9.3 Báo cáo & bản tin
