@@ -106,6 +106,7 @@ pnpm start                    # chạy API production từ apps/api/dist
 pnpm db:rebuild-balances      # dựng lại số dư tổng hợp
 pnpm db:rebuild-audit         # dựng lại audit_log từ history[]
 pnpm db:reset                 # xoá sạch dữ liệu app (thêm --yes để xác nhận)
+pnpm db:reset-keep-users      # reset dữ liệu nghiệp vụ, giữ user + cấu hình tổ chức (số dư bank về 0)
 pnpm db:bootstrap             # tạo tài khoản quản trị đầu tiên nếu DB rỗng
 pnpm db:archive               # lưu trữ dữ liệu cũ
 pnpm check:tie                # kiểm tra cân đối

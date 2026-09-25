@@ -23,6 +23,7 @@
     "db:indexes": "node db/apply-indexes.js",
     "db:seed": "node db/seed.js",
     "db:reset": "node db/reset.js",
+    "db:reset-keep-users": "node db/reset-keep-users.js",
     "db:bootstrap": "node db/bootstrap.js",
     "db:rebuild-balances": "node db/rebuild-balances.js",
     "db:rebuild-audit": "node db/rebuild-audit.js",
