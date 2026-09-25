@@ -30,7 +30,7 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { to: '/dashboard', label: 'Tổng quan', glyph: '◧', mobile: true, perm: 'doc:read', match: ['/dashboard', '/hom-nay'] },
-  { to: '/cho-toi-duyet', label: 'Chờ tôi duyệt', glyph: '✍', badge: 'awaiting', mobile: true, perm: 'approval:act', match: ['/cho-toi-duyet', '/toi-da-duyet', '/can-bo-sung'] },
+  { to: '/cho-toi-duyet', label: 'Chờ tôi duyệt', glyph: '✍', badge: 'awaiting', mobile: true, perm: ['approval:act', 'payment:mark'], match: ['/cho-toi-duyet', '/toi-da-duyet', '/can-bo-sung'] },
   { to: '/can-xu-ly', label: 'Cần xử lý', glyph: '⚑', badge: 'unread', mobile: true, perm: 'doc:read', match: ['/can-xu-ly'] },
   { to: '/chi', label: 'Chi', glyph: '↗', perm: 'doc:read', match: ['/chi'] },
   { to: '/thu', label: 'Thu', glyph: '↙', perm: 'doc:read', match: ['/thu'] },

@@ -336,8 +336,8 @@ export function installHttpLayer(app: FastifyInstance): void {
     const config = (req.routeOptions as unknown as { config?: RouteConfig }).config;
     if (!config || config.perms === undefined || config.perms === 'public') return;
     if (isNonApiPath(req.url)) return;
-    if (!config.perms.length) return;
-    requirePerm(req, ...config.perms);
+    if (config.perms.length) requirePerm(req, ...config.perms);
+    if (config.permsAny?.length) requirePermAny(req, ...config.permsAny);
   });
 
   app.setErrorHandler((err: unknown, req: FastifyRequest, reply: FastifyReply) => {
@@ -429,6 +429,11 @@ function traceIdOf(req: FastifyRequest): string {
 
 export interface RouteConfig {
   perms: Permission[] | 'public';
+  /**
+   * Truy cập khi có BẤT KỲ quyền nào (OR) — dùng cho route phục vụ nhiều vai trò
+   * (vd `/queue` cho cả người duyệt lẫn kế toán thực thi). Kết hợp AND với `perms`.
+   */
+  permsAny?: Permission[];
   screen?: string;
   summary?: string;
   /** hành động nhạy cảm → bắt buộc step-up trong body.verify (arch §7.2) */

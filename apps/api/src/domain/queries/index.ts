@@ -45,6 +45,9 @@ export const DECISION_STATUSES = [
   'pending.chairman',
 ] as const;
 
+/** Phiếu chi đã duyệt xong, đang nằm ở bàn kế toán chờ thực thi (chi). */
+export const EXECUTION_STATUSES = ['approved', 'processing'] as const;
+
 export const OPEN_STATUSES = [...DECISION_STATUSES, 'draft', 'changes_requested', 'approved', 'processing'];
 
 export function wire(minor: bigint, currency = 'VND', decimals = 0): WireAmount {
@@ -114,6 +117,11 @@ export interface QueueQuery {
   userId: string;
   /** vai trò đang hoạt động — dùng cho bước duyệt chưa gán người (`user_id: null`). */
   role?: Role;
+  /**
+   * Người gọi có quyền ghi nhận thanh toán (`payment:mark`) → hàng chờ "việc của tôi"
+   * gồm thêm phiếu chi đã duyệt xong đang chờ thực thi (bàn kế toán viên/trưởng).
+   */
+  canPay?: boolean;
   kind?: DocKind;
   status?: string | string[];
   companyId?: string;
@@ -193,6 +201,18 @@ function lowestPendingOwnerFilter(userId: string, role?: Role): Record<string, u
   };
 }
 
+/** Phiếu chi đã duyệt xong đang chờ kế toán thực thi (không còn bước duyệt nào). */
+function executionQueueFilter(): Record<string, unknown> {
+  return { kind: 'spend', status: { $in: [...EXECUTION_STATUSES] } };
+}
+
+/** "Việc ở bàn tôi" = bước duyệt của tôi là cấp thấp nhất còn chờ, + (nếu được chi) phiếu chờ thực thi. */
+function toApproveFilter(input: Pick<QueueQuery, 'userId' | 'role' | 'canPay'>): Record<string, unknown> {
+  const parts: Record<string, unknown>[] = [lowestPendingOwnerFilter(input.userId, input.role)];
+  if (input.canPay) parts.push(executionQueueFilter());
+  return parts.length > 1 ? { $or: parts } : parts[0]!;
+}
+
 export function queueFilter(input: QueueQuery): Record<string, unknown> {
   const filter: Record<string, unknown> = {};
   if (input.kind) filter.kind = input.kind;
@@ -202,8 +222,16 @@ export function queueFilter(input: QueueQuery): Record<string, unknown> {
   if (input.missingEvidenceOnly) filter['evidence.missing.0'] = { $exists: true };
   if (input.mine === 'created') filter.created_by = input.userId;
   if (input.mine === 'to_approve') {
-    Object.assign(filter, lowestPendingOwnerFilter(input.userId, input.role));
-    if (!input.status) filter.status = { $in: [...DECISION_STATUSES] };
+    // gộp bằng `$and` để không đè lên `$or` của ô tìm kiếm (input.q) ở dưới.
+    const cond = toApproveFilter(input);
+    if ('$or' in cond) {
+      const and = (filter.$and as Record<string, unknown>[] | undefined) ?? [];
+      and.push(cond);
+      filter.$and = and;
+    } else {
+      Object.assign(filter, cond);
+    }
+    if (!input.status) filter.status = { $in: [...DECISION_STATUSES, ...(input.canPay ? EXECUTION_STATUSES : [])] };
   }
   if (input.mine === 'approved_by_me') {
     filter['approval.steps'] = { $elemMatch: { user_id: input.userId, state: 'done' } };
@@ -314,7 +342,12 @@ async function decorateRows(rows: Record<string, unknown>[]): Promise<QueueRow[]
       status_label: statusLabel(status),
       overdue: Boolean(r.overdue) || (!!sla && sla < new Date() && DECISION_STATUSES.includes(status as never)),
       waiting_days: waitingDays(submitted ? new Date(String(submitted)) : null),
-      current_owner: current ? (ROLE_LABEL[current.role] ?? current.role) : null,
+      // phiếu chi đã duyệt xong (không còn bước chờ) → đang ở bàn kế toán chờ thực thi
+      current_owner: current
+        ? (ROLE_LABEL[current.role] ?? current.role)
+        : (EXECUTION_STATUSES as readonly string[]).includes(status)
+          ? ROLE_LABEL.staff
+          : null,
       owner_name: current?.user_id ? (uname.get(String(current.user_id)) ?? null) : null,
       fast_tracked_by: early.length ? early.join(', ') : null,
       category_name: r.category_id ? (catname.get(String(r.category_id)) ?? null) : null,
@@ -351,11 +384,16 @@ export function docHref(kind: string, id: string): string {
  * 2. Badge & số dư
  * ================================================================== */
 
-export async function awaitingBadge(scope: ScopeLike, userId: string, role?: Role): Promise<{ count: number; total_minor: bigint }> {
-  return cacheThrough(`badge:${userId}:${role ?? ''}`, async () => {
+export async function awaitingBadge(
+  scope: ScopeLike,
+  userId: string,
+  role?: Role,
+  canPay = false,
+): Promise<{ count: number; total_minor: bigint }> {
+  return cacheThrough(`badge:${userId}:${role ?? ''}:${canPay ? 'pay' : ''}`, async () => {
     const f = withScope(scopeOf(scope), {
-      ...lowestPendingOwnerFilter(userId, role),
-      status: { $in: [...DECISION_STATUSES] },
+      ...toApproveFilter({ userId, role, canPay }),
+      status: { $in: [...DECISION_STATUSES, ...(canPay ? EXECUTION_STATUSES : [])] },
     });
     const [count, rows] = await Promise.all([
       Models.Document.countDocuments(f as never),
@@ -740,17 +778,21 @@ export function weekdayVi(iso: string): string {
  * 6. DASH-01 — overview: MỘT endpoint gộp, Promise.all, ETag ở route (§8.3)
  * ================================================================== */
 
-export async function dashboardOverview(scope: ScopeLike, userId: string, role?: Role): Promise<Record<string, unknown>> {
+export async function dashboardOverview(scope: ScopeLike, userId: string, role?: Role, canPay = false): Promise<Record<string, unknown>> {
   const scopeKey = scope.companyIds === null ? 'all' : scope.companyIds.join(',');
-  return cacheThrough(`overview:${userId}:${role ?? ''}:${scopeKey}:${today()}`, () => buildOverview(scope, userId, role), 20_000);
+  return cacheThrough(
+    `overview:${userId}:${role ?? ''}:${scopeKey}:${today()}:${canPay ? 'pay' : ''}`,
+    () => buildOverview(scope, userId, role, canPay),
+    20_000,
+  );
 }
 
-async function buildOverview(scope: ScopeLike, userId: string, role?: Role): Promise<Record<string, unknown>> {
+async function buildOverview(scope: ScopeLike, userId: string, role?: Role, canPay = false): Promise<Record<string, unknown>> {
   const day = today();
   const [accounts, awaiting, queue, income, spend, overdue, maturities, missing, unread] = await Promise.all([
     accountSnapshots(scope),
-    awaitingBadge(scope, userId, role),
-    queryQueue({ scope, userId, role, mine: 'to_approve', limit: 8, sort: '-waiting' }),
+    awaitingBadge(scope, userId, role, canPay),
+    queryQueue({ scope, userId, role, canPay, mine: 'to_approve', limit: 8, sort: '-waiting' }),
     sumByDateAndKind(scope, 'income', day),
     sumByDateAndKind(scope, 'spend', day),
     overdueReceivable(scope),

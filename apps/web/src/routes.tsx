@@ -59,9 +59,9 @@ function Guard({ children }: { children: ReactNode }): ReactNode {
  * cũng bị đưa về trang phù hợp, thay vì 403 lửng hoặc skeleton treo.
  * (Khu `/quantri` không khóa ở đây — từng màn tự ẩn nút và server vẫn kiểm quyền.)
  */
-const PATH_PERMS: { prefix: string; perm: string }[] = [
+const PATH_PERMS: { prefix: string; perm: string | string[] }[] = [
   { prefix: '/dashboard', perm: 'doc:read' },
-  { prefix: '/cho-toi-duyet', perm: 'approval:act' },
+  { prefix: '/cho-toi-duyet', perm: ['approval:act', 'payment:mark'] },
   { prefix: '/toi-da-duyet', perm: 'approval:act' },
   { prefix: '/can-bo-sung', perm: 'approval:act' },
   { prefix: '/can-xu-ly', perm: 'doc:read' },
@@ -90,7 +90,8 @@ function ShellInner({ children }: { children: ReactNode }): ReactNode {
   const { can } = useAuth();
   const location = useLocation();
   const need = PATH_PERMS.find((p) => location.pathname.startsWith(p.prefix))?.perm;
-  if (need && !can(need)) {
+  const allowed = !need || (Array.isArray(need) ? need.some((p) => can(p)) : can(need));
+  if (!allowed) {
     // Tài khoản quản lý thuần (không doc:read) về khu Quản trị; còn lại về Tổng quan.
     return <Navigate to={can('doc:read') ? '/dashboard' : '/quantri'} replace />;
   }

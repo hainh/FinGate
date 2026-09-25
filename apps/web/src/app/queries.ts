@@ -46,8 +46,8 @@ export function useQueue(params: { limit?: number } = {}, enabled = true) {
   const { scope, can } = useAuth();
   return useQuery({
     queryKey: ['queue', scope, params],
-    // Tài khoản không có quyền duyệt (vd kế toán viên) không gọi hàng chờ — tránh 403 vô nghĩa.
-    enabled: enabled && can('approval:act'),
+    // Hàng chờ phục vụ cả người duyệt (approval:act) lẫn kế toán thực thi (payment:mark).
+    enabled: enabled && (can('approval:act') || can('payment:mark')),
     queryFn: () => apiCall<ListResult<QueueRow>>('/queue', { query: { scope, ...params } }),
   });
 }

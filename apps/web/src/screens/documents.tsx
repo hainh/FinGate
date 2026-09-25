@@ -52,6 +52,15 @@ const MINE_OPTIONS = [
   { value: 'approved_by_me', label: 'Tôi đã duyệt' },
 ];
 
+/** CHI-01 — swimlane màn Chi: "đã duyệt chờ chi" lên đầu cho kế toán thực thi. */
+const SPEND_LANES = [
+  { key: 'cho-chi', title: 'Đã duyệt — chờ chi', statuses: ['approved', 'processing'] },
+  { key: 'cho-duyet', title: 'Đang chờ duyệt', statuses: ['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'] },
+  { key: 'nhap', title: 'Nháp / cần bổ sung / từ chối', statuses: ['draft', 'changes_requested', 'rejected'] },
+  { key: 'da-chi', title: 'Đã chi', statuses: ['paid'] },
+  { key: 'khac', title: 'Hủy / hết hiệu lực', statuses: ['cancelled', 'expired', 'overdue'] },
+];
+
 export function useDocColumns(sortable = false): TableColumnsType<QueueRow> {
   return useMemo(
     () =>
@@ -164,9 +173,23 @@ export interface DocListConfig {
   createLabel?: string;
   /** sắp xếp trực tiếp trên cột bảng (ẩn dropdown "Sắp xếp" ở thanh lọc). */
   sortOnTable?: boolean;
+  /**
+   * Chế độ swimlane: nhóm hồ sơ theo trạng thái thành các khối, khối đầu hiển thị trên
+   * cùng (vd màn Chi: "Đã duyệt — chờ chi" lên đầu cho kế toán). Bỏ lọc trạng thái.
+   */
+  swimlanes?: { key: string; title: string; statuses: string[] }[];
 }
 
-export function DocListScreen({ title, source, fixed = {}, bulk, createHref, createLabel, sortOnTable = false }: DocListConfig): ReactNode {
+export function DocListScreen({
+  title,
+  source,
+  fixed = {},
+  bulk,
+  createHref,
+  createLabel,
+  sortOnTable = false,
+  swimlanes,
+}: DocListConfig): ReactNode {
   const { can } = useAuth();
   const canCreate = can('doc:create');
   const [params, setParams] = useUrlSearchParamsShim();
@@ -195,14 +218,15 @@ export function DocListScreen({ title, source, fixed = {}, bulk, createHref, cre
     () => ({
       ...fixed,
       q: qDebounced || undefined,
-      status: get('status') || (fixed.status as DocListFilters['status']) || undefined,
+      // chế độ swimlane tự nhóm theo trạng thái → bỏ lọc trạng thái để mọi lane có dữ liệu
+      status: swimlanes ? undefined : get('status') || (fixed.status as DocListFilters['status']) || undefined,
       mine: (get('mine') as DocListFilters['mine']) || fixed.mine,
       sort: get('sort') || fixed.sort || '-waiting',
       overdue_only: fixed.overdue_only,
       limit: 100,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [qDebounced, get('status'), get('mine'), get('sort'), fixed],
+    [qDebounced, get('status'), get('mine'), get('sort'), fixed, swimlanes],
   );
 
   const queue = useQueue({ limit: 100 }, source === 'queue');
@@ -214,7 +238,8 @@ export function DocListScreen({ title, source, fixed = {}, bulk, createHref, cre
   const [bulkOpen, setBulkOpen] = useState(false);
   const anyFilter = Boolean(qDebounced || get('status') || get('mine'));
   const columns = useDocColumns(sortOnTable);
-  const selectable = Boolean(bulk);
+  // Duyệt hàng loạt chỉ dành cho người có quyền duyệt; kế toán thực thi không chọn bulk.
+  const selectable = Boolean(bulk) && can('approval:act');
 
   const selectedList = Object.values(selected);
   const selectedTotal = useMemo(
@@ -236,7 +261,9 @@ export function DocListScreen({ title, source, fixed = {}, bulk, createHref, cre
       />
 
       <div className="fg-filterbar">
-        <FgSelect ariaLabel="Lọc theo trạng thái" options={STATUS_OPTIONS} value={get('status')} onChange={(v) => setFilter('status', v ?? '')} style={{ width: 220 }} />
+        {swimlanes ? null : (
+          <FgSelect ariaLabel="Lọc theo trạng thái" options={STATUS_OPTIONS} value={get('status')} onChange={(v) => setFilter('status', v ?? '')} style={{ width: 220 }} />
+        )}
         {source === 'documents' ? (
           <FgSelect ariaLabel="Phạm vi hồ sơ" options={MINE_OPTIONS} value={get('mine')} onChange={(v) => setFilter('mine', v ?? '')} style={{ width: 170 }} />
         ) : null}
@@ -297,55 +324,94 @@ export function DocListScreen({ title, source, fixed = {}, bulk, createHref, cre
                 />
               </div>
             );
+          const tableColumns = selectable
+            ? ([
+                {
+                  key: 'sel',
+                  width: 44,
+                  render: (_v: unknown, r: QueueRow) => (
+                    <input
+                      type="checkbox"
+                      aria-label={`Chọn ${r.code}`}
+                      style={{ width: 18, height: 18, accentColor: 'var(--fg-action-primary)', cursor: 'pointer' }}
+                      checked={!!selected[r._id]}
+                      onChange={(e) =>
+                        setSelected((s) => {
+                          const n = { ...s };
+                          if (e.target.checked) n[r._id] = r;
+                          else delete n[r._id];
+                          return n;
+                        })
+                      }
+                    />
+                  ),
+                },
+                ...columns,
+              ] as TableColumnsType<QueueRow>)
+            : columns;
+
+          const renderTable = (list: QueueRow[], footer?: ReactNode) => (
+            <div className="fg-card" style={{ padding: 0, overflow: 'hidden' }}>
+              <FgTable<QueueRow>
+                rowKey="_id"
+                columns={tableColumns}
+                dataSource={list}
+                onRow={(r) => ({
+                  onClick: (e) => {
+                    if ((e.target as HTMLElement).closest('a,input,button')) return;
+                    window.location.href = deepLink(r);
+                  },
+                  style: { cursor: 'pointer' },
+                })}
+              />
+              {footer}
+            </div>
+          );
+
+          // Swimlane: nhóm theo trạng thái; khối đầu (đã duyệt chờ chi) nằm trên cùng.
+          if (swimlanes) {
+            const covered = new Set(swimlanes.flatMap((l) => l.statuses));
+            const groups: { key: string; title: string; items: QueueRow[] }[] = swimlanes.map((l) => ({
+              key: l.key,
+              title: l.title,
+              items: rows.filter((r) => l.statuses.includes(r.status)),
+            }));
+            const others = rows.filter((r) => !covered.has(r.status));
+            if (others.length) groups.push({ key: '__other__', title: 'Khác', items: others });
+            return (
+              <>
+                {groups
+                  .filter((g) => g.items.length)
+                  .map((g) => (
+                    <section key={g.key} style={{ marginBottom: 'var(--fg-space-5)' }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 'var(--fg-space-2)' }}>
+                        <FgText style="h4">{g.title}</FgText>
+                        <FgText style="bodyS" color="muted">
+                          {g.items.length} hồ sơ ·{' '}
+                          <span className="fg-num">
+                            {formatMoney(sum(g.items.map((r) => money(r.amount as { minor: unknown; currency?: string })), 'VND'), { mode: 'compact' })}
+                          </span>
+                        </FgText>
+                      </div>
+                      {renderTable(g.items)}
+                    </section>
+                  ))}
+              </>
+            );
+          }
+
           return (
             <>
-              <div className="fg-card" style={{ padding: 0, overflow: 'hidden' }}>
-                <FgTable<QueueRow>
-                  rowKey="_id"
-                  columns={
-                    selectable
-                      ? ([
-                          {
-                            key: 'sel',
-                            width: 44,
-                            render: (_v: unknown, r: QueueRow) => (
-                              <input
-                                type="checkbox"
-                                aria-label={`Chọn ${r.code}`}
-                                style={{ width: 18, height: 18, accentColor: 'var(--fg-action-primary)', cursor: 'pointer' }}
-                                checked={!!selected[r._id]}
-                                onChange={(e) =>
-                                  setSelected((s) => {
-                                    const n = { ...s };
-                                    if (e.target.checked) n[r._id] = r;
-                                    else delete n[r._id];
-                                    return n;
-                                  })
-                                }
-                              />
-                            ),
-                          },
-                          ...columns,
-                        ] as TableColumnsType<QueueRow>)
-                      : columns
-                  }
-                  dataSource={rows}
-                  onRow={(r) => ({
-                    onClick: (e) => {
-                      if ((e.target as HTMLElement).closest('a,input,button')) return;
-                      window.location.href = deepLink(r);
-                    },
-                    style: { cursor: 'pointer' },
-                  })}
-                />
-                {data.summary ? (
+              {renderTable(
+                rows,
+                data.summary ? (
                   <div style={{ padding: 'var(--fg-space-3) var(--fg-space-5)', borderTop: '1px solid var(--fg-border-subtle)' }}>
                     <FgText style="bodyS" color="muted">
                       {data.summary.count} hồ sơ · tổng <span className="fg-num">{data.summary.compact}</span> đang chờ
                     </FgText>
                   </div>
-                ) : null}
-              </div>
+                ) : null,
+              )}
 
               {selectable && selectedList.length ? (
                 <div className="fg-bulkbar" role="region" aria-label="Thao tác hàng loạt">
@@ -424,9 +490,19 @@ export function ChangesRequestedScreen(): ReactNode {
   return <DocListScreen title="Hồ sơ cần bổ sung" source="documents" fixed={{ status: 'changes_requested' }} />;
 }
 
-/** CHI-01 — danh sách chi. */
+/** CHI-01 — danh sách chi (swimlane: đã duyệt chờ chi lên đầu cho kế toán). */
 export function SpendListScreen(): ReactNode {
-  return <DocListScreen title="Phiếu chi" source="documents" fixed={{ kind: 'spend' }} createHref="/chi/moi" createLabel="+ Đề nghị chi" sortOnTable />;
+  return (
+    <DocListScreen
+      title="Phiếu chi"
+      source="documents"
+      fixed={{ kind: 'spend' }}
+      createHref="/chi/moi"
+      createLabel="+ Đề nghị chi"
+      sortOnTable
+      swimlanes={SPEND_LANES}
+    />
+  );
 }
 
 /** CHI-04 — ghim pending.* (cùng khung, filter ghim qua URL mặc định). */

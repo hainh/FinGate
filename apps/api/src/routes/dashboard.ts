@@ -35,7 +35,7 @@ export function dashboardRoutes(app: FastifyInstance): void {
         const actor = requireActor(req);
         const scope = requireScope(req);
         validate(dashboardQuery, req.query);
-        const data = await dashboardOverview(scope, actor.user_id, actor.role);
+        const data = await dashboardOverview(scope, actor.user_id, actor.role, actor.permissions.includes('payment:mark'));
         return ok(reply, { data }, { maxAge: 15, etag: `ov-${actor.user_id}-${today()}`, staleWhileRevalidate: 30 });
       },
     }),
@@ -52,7 +52,7 @@ export function dashboardRoutes(app: FastifyInstance): void {
         const scope = requireScope(req);
         const [accounts, awaiting, mat] = await Promise.all([
           accountSnapshots(scope),
-          awaitingBadge(scope, actor.user_id, actor.role),
+          awaitingBadge(scope, actor.user_id, actor.role, actor.permissions.includes('payment:mark')),
           maturityLadder(scope, { horizonDays: 30 }),
         ]);
         const total = accounts.reduce((a, x) => a + x.available, 0n);

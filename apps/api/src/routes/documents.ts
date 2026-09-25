@@ -90,6 +90,8 @@ export function documentRoutes(app: FastifyInstance): void {
         const { items, total } = await queryQueue({
           scope,
           userId: actor.user_id,
+          role: actor.role,
+          canPay: actor.permissions.includes('payment:mark'),
           kind: q.kind,
           status: q.status as string[] | string | undefined,
           companyId: q.company_id,
@@ -129,22 +131,32 @@ export function documentRoutes(app: FastifyInstance): void {
     }),
   );
 
-  /** APPR-01 — hàng chờ của chính tôi. */
+  /**
+   * APPR-01 — hàng chờ của chính tôi: hồ sơ tới lượt tôi duyệt, VÀ (với kế toán có
+   * `payment:mark`) phiếu chi đã duyệt xong đang chờ thực thi.
+   */
   app.route(
     defineRoute({
       method: 'GET',
       url: '/queue',
-      config: { perms: ['approval:act'] as Permission[], screen: 'APPR-01', summary: 'Chờ tôi duyệt' },
+      config: {
+        perms: [] as Permission[],
+        permsAny: ['approval:act', 'payment:mark'] as Permission[],
+        screen: 'APPR-01',
+        summary: 'Chờ tôi duyệt / chờ tôi thực thi',
+      },
       schema: { tags: ['documents'], querystring: documentListQuerySchema },
       handler: async (req, reply) => {
         const actor = requireActor(req);
         const scope = requireScope(req);
         const q = validate(documentListQuery, req.query);
+        const canPay = actor.permissions.includes('payment:mark');
         const [{ items, total }, badge] = await Promise.all([
           queryQueue({
             scope,
             userId: actor.user_id,
             role: actor.role,
+            canPay,
             mine: 'to_approve',
             kind: q.kind,
             companyId: q.company_id,
@@ -153,7 +165,7 @@ export function documentRoutes(app: FastifyInstance): void {
             sort: q.sort ?? '-waiting',
             limit: q.limit,
           }),
-          awaitingBadge(scope, actor.user_id, actor.role),
+          awaitingBadge(scope, actor.user_id, actor.role, canPay),
         ]);
         return ok(
           reply,
@@ -202,7 +214,15 @@ export function documentRoutes(app: FastifyInstance): void {
           queryQueue({ scope, userId: actor.user_id, overdueOnly: true, limit: 50 }),
           // bị cấp trên yêu cầu bổ sung → người lập (kế toán viên) phải sửa & gửi lại
           queryQueue({ scope, userId: actor.user_id, mine: 'created', status: 'changes_requested', limit: 50, sort: '-created_at' }),
-          queryQueue({ scope, userId: actor.user_id, role: actor.role, mine: 'to_approve', limit: 50, sort: '-waiting' }),
+          queryQueue({
+            scope,
+            userId: actor.user_id,
+            role: actor.role,
+            canPay: actor.permissions.includes('payment:mark'),
+            mine: 'to_approve',
+            limit: 50,
+            sort: '-waiting',
+          }),
         ]);
         const groups = [
           { key: 'changes_requested', title: 'Cần bổ sung (bị trả về)', tone: 'attention', ...changes },
