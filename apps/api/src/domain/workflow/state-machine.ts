@@ -226,6 +226,29 @@ export function escalatedTopRole(topRole: Role, availableRoles: Iterable<Role>):
 }
 
 /* ------------------------------------------------------------------ *
+ * Feature: "Chạy lại hồ sơ đang chờ khi ma trận duyệt / nhân sự thay đổi"
+ * ------------------------------------------------------------------ */
+
+/**
+ * Các cấp còn phải duyệt khi CHẠY LẠI một hồ sơ đang chờ theo ma trận hiện hành.
+ *
+ * Bước đã quyết định (`done`/`skipped`/`rejected`) là lịch sử — giữ nguyên; chỉ lấy
+ * các vai trò có trong ma trận mới mà CHƯA có bước đã quyết định. Bước khuyết chức
+ * danh / đẩy cấp cao hơn được xử lý tiếp lúc gán người (`assignUsers` + `dropVacantSteps`).
+ */
+export function pendingRolesForRerun(frozenRoles: Iterable<Role>, matrixRoles: readonly Role[]): Role[] {
+  const frozen = new Set(frozenRoles);
+  const seen = new Set<Role>();
+  const out: Role[] = [];
+  for (const role of matrixRoles) {
+    if (frozen.has(role) || seen.has(role)) continue;
+    seen.add(role);
+    out.push(role);
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
  * Feature: "Phiếu chi từng phần" — chi nhiều kỳ, giữ phiếu mở tới khi chi hết
  * ------------------------------------------------------------------ */
 

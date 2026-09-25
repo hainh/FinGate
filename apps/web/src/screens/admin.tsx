@@ -188,8 +188,9 @@ export function PersonnelScreen(): ReactNode {
                             if (!reason || reason.trim().length < 5) return;
                             setBusy(r.user_id);
                             try {
-                              await apiCall(`/personnel/${r.user_id}/deactivate`, { method: 'POST', body: { reason } });
+                              const res = await apiCall<{ data: { rerun_changed?: number } }>(`/personnel/${r.user_id}/deactivate`, { method: 'POST', body: { reason } });
                               void query.refetch();
+                              if (res.data?.rerun_changed) toastOk(`Đã gán lại ${res.data.rerun_changed} hồ sơ đang chờ`);
                             } catch (e) {
                               window.alert((e as { problem?: { title: string } }).problem?.title ?? 'Không thực hiện được');
                             } finally {
@@ -208,8 +209,9 @@ export function PersonnelScreen(): ReactNode {
                             if (!window.confirm(`Kích hoạt lại tài khoản ${r.display_name}?`)) return;
                             setBusy(r.user_id);
                             try {
-                              await apiCall(`/personnel/${r.user_id}/activate`, { method: 'POST' });
+                              const res = await apiCall<{ data: { rerun_changed?: number } }>(`/personnel/${r.user_id}/activate`, { method: 'POST' });
                               void query.refetch();
+                              if (res.data?.rerun_changed) toastOk(`Đã gán lại ${res.data.rerun_changed} hồ sơ đang chờ`);
                             } catch (e) {
                               window.alert((e as { problem?: { title: string } }).problem?.title ?? 'Không thực hiện được');
                             } finally {
@@ -678,7 +680,7 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
     setError(null);
     setFieldErrors({});
     try {
-      await apiCall(`/personnel/${row.user_id}`, {
+      const res = await apiCall<{ data: { rerun_changed?: number } }>(`/personnel/${row.user_id}`, {
         method: 'PATCH',
         body: {
           display_name: name.trim(),
@@ -691,6 +693,7 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
         },
       });
       toastOk('Đã cập nhật hồ sơ nhân sự');
+      if (res.data?.rerun_changed) toastOk(`Đã gán lại ${res.data.rerun_changed} hồ sơ đang chờ`);
       onDone();
       onClose();
     } catch (e) {
@@ -1400,10 +1403,13 @@ function MatrixModal({
     };
     setBusy(true);
     try {
+      let rerunChanged = 0;
       for (const doc_kind of kinds) {
-        await save.mutateAsync({ ...body, doc_kind });
+        const res = (await save.mutateAsync({ ...body, doc_kind })) as { rerun_changed?: number } | undefined;
+        rerunChanged += res?.rerun_changed ?? 0;
       }
       toastOk(editing ? 'Đã cập nhật ma trận duyệt' : `Đã tạo ${kinds.length} quy trình`);
+      if (rerunChanged > 0) toastOk(`Đã gán lại ${rerunChanged} hồ sơ đang chờ theo quy trình mới`);
       onClose();
     } catch (e) {
       if (e instanceof ApiRequestError) {

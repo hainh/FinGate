@@ -321,7 +321,7 @@ function requiredFieldsMissing(doc: DomainDoc): string[] {
 }
 
 /** Bước duyệt rỗng (chưa gán người) — snapshot matrix hoặc đẩy bước khuyết lên cấp cao hơn. */
-function newStep(order: number, role: Role, state: StepRow['state']): StepRow {
+export function newStep(order: number, role: Role, state: StepRow['state']): StepRow {
   return {
     order,
     role,
@@ -339,7 +339,7 @@ function newStep(order: number, role: Role, state: StepRow['state']): StepRow {
 }
 
 /** Gán người duyệt cụ thể cho từng step: assignment theo công ty + role (+ delegation). */
-async function assignUsers(steps: StepRow[], doc: DomainDoc): Promise<StepRow[]> {
+export async function assignUsers(steps: StepRow[], doc: DomainDoc): Promise<StepRow[]> {
   const companies = [String(doc.company_id)];
   if (doc.kind === 'internal' && doc.target?.company_id) companies.push(String(doc.target.company_id));
 
@@ -428,6 +428,7 @@ async function calendarFor(companyId: string): Promise<WorkingCalendar> {
   const wc = c?.working_calendar as { workdays?: number[]; holidays?: string[] } | undefined;
   return { workdays: wc?.workdays ?? DEFAULT_CALENDAR.workdays, holidays: wc?.holidays ?? [] };
 }
+export { calendarFor };
 
 /* ================================================================== *
  * TRANSITION — approve / reject / changes / pay / cancel

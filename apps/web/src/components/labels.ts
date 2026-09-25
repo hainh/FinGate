@@ -58,4 +58,5 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'department.deactivate': 'Ngừng dùng bộ phận',
   'department.delete': 'Xoá bộ phận',
   'settings.update': 'Đổi cấu hình',
+  rerun: 'Chạy lại chuỗi duyệt',
 };

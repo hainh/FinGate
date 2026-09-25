@@ -39,6 +39,7 @@ import { newTotpSecret, otpauthUrl, verifyTotp } from '../lib/totp.ts';
 import { inviteLinkStatus, seedMatches, verifyInviteToken, type InviteMode, type InviteShape } from '../lib/invite.ts';
 import { mirrorAudit } from '../domain/audit/index.ts';
 import { resolveIdentity } from '../domain/entitlement/index.ts';
+import { rerunPendingApprovals } from '../domain/workflow/rerun.ts';
 import { mailTemplates, sendMail } from '../mail/sender.ts';
 
 const LOCK_KEY = (ip: string, email: string) => `lock:${ip}:${email}`;
@@ -708,6 +709,13 @@ async function finishActivation(
     ip: ctx.ip,
     ua: ctx.ua,
   });
+
+  // Nhân sự mới kích hoạt → chạy lại hồ sơ đang chờ để gán đúng bàn (best-effort).
+  try {
+    await rerunPendingApprovals({ reason: 'Kích hoạt nhân sự mới', actor: { user_id: String(user._id), name: displayName, role }, ip: ctx.ip });
+  } catch (err) {
+    console.warn('[rerun] sau kích hoạt thất bại (bỏ qua):', (err as Error).message);
+  }
 
   const scopeIds = invCompanyIds;
   const { raw } = await createSession({

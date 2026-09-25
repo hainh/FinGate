@@ -16,6 +16,7 @@ import {
   MFA_REQUIRED_ROLES,
   ROLE_LABEL,
   today,
+  type DocKind,
   type Permission,
   type Role,
 } from '@fingate/shared';
@@ -64,6 +65,7 @@ import {
 import { mirrorAudit } from '../domain/audit/index.ts';
 import { scopedAggregate } from '../lib/mongo.ts';
 import { assertMatrixSteps } from '../domain/workflow/matrix.ts';
+import { rerunPendingApprovals } from '../domain/workflow/rerun.ts';
 import { DECISION_STATUSES, asBigInt, wire } from '../domain/queries/index.ts';
 import { mailTemplates, sendMail } from '../mail/sender.ts';
 import { reportPreset } from '../domain/reports/index.ts';
@@ -637,7 +639,13 @@ export function adminRoutes(app: FastifyInstance): void {
           diff_fields: { reason: body.reason, replacement: body.replacement_user_id ?? null, reassigned },
           ip: requestCtx(req).ip,
         });
-        return { data: { ok: true, reassigned_documents: reassigned } };
+        // Nhân sự rời đi có thể để lại bước khuyết/khác người → chạy lại hồ sơ đang chờ.
+        const rerun = await rerunPendingApprovals({
+          reason: 'Ngừng hoạt động nhân sự',
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          ip: requestCtx(req).ip,
+        });
+        return { data: { ok: true, reassigned_documents: reassigned, rerun_scanned: rerun.scanned, rerun_changed: rerun.changed } };
       },
     }),
   );
@@ -675,7 +683,12 @@ export function adminRoutes(app: FastifyInstance): void {
           company_id: assignment.company_id ? String(assignment.company_id) : actor.company_id,
           ip: requestCtx(req).ip,
         });
-        return { data: { ok: true } };
+        const rerun = await rerunPendingApprovals({
+          reason: 'Kích hoạt lại nhân sự',
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          ip: requestCtx(req).ip,
+        });
+        return { data: { ok: true, rerun_scanned: rerun.scanned, rerun_changed: rerun.changed } };
       },
     }),
   );
@@ -848,7 +861,14 @@ export function adminRoutes(app: FastifyInstance): void {
           request_id: body.request_id,
           ip: requestCtx(req).ip,
         });
-        return { data: { ok: true, user_id: id } };
+        // Đổi vai trò/công ty/quyền → có thể đổi người phụ trách bước đang chờ.
+        const rerun = await rerunPendingApprovals({
+          reason: 'Cập nhật hồ sơ nhân sự',
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          requestId: body.request_id ?? null,
+          ip: requestCtx(req).ip,
+        });
+        return { data: { ok: true, user_id: id, rerun_scanned: rerun.scanned, rerun_changed: rerun.changed } };
       },
     }),
   );
@@ -903,7 +923,20 @@ export function adminRoutes(app: FastifyInstance): void {
           request_id: body.request_id,
           ip: requestCtx(req).ip,
         });
-        return { data: { ok: true, effective_from: body.effective_from } };
+        // Nhân sự đổi công ty có thể để lại bước khuyết → chạy lại (chỉ khi chuyển đã hiệu lực).
+        let rerunChanged = 0;
+        let rerunScanned = 0;
+        if (effectiveAt.getTime() <= Date.now()) {
+          const rerun = await rerunPendingApprovals({
+            reason: 'Chuyển công ty nhân sự',
+            actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+            requestId: body.request_id ?? null,
+            ip: requestCtx(req).ip,
+          });
+          rerunChanged = rerun.changed;
+          rerunScanned = rerun.scanned;
+        }
+        return { data: { ok: true, effective_from: body.effective_from, rerun_scanned: rerunScanned, rerun_changed: rerunChanged } };
       },
     }),
   );
@@ -1076,6 +1109,18 @@ export function adminRoutes(app: FastifyInstance): void {
           active: true,
         } as never).lean();
 
+        // Tạo/sửa ma trận → chạy lại hồ sơ đang chờ để gán đúng bàn theo quy trình mới.
+        const runRerun = async (): Promise<{ scanned: number; changed: number }> => {
+          const r = await rerunPendingApprovals({
+            reason: existing ? 'Cập nhật ma trận duyệt' : 'Tạo ma trận duyệt',
+            actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+            companyIds: body.company_id ? [String(body.company_id)] : null,
+            kinds: [body.doc_kind as DocKind],
+            ip: requestCtx(req).ip,
+          });
+          return { scanned: r.scanned, changed: r.changed };
+        };
+
         if (existing) {
           await Models.ApprovalMatrix.updateOne(
             { _id: String((existing as { _id: unknown })._id) },
@@ -1099,7 +1144,16 @@ export function adminRoutes(app: FastifyInstance): void {
             diff_fields: { steps: body.steps.map((s) => s.role).join(' → ') },
             ip: requestCtx(req).ip,
           });
-          return { data: { _id: String((existing as { _id: unknown })._id), version: Number((existing as { version?: number }).version ?? 1) + 1, updated: true } };
+          const rerun = await runRerun();
+          return {
+            data: {
+              _id: String((existing as { _id: unknown })._id),
+              version: Number((existing as { version?: number }).version ?? 1) + 1,
+              updated: true,
+              rerun_scanned: rerun.scanned,
+              rerun_changed: rerun.changed,
+            },
+          };
         }
 
         const created = await Models.ApprovalMatrix.create({
@@ -1121,7 +1175,12 @@ export function adminRoutes(app: FastifyInstance): void {
           company_id: body.company_id ?? null,
           ip: requestCtx(req).ip,
         });
-        return ok(reply, { data: { _id: String(created._id), version: 1 } }, { status: 201 });
+        const rerun = await runRerun();
+        return ok(
+          reply,
+          { data: { _id: String(created._id), version: 1, rerun_scanned: rerun.scanned, rerun_changed: rerun.changed } },
+          { status: 201 },
+        );
       },
     }),
   );

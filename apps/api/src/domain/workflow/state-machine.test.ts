@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dropVacantSteps, escalatedTopRole, nextPartialStage, sumInstallments } from './state-machine.ts';
+import { dropVacantSteps, escalatedTopRole, nextPartialStage, pendingRolesForRerun, sumInstallments } from './state-machine.ts';
 
 describe('dropVacantSteps — khuyết chức danh thì bỏ bước, đẩy lên cấp cao hơn', () => {
   it('bỏ bước không có người phụ trách và đánh số lại liên tục', () => {
@@ -47,6 +47,39 @@ describe('escalatedTopRole — bước khuyết chức danh đẩy lên cấp ca
     expect(escalatedTopRole('chairman', ['director'])).toBeNull();
     expect(escalatedTopRole('chief_accountant', ['chief_accountant'])).toBeNull();
     expect(escalatedTopRole('chief_accountant', [])).toBeNull();
+  });
+});
+
+describe('pendingRolesForRerun — chạy lại chuỗi duyệt theo ma trận mới', () => {
+  it('chưa bước nào được quyết định → giữ nguyên toàn bộ ma trận', () => {
+    expect(pendingRolesForRerun([], ['chief_accountant', 'deputy_director', 'director'])).toEqual([
+      'chief_accountant',
+      'deputy_director',
+      'director',
+    ]);
+  });
+
+  it('bỏ các bước đã done, giữ các bước còn lại của ma trận', () => {
+    expect(pendingRolesForRerun(['chief_accountant', 'deputy_director'], ['chief_accountant', 'deputy_director', 'director'])).toEqual([
+      'director',
+    ]);
+  });
+
+  it('ma trận mới thêm cấp thấp hơn bước đã duyệt → cấp mới vẫn phải duyệt', () => {
+    // director đã duyệt nhanh trước, giờ ma trận thêm PGĐ (chưa ai duyệt)
+    expect(pendingRolesForRerun(['chief_accountant', 'director'], ['chief_accountant', 'deputy_director', 'director'])).toEqual([
+      'deputy_director',
+    ]);
+  });
+
+  it('cấp đã skipped (fast-track lên cấp cao nhất) không quay lại', () => {
+    expect(pendingRolesForRerun(['chief_accountant', 'deputy_director'], ['chief_accountant', 'deputy_director', 'director'])).not.toContain(
+      'chief_accountant',
+    );
+  });
+
+  it('khử trùng lặp vai trò trong ma trận', () => {
+    expect(pendingRolesForRerun([], ['chief_accountant', 'chief_accountant', 'director'])).toEqual(['chief_accountant', 'director']);
   });
 });
 
