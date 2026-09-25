@@ -18,11 +18,10 @@ import {
   deadlineLabel,
   formatMoney,
   isDeadlinePast,
-  money,
   moneyFromWire,
   type EvidenceType,
 } from '@fingate/shared';
-import { useDecisionPack, useDocument } from '../app/queries.ts';
+import { useBankAccounts, useDecisionPack, useDocument } from '../app/queries.ts';
 import type { DocumentDetail, AttachmentRef } from '../app/types.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgPassword, FgStatusChip, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -351,26 +350,30 @@ function HistoryTab({ doc }: { doc: DocumentDetail }): ReactNode {
 }
 
 function CashTab({ doc }: { doc: DocumentDetail }): ReactNode {
-  const bal = doc.source.balance_available;
+  const pack = useDecisionPack(doc._id);
+  const accounts = useBankAccounts();
+  const acc = (accounts.data?.items ?? []).find((a) => a._id === (doc.source.account_id ?? ''));
   const amt = moneyFromWire(doc.amount)!;
-  // phiếu thu CỘNG tiền, phiếu chi TRỪ tiền vào tài khoản nguồn
-  const after = bal ? (doc.kind === 'income' ? money(bal).minor + amt.minor : money(bal).minor - amt.minor) : null;
+  // số dư khả dụng hiện tại của tài khoản nguồn/đích (từ snapshot tài khoản)
+  const available = moneyFromWire(acc?.available);
+  // sau giao dịch: server tính theo sổ cái (đã xử lý phiếu đã thực thi, không đếm trùng)
+  const after = pack.data ? moneyFromWire(pack.data.q6_impact.balance_after) : null;
   return (
     <FgCard>
       <FgText style="h4">Ảnh hưởng số dư</FgText>
       <div style={{ marginTop: 12, maxWidth: 480 }}>
         <div className="fg-stat-row">
           <span className="fg-stat-label">{doc.kind === 'income' ? 'Tài khoản đích' : 'Tài khoản nguồn'}</span>
-          <span>{doc.source.account_label ?? (doc.source.fund === 'cash' ? 'Quỹ tiền mặt' : '—')}</span>
+          <span>{acc?.label ?? (doc.source.fund === 'cash' ? 'Quỹ tiền mặt' : '—')}</span>
         </div>
         <div className="fg-stat-row">
           <span className="fg-stat-label">Số dư khả dụng</span>
-          <FgMoney value={moneyFromWire(bal)} mode="full" missingLabel="Chưa có số dư hôm nay" />
+          <FgMoney value={available} mode="full" missingLabel="Chưa có số dư" />
         </div>
         <div className="fg-stat-row">
           <span className="fg-stat-label">Sau giao dịch</span>
           {after !== null ? (
-            <FgMoney value={money(after, doc.amount.currency)} mode="full" emphasis />
+            <FgMoney value={after} mode="full" emphasis />
           ) : (
             '—'
           )}
