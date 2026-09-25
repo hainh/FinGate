@@ -425,7 +425,6 @@ export async function accountSnapshots(
   const companies = await Models.Company.find({ _id: { $in: companyIds as never } }).select({ name: 1 }).lean();
   const cname = new Map(companies.map((c) => [String(c._id), String(c.name)]));
 
-  const day = today();
   return accounts.map((a) => {
     const rec = byAccount.get(String(a._id));
     const closing = asBigInt(rec?.closing ?? 0n);
@@ -446,7 +445,8 @@ export async function accountSnapshots(
       available: closing - blocked,
       min_balance: min,
       breach: closing - blocked < min,
-      stale: !rec || String(rec.date) !== day,
+      // số dư liên tục theo sổ cái — không cần nhập tay hằng ngày nên không bao giờ "stale"
+      stale: false,
       balance_date: rec ? String(rec.date) : null,
       open_docs: 0,
     };

@@ -39,6 +39,7 @@ import { resolveMatrix, type MatrixStep } from './matrix.ts';
 import { DEFAULT_CALENDAR, slaDeadline, type WorkingCalendar } from '../calendar/index.ts';
 import { nextDocumentCode } from '../numbering/index.ts';
 import { notifyNextApprover, rebuildEvidence, syncBalancesForDocument } from '../side-effects.ts';
+import { bookedBalance } from '../ledger/index.ts';
 import { assertAccountAllowedForCompany } from '../accounts.ts';
 import {
   applyDecision,
@@ -412,15 +413,15 @@ async function applyDelegations<T extends StepRow>(steps: T[], companyId: string
   return steps;
 }
 
-/** Số dư khả dụng hiện tại của một tài khoản = bản `balances_daily` mới nhất tính đến hôm nay (closing − blocked). */
+/** Số dư khả dụng = Σ sổ cái tính đến hôm nay (closing âm/không) − phong tỏa. */
 async function availableBalanceOf(accountId: string): Promise<bigint> {
   const rec = await Models.BalanceDaily.findOne({ account_id: accountId, date: { $lte: today() } })
     .sort({ date: -1 })
-    .select({ closing_minor: 1, blocked_minor: 1 })
+    .select({ blocked_minor: 1 })
     .lean();
-  const closing = BigInt((rec?.closing_minor as bigint | undefined) ?? 0n);
   const blocked = BigInt((rec?.blocked_minor as bigint | undefined) ?? 0n);
-  return closing - blocked;
+  const booked = await bookedBalance(accountId, today());
+  return booked - blocked;
 }
 
 async function calendarFor(companyId: string): Promise<WorkingCalendar> {
@@ -823,6 +824,7 @@ export async function transition(input: {
     execution: set.execution as never,
     newAccountId: (set['source.account_id'] as string | undefined) ?? null,
     actualDelta: partialDelta,
+    installmentIndex: executionPatch ? Math.max(0, executionPatch.installments.length - 1) : 0,
   });
 
   // 8. thông báo cho cấp kế tiếp (email không await — arch §6)

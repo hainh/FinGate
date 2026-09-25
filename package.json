@@ -26,6 +26,7 @@
     "db:reset-keep-users": "node db/reset-keep-users.js",
     "db:bootstrap": "node db/bootstrap.js",
     "db:rebuild-balances": "node db/rebuild-balances.js",
+    "db:rebuild-ledger": "node db/rebuild-ledger.js",
     "db:rebuild-audit": "node db/rebuild-audit.js",
     "db:archive": "node db/archive.js",
     "check:tie": "node db/check-tie.js",

@@ -179,7 +179,7 @@ Chuyển tiền nội bộ: tab `Tóm tắt` **bắt buộc** 2 cột đối ứ
 | BANK-01 | Tài khoản ngân hàng | `/ngan-hang/taikhoan` | KT, KTT, QT | `FgTable` (công ty, NH, số TK mask, loại tiền, trạng thái), `FgBankAccountCard` grid view | TK bị đóng, chưa có số dư hôm nay | P1 | D |
 | BANK-02 | Tạo / sửa tài khoản | `/ngan-hang/taikhoan/moi` | KTT, QT | form + `FgSwitch`(hiển thị dashboard) + `minBalance` per TK (đề xuất Q-02) | trùng số TK, đổi ngưỡng có audit | P2 | D |
 | BANK-03 | Chi tiết tài khoản | `/ngan-hang/taikhoan/:id` | KT, KTT, GĐ | KPI (`FgMoney`), `FgChart.line` số dư 90 ngày + ngưỡng nét đứt, bảng giao dịch | stale (chưa nhập hôm nay), thiếu sao kê | P2 | D/T |
-| BANK-04 | Nhập số dư đầu ngày / cash position | `/ngan-hang/so-du` | KT, CV | **bảng nhập liệu dày** §VIII: đầu ngày · vào · ra · cuối ngày · phong tỏa · khả dụng; tự kiểm `đầu+vào−ra = cuối` | lệch (error inline per dòng), đã khóa ngày, đang nhập dở (autosave), nút "tính lại" | P2 | D |
+| BANK-04 | ~~Nhập số dư đầu ngày~~ (đã bỏ — số dư liên tục từ sổ cái) | `/ngan-hang/so-du` | KT, CV | **BỎ** theo ADR-20: không nhập tay đầu ngày; số dư = Σ `cash_entries` từ thu/chi đã thực thi, xem ở BANK-01/03/05 | — | — | — |
 | BANK-05 | Lịch sử số dư theo ngày | `/ngan-hang/so-du/lich-su` | KTT, GĐ | `FgDateRange` + `FgTable` + export | khoảng chưa nhập | P3 | D |
 | BANK-06 | Tiền bị hạn chế / phong tỏa | `/ngan-hang/hoa-tien` | KTT | `FgTable` (lý do, ngày gỡ), alert trên KPI "Tiền hiện có" | hết hiệu lực | P3 | D |
 | BANK-07 | Chuyển tiền nội bộ giữa công ty | `/ngan-hang/chuyen-noi-bo` | KT, KTT, GĐ | `FgTable` + DOC-01 loại `noi-bo` (2 cột đối ứng) | một chiều chưa xác nhận → attention | P3 | D/M |

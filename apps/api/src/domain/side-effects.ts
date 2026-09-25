@@ -7,9 +7,9 @@
  * - `notifyNextApprover` → notifications (web) + email (K-13)
  */
 
-import { STATUS_REGISTRY, datePartOf, formatMoney, money, type DocKind, type Role, type StatusKey } from '@fingate/shared';
+import { STATUS_REGISTRY, formatMoney, money, type DocKind, type Role, type StatusKey } from '@fingate/shared';
 import { Models } from '../db/models.ts';
-import { bumpBalance } from '../db/cas.ts';
+import { entriesForPayment, postCashEntries, recomputeAccountBalances, sourceAccountOf } from './ledger/index.ts';
 import { cacheInvalidate } from '../lib/cache.ts';
 import { mailTemplates, sendMail } from '../mail/sender.ts';
 import type { DomainDoc } from './types.ts';
@@ -68,7 +68,7 @@ export async function rebuildEvidence(doc: DomainDoc): Promise<EvidenceState> {
 }
 
 /* ------------------------------------------------------------------ *
- * balances_daily — "tính khi đọc" + ghi dự toán khi submit/track (arch §8.3)
+ * Sổ cái dòng tiền — ghi actual khi thực thi (arch §8.3, ledger append-only)
  * ------------------------------------------------------------------ */
 
 export async function syncBalancesForDocument(input: {
@@ -79,127 +79,52 @@ export async function syncBalancesForDocument(input: {
   /** tài khoản mới khi cấp duyệt đổi tài khoản đích/nguồn (null = giữ nguyên). */
   newAccountId?: string | null;
   /**
-   * Phiếu chi từng phần: số tiền thực chi của KỲ NÀY — ghi thẳng vào `actual_*` của tài
+   * Phiếu chi từng phần: số tiền thực chi của KỲ NÀY — ghi thẳng vào sổ cái của tài
    * khoản nguồn/đích ngay cả khi trạng thái chưa đổi sang `paid` (phiếu còn mở).
    */
   actualDelta?: { amount: bigint; date: string } | null;
+  /** chỉ số kỳ chi (0 = phiếu thường) — bảo đảm `dedupe_key` ổn định & idempotent. */
+  installmentIndex?: number;
 }): Promise<void> {
   try {
-    const { doc, from, to } = input;
-    const oldAccountId = doc.source?.account_id ? String(doc.source.account_id) : null;
+    const { doc, to } = input;
+    void input.from; // giữ signature cũ; ledger chỉ quan tâm tiền đã thực sự dịch chuyển
+    const oldAccountId = sourceAccountOf(doc);
     const newAccountId = input.newAccountId ? String(input.newAccountId) : oldAccountId;
-    if (!oldAccountId && !newAccountId) return; // quỹ tiền mặt → không có dòng ngân hàng
+    const accountId = newAccountId ?? oldAccountId;
+    if (!accountId) return; // không gắn tài khoản → không có dòng tiền
 
-    // Kỳ chi từng phần: cộng actual ngay, KHÔNG đụng planned (kế hoạch chi đã ghi lúc duyệt).
+    let amount: bigint | null = null;
+    let date: string | null = null;
     if (input.actualDelta && input.actualDelta.amount > 0n) {
-      const accountId = newAccountId!;
-      const isIn = doc.kind === 'income';
-      const paidDate = datePartOf(input.actualDelta.date);
-      const account = await Models.BankAccount.findById(accountId).select({ min_balance_minor: 1 }).lean();
-      await bumpBalance({
-        company_id: String(doc.company_id),
-        account_id: accountId,
-        date: paidDate,
-        min_balance_minor: account?.min_balance_minor,
-        actualIn: isIn ? input.actualDelta.amount : undefined,
-        actualOut: !isIn ? input.actualDelta.amount : undefined,
-      });
-      if (doc.kind === 'internal' && doc.target?.company_id && doc.target?.account_id) {
-        await bumpBalance({
-          company_id: String(doc.target.company_id),
-          account_id: String(doc.target.account_id),
-          date: paidDate,
-          actualIn: input.actualDelta.amount,
-        });
-      }
-      invalidateFor(String(doc.company_id));
-      return;
+      amount = input.actualDelta.amount;
+      date = input.actualDelta.date;
+    } else if (input.execution && to === 'paid') {
+      amount = input.execution.actual_amount_minor ?? doc.amount?.minor ?? 0n;
+      date = String(input.execution.paid_at ?? doc.planned_date);
     }
 
-    const amount = doc.amount?.minor ?? 0n;
-    const counted = (s: StatusKey) => !['draft', 'rejected', 'cancelled', 'changes_requested'].includes(s);
-    const was = counted(from);
-    const is = counted(to);
-    const accountMoved = Boolean(oldAccountId && newAccountId && oldAccountId !== newAccountId);
-    if (was === is && !input.execution && !accountMoved) return;
+    // Chuyển trạng thái KHÔNG kèm tiền thật (submit/duyệt/từ chối/đổi tài khoản) → ledger không đổi.
+    if (!amount || !date || amount <= 0n) return;
 
-    const date = datePartOf(String(to === 'paid' ? (input.execution?.paid_at ?? doc.planned_date) : doc.planned_date));
-    const isIn = doc.kind === 'income';
-    const actual = to === 'paid' ? (input.execution?.actual_amount_minor ?? amount) : 0n;
-
-    // Đổi tài khoản khi duyệt: chuyển toàn bộ ảnh hưởng (planned + actual) từ tài
-    // khoản cũ sang tài khoản mới — không để dòng tiền treo trên tài khoản cũ.
-    if (accountMoved) {
-      if (oldAccountId && was) await applyAccountDelta({ accountId: oldAccountId, doc, date, planned: -amount, isIn });
-      if (newAccountId && is) {
-        await applyAccountDelta({ accountId: newAccountId, doc, date, planned: amount, actual: to === 'paid' ? actual : 0n, isIn });
-      }
-      await mirrorInternalCounterpart(doc, to, date, actual);
-      invalidateFor(String(doc.company_id));
-      return;
-    }
-
-    const accountId = newAccountId!;
-    let plannedDelta: { in: bigint; out: bigint } = { in: 0n, out: 0n };
-    if (!was && is) plannedDelta = isIn ? { in: amount, out: 0n } : { in: 0n, out: amount };
-    else if (was && !is) plannedDelta = isIn ? { in: -amount, out: 0n } : { in: 0n, out: -amount };
-
-    const account = await Models.BankAccount.findById(accountId).select({ min_balance_minor: 1 }).lean();
-
-    await bumpBalance({
-      company_id: String(doc.company_id),
-      account_id: accountId,
+    const entries = entriesForPayment({
+      doc,
+      accountId,
+      amountMinor: amount,
       date,
-      min_balance_minor: account?.min_balance_minor,
-      plannedIn: plannedDelta.in || undefined,
-      plannedOut: plannedDelta.out || undefined,
-      actualIn: isIn && to === 'paid' ? actual : undefined,
-      actualOut: !isIn && to === 'paid' ? actual : undefined,
+      installmentIndex: input.installmentIndex ?? 0,
+      currency: doc.amount?.currency,
     });
-
-    await mirrorInternalCounterpart(doc, to, date, actual);
+    await postCashEntries(entries);
+    await recomputeAccountBalances(entries.map((e) => e.account_id));
     invalidateFor(String(doc.company_id));
   } catch (err) {
-    console.warn('[balances] sync thất bại (sẽ reconcile lại):', (err as Error).message);
+    console.warn('[ledger] sync thất bại (sẽ reconcile lại):', (err as Error).message);
     await Models.Job.updateOne(
       { name: 'reconcile', dedupe_key: `reconcile:balance:${input.doc._id}` },
       { $setOnInsert: { name: 'reconcile', state: 'queued', run_at: new Date(), dedupe_key: `reconcile:balance:${input.doc._id}`, payload: { document_id: String(input.doc._id) } } },
       { upsert: true },
     ).exec();
-  }
-}
-
-/** Ghi 1 delta planned/actual lên một tài khoản (dùng khi đổi tài khoản khi duyệt). */
-async function applyAccountDelta(input: {
-  accountId: string;
-  doc: DomainDoc;
-  date: string;
-  planned: bigint;
-  actual?: bigint;
-  isIn: boolean;
-}): Promise<void> {
-  const account = await Models.BankAccount.findById(input.accountId).select({ min_balance_minor: 1 }).lean();
-  await bumpBalance({
-    company_id: String(input.doc.company_id),
-    account_id: input.accountId,
-    date: input.date,
-    min_balance_minor: account?.min_balance_minor,
-    plannedIn: input.isIn ? input.planned || undefined : undefined,
-    plannedOut: !input.isIn ? input.planned || undefined : undefined,
-    actualIn: input.isIn ? input.actual || undefined : undefined,
-    actualOut: !input.isIn ? input.actual || undefined : undefined,
-  });
-}
-
-/** chuyển tiền nội bộ: ghi đối ứng cho công ty B, KHÔNG tính doanh thu/chi phí (§XXI). */
-async function mirrorInternalCounterpart(doc: DomainDoc, to: StatusKey, date: string, actual: bigint): Promise<void> {
-  if (doc.kind === 'internal' && to === 'paid' && doc.target?.company_id && doc.target?.account_id) {
-    await bumpBalance({
-      company_id: String(doc.target.company_id),
-      account_id: String(doc.target.account_id),
-      date,
-      actualIn: actual,
-    });
   }
 }
 

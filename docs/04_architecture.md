@@ -402,7 +402,7 @@ Gộp chủ đích: **một** `documents` cho mọi loại phiếu (`kind: spend
 | --- | --- |
 | Badge "chờ tôi duyệt" | `countDocuments({'approval.steps':{$elemMatch:{user_id, state:'current'}}})` + covering index; **cache in-memory 60s per user** |
 | `GET /v1/dashboard/overview` | 1 endpoint gộp (4 số dư + thu/chi hôm nay + chờ duyệt + đáo hạn + quá hạn), mỗi mục 1 query có index, chạy `Promise.all` |
-| Dòng tiền theo ngày / forecast | `balances_daily { company_id, account_id, date, opening, planned_in, planned_out, closing, min_balance, breach }` — **CAS theo doc ngày** khi submit/payment/import sao kê; `forecast` đọc từ collection này; rebuild = `pnpm db:rebuild-balances` (idempotent) |
+| Dòng tiền theo ngày / forecast | **`cash_entries` (sổ cái append-only)** = nguồn sự thật cho tiền đã thực thi (paid + kỳ chi từng phần); `balances_daily { company_id, account_id, date, opening, planned_in, planned_out, closing, blocked, min_balance, breach }` là **view dẫn xuất** (`closing = Σ entries ≤ ngày`, `opening = Σ entries < ngày`) — số dư liên tục, không reset; ghi khi payment/installment, rebuild = `pnpm db:rebuild-ledger` rồi `pnpm db:rebuild-balances` (idempotent) |
 | Đáo hạn 4 bucket (RENEW-01) | query `loans` index `{company_id:1,next_due_date:1}` + group theo `days_to_due` (vài trăm doc) |
 | Công nợ aging | aggregation trên `debt_items` (vài nghìn doc) |
 | Báo cáo | aggregation trực tiếp `documents` với index + `$match` **trước** `$group`; > 3s → chạy như `jobs`, trả qua export |
@@ -438,7 +438,7 @@ sessions:{user_id:1} {expires_at:1}(TTL)                    ·   notifications:{
 | Tỷ giá | snapshot `fx.rate` + `fx.at` tại ngày phiếu; tổng hợp dùng `rate_at(business_date)`; không tự quy đổi khi lưu |
 | Làm tròn | chỉ ở tầng hiển thị; aggregate luôn trên minor units |
 | Wire | string |
-| Đối chiếu | task đêm `check:tie`: Σ `bank_transactions` vs Σ `execution.actual_amount` vs `balances_daily` → lệch thì tạo **alert danger + khoá export + thông báo KTT**, **không tự sửa** |
+| Đối chiếu | task đêm `check:tie` (3 chiều, cùng cơ sở NET thu−chi): Σ `bank_transactions` vs Σ chứng từ đã thực thi (`paid` + kỳ `installments`) vs Σ `cash_entries` → lệch thì tạo **alert danger + khoá export + thông báo KTT**, **không tự sửa** |
 | `Decimal128` | chỉ cho `rate`/`percent`, không dùng cho tiền |
 
 ### 8.6 Kết nối & nhất quán
@@ -749,6 +749,7 @@ Team: **1 tech lead + 1 BE + 1 FE + 0.5 người vận hành/deploy + 1 BA kế 
 | ADR-17 | pnpm workspace, `pnpm -r`, không Turbo/Nx | 2 app + 1 package thì tooling thêm là nợ |
 | ADR-18 | `render.yaml` + `deploy/compose.yml` = 2 hồ sơ khai báo duy nhất | không Terraform/Helm |
 | ADR-19 | **Phiên mặc định "vĩnh viễn"**: ghi nhớ BẬT, hạn cuộn 400 ngày, không idle timeout | công cụ nội bộ dùng hằng ngày, người dùng chỉ là nhân sự được mời (ADR-15, không self-signup); rủi ro tiền thật do **step-up ADR-14** chặn tại `approve`/`pay`, không do TTL của cookie; 400 ngày là trần `Max-Age` của trình duyệt nên "dài nhất" = cuộn, không phải trần lớn hơn. Thu hồi vẫn tức thì qua ADM-13/ADM-01 |
+| ADR-20 | **Sổ cái dòng tiền append-only** (`cash_entries`) là nguồn sự thật cho tiền đã thực thi; `balances_daily` là view dẫn xuất (`closing = Σ entries ≤ ngày`) | số dư phải **liên tục, không reset**, không nhập tay đầu ngày; insert-only khớp ADR-03 (CAS 1 doc, không transaction); điều chỉnh = entry mới `reverses`, không sửa/xoá; `bank_transactions` chỉ để đối chiếu `check:tie` |
 
 ---
 

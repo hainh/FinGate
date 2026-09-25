@@ -16,7 +16,7 @@ import { mirrorAudit, rebuildAudit } from '../domain/audit/index.ts';
 import { sendMail } from '../mail/sender.ts';
 import { evaluateAlerts } from '../domain/alerts/index.ts';
 import { materializeRecurring } from '../domain/recurring/index.ts';
-import { rebuildBalances } from '../domain/rebuild/balances.ts';
+import { rebuildLedgerAndBalances } from '../domain/rebuild/balances.ts';
 import type { ScopeLike } from '../domain/types.ts';
 import { checkTie } from '../domain/tie/index.ts';
 
@@ -187,9 +187,9 @@ const DISPATCH: Record<TaskName, () => Promise<Record<string, unknown>>> = {
   /** Khoản chi định kỳ: vật phiếu nháp + nhắc 7/3/1 ngày (§XVII). */
   recurring: async () => materializeRecurring(),
 
-  /** CN 01:40 VN: rebuild balances + check:tie + archive (§13). */
+  /** CN 01:40 VN: rebuild ledger + balances + check:tie + archive (§13). */
   maintenance: async () => {
-    const balances = await rebuildBalances();
+    const balances = await rebuildLedgerAndBalances();
     const tie = (await checkTie()) as unknown as Record<string, unknown>;
     const archived = await archiveOldDocuments();
     const cleaned = await cleanupOrphans();
@@ -197,17 +197,19 @@ const DISPATCH: Record<TaskName, () => Promise<Record<string, unknown>>> = {
     return { balances, tie, archived, cleaned, jobs };
   },
 
-  /** Audit fail best-effort → dựng lại từ history[] (arch §7.3 bước 4). */
+  /** Audit fail best-effort → dựng lại từ history[] (arch §7.3 bước 4) + project lại sổ cái/số dư. */
   reconcile: async () => {
     const pending = await Models.Job.find({ name: 'reconcile', state: 'queued' } as never).select({ payload: 1 }).lean();
     const audit = await rebuildAudit({ companyIds: null }, {});
+    // có side-effect số dư thất bại → dựng lại ledger + balances (idempotent)
+    const balances = pending.length ? await rebuildLedgerAndBalances() : null;
     for (const j of pending) {
       await Models.Job.updateOne({ _id: String(j._id) } as never, { $set: { state: 'done', finished_at: new Date() } }).exec();
     }
-    return { audit, requeued: pending.length };
+    return { audit, balances, requeued: pending.length };
   },
 
-  'rebuild-balances': async () => rebuildBalances() as unknown as Record<string, unknown>,
+  'rebuild-balances': async () => rebuildLedgerAndBalances(),
   'rebuild-audit': async () => rebuildAudit({ companyIds: null }, {}, (m: string) => console.log(m)) as unknown as Record<string, unknown>,
   'check-tie': async () => (await checkTie()) as unknown as Record<string, unknown>,
   archive: async () => archiveOldDocuments(),

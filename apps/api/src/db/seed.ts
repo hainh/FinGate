@@ -12,7 +12,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import { Models } from './models.ts';
 import { resolveMatrix } from '../domain/workflow/matrix.ts';
 import { nextDocumentCode } from '../domain/numbering/index.ts';
-import { rebuildBalances } from '../domain/rebuild/balances.ts';
+import { rebuildLedgerAndBalances } from '../domain/rebuild/balances.ts';
 
 const DAY = 86_400_000;
 const iso = (offsetDays: number): string => new Date(Date.now() + offsetDays * DAY).toISOString().slice(0, 10);
@@ -524,8 +524,8 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
   }
   stats.documents = docCount;
 
-  /* balancesDaily ban đầu để dashboard có số */
-  await rebuildBalances();
+  /* ledger + balances ban đầu để dashboard có số */
+  await rebuildLedgerAndBalances();
   log?.info(`[seed] xong: ${JSON.stringify(stats)}`);
   return stats;
 }

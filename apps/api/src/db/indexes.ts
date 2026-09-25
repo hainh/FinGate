@@ -21,6 +21,11 @@ const INDEXES: Record<string, IndexDef[]> = {
     { key: { loan_id: 1, status: 1 } },
   ],
   balances_daily: [{ key: { company_id: 1, account_id: 1, date: -1 }, options: { unique: true } }],
+  cash_entries: [
+    { key: { account_id: 1, date: 1 } },
+    { key: { company_id: 1, date: 1 } },
+    { key: { dedupe_key: 1 }, options: { unique: true } },
+  ],
   bank_transactions: [{ key: { account_id: 1, value_date: 1, ref: 1 }, options: { unique: true } }],
   audit_log: [
     { key: { company_id: 1, at: -1 } },
@@ -72,6 +77,7 @@ const INDEXES: Record<string, IndexDef[]> = {
 const COLLECTION_MODEL: Record<string, keyof typeof Models> = {
   documents: 'Document',
   balances_daily: 'BalanceDaily',
+  cash_entries: 'CashEntry',
   bank_transactions: 'BankTransaction',
   audit_log: 'AuditLog',
   loans: 'Loan',

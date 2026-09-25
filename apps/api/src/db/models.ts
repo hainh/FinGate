@@ -515,6 +515,40 @@ export const BankTransactionSchema = new Schema(
 // chặn import trùng (arch §8.4)
 BankTransactionSchema.index({ account_id: 1, value_date: 1, ref: 1 }, { unique: true });
 
+/**
+ * Sổ cái dòng tiền — NGUỒN SỰ THẬT cho tiền đã thực sự dịch chuyển (actual).
+ * Append-only, insert-only: số dư = Σ entries. Điều chỉnh = entry mới có `reverses`.
+ * `bank_transactions` (sao kê) KHÔNG ghi vào đây — chỉ dùng để đối chiếu `check:tie`.
+ */
+export const CashEntrySchema = new Schema(
+  {
+    company_id: { type: Schema.Types.ObjectId, required: true },
+    account_id: { type: Schema.Types.ObjectId, required: true },
+    /** ngày nghiệp vụ `YYYY-MM-DD` (ngày thực chi/thu). */
+    date: { type: String, required: true },
+    direction: { type: String, enum: ['in', 'out'], required: true },
+    /** luôn DƯƠNG — chiều đã nằm ở `direction`. */
+    amount_minor: { type: BigInt, required: true },
+    currency: { type: String, default: 'VND' },
+    /** chỉ actual: `paid` | `installment` | `account_move` | `mirror`. */
+    reason: { type: String, default: 'paid' },
+    document_id: { type: Schema.Types.ObjectId, default: null },
+    document_code: { type: String, default: null },
+    /** entry gốc của bút toán đối ứng (chuyển tiền nội bộ). */
+    mirror_of: { type: Schema.Types.ObjectId, default: null },
+    /** entry bị đảo — điều chỉnh, không sửa/xoá entry gốc. */
+    reverses: { type: Schema.Types.ObjectId, default: null },
+    /** unique — khoá idempotency, chống double-post khi retry. */
+    dedupe_key: { type: String, required: true },
+    created_by: { type: Schema.Types.ObjectId, default: null },
+    created_at: { type: Date, default: () => new Date() },
+  },
+  { collection: 'cash_entries', versionKey: false },
+);
+CashEntrySchema.index({ dedupe_key: 1 }, { unique: true });
+CashEntrySchema.index({ account_id: 1, date: 1 });
+CashEntrySchema.index({ company_id: 1, date: 1 });
+
 export const LoanSchema = new Schema(
   {
     company_id: { type: Schema.Types.ObjectId, required: true },
@@ -821,6 +855,7 @@ export const Models = {
   Attachment: model('Attachment', AttachmentSchema),
   BankAccount: model('BankAccount', BankAccountSchema),
   BalanceDaily: model('BalanceDaily', BalanceDailySchema),
+  CashEntry: model('CashEntry', CashEntrySchema),
   BankTransaction: model('BankTransaction', BankTransactionSchema),
   Loan: model('Loan', LoanSchema),
   DebtItem: model('DebtItem', DebtItemSchema),
