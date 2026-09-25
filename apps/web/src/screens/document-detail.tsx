@@ -150,16 +150,6 @@ export function DocumentDetailScreen(): ReactNode {
               </div>
             </FgCard>
 
-            {d.execution?.allow_partial ? (
-              <div style={{ marginBottom: 'var(--fg-space-4)' }}>
-                <FgAlert
-                  tone={d.status === 'paid' ? 'success' : 'info'}
-                  title={d.status === 'paid' ? 'Phiếu chi từng phần — đã chi hết' : 'Phiếu chi từng phần — còn phải chi'}
-                  description={`Đã chi ${formatMoney(moneyFromWire(d.execution.paid ?? d.amount)!, { mode: 'full' })} / ${formatMoney(moneyFromWire(d.amount)!, { mode: 'full' })} · còn ${formatMoney(moneyFromWire(d.execution.remaining ?? d.amount)!, { mode: 'full' })}${d.execution.installments?.length ? ` · ${d.execution.installments.length} kỳ đã chi` : ''}`}
-                />
-              </div>
-            ) : null}
-
             <FgTabs
               items={[
                 {
@@ -220,7 +210,7 @@ export function DocumentDetailScreen(): ReactNode {
                 ) : null}
                 {d.can.pay ? (
                   <FgButton variant="primary" onClick={() => setConfirmAction('pay')}>
-                    {d.execution?.allow_partial ? 'Thực thi kỳ tiếp' : 'Thực thi'}
+                    Thực thi
                   </FgButton>
                 ) : null}
                 {d.can.fast_track && !d.can.approve ? (

@@ -269,10 +269,6 @@ export interface DocumentDetail {
     bank_ref: string | null;
     executed_by: string | null;
     actual_amount: MoneyWire | null;
-    allow_partial?: boolean;
-    paid?: MoneyWire | null;
-    remaining?: MoneyWire | null;
-    installments?: { at: string | null; amount: MoneyWire; bank_ref: string | null; executed_by: string | null }[];
   } | null;
   override: { fast_tracked: boolean; reason: string | null };
   history: HistoryEntry[];

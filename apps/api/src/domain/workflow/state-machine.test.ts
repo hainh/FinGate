@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dropVacantSteps, escalatedTopRole, nextPartialStage, pendingRolesForRerun, sumInstallments } from './state-machine.ts';
+import { dropVacantSteps, escalatedTopRole, pendingRolesForRerun, resolveApprovalAmount } from './state-machine.ts';
 
 describe('dropVacantSteps — khuyết chức danh thì bỏ bước, đẩy lên cấp cao hơn', () => {
   it('bỏ bước không có người phụ trách và đánh số lại liên tục', () => {
@@ -83,34 +83,16 @@ describe('pendingRolesForRerun — chạy lại chuỗi duyệt theo ma trận m
   });
 });
 
-describe('nextPartialStage — phiếu chi từng phần', () => {
-  it('chi một phần → còn lại và chưa kết thúc', () => {
-    const r = nextPartialStage(1_000n, 0n, 400n);
-    expect(r).toEqual({ ok: true, stage: { paid_total: 400n, remaining: 600n, finished: false, amount: 400n } });
+describe('resolveApprovalAmount — cấp duyệt đổi số tiền phiếu chi', () => {
+  it('không gửi số mới → giữ nguyên đề nghị ban đầu', () => {
+    expect(resolveApprovalAmount(1_000n, null)).toEqual({ amount: 1_000n, changed: false, increased: false });
   });
 
-  it('không truyền số tiền → chi hết phần còn lại', () => {
-    const r = nextPartialStage(1_000n, 600n, null);
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.stage).toEqual({ paid_total: 1_000n, remaining: 0n, finished: true, amount: 400n });
+  it('tăng số tiền → đánh dấu increased (cần confirm)', () => {
+    expect(resolveApprovalAmount(1_000n, 1_500n)).toEqual({ amount: 1_500n, changed: true, increased: true });
   });
 
-  it('kỳ cuối đúng bằng phần còn lại → finished', () => {
-    const r = nextPartialStage(1_000n, 400n, 600n);
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.stage.finished).toBe(true);
-  });
-
-  it('từ chối số tiền ≤ 0 hoặc vượt phần còn lại', () => {
-    expect(nextPartialStage(1_000n, 0n, 0n).ok).toBe(false);
-    expect(nextPartialStage(1_000n, 0n, 1_001n).ok).toBe(false);
-    expect(nextPartialStage(1_000n, 1_000n, 1n).ok).toBe(false);
-  });
-});
-
-describe('sumInstallments', () => {
-  it('cộng dồn các kỳ, chịu được giá trị bigint/number/string', () => {
-    expect(sumInstallments([{ amount_minor: 100n }, { amount_minor: '50' }, { amount_minor: 25 }])).toBe(175n);
-    expect(sumInstallments(null)).toBe(0n);
+  it('giảm số tiền → changed nhưng không increased (không cần confirm)', () => {
+    expect(resolveApprovalAmount(1_000n, 600n)).toEqual({ amount: 600n, changed: true, increased: false });
   });
 });

@@ -179,16 +179,16 @@ export const transitionBody = z
     /** gõ lại số tiền khi > ngưỡng hoặc ngoài ngân sách (DS §7.14 rule 4). */
     confirm_amount_minor: z.string().regex(/^\d+$/).optional(),
     /**
+     * Cấp duyệt đổi số tiền của phiếu chi ngay khi duyệt. Tăng so với đề nghị ban
+     * đầu phải xác nhận lại (`confirm_amount_minor` = đúng số tiền mới).
+     */
+    amount_minor: z.string().regex(/^\d+$/).optional(),
+    /**
      * Cấp duyệt đổi tài khoản của phiếu ngay khi duyệt (blueprint §VIII/§XXX):
      * phiếu thu = tài khoản đích, phiếu chi = tài khoản nguồn. Chỉ được chọn tài
      * khoản trong phạm vi công ty của phiếu (kể cả tài khoản Tập đoàn).
      */
     source_account_id: objectId.optional(),
-    /**
-     * Cấp duyệt CUỐI CÙNG bật "chi từng phần": phiếu giữ mở cho tới khi chi hết;
-     * mỗi lần `pay` ghi một kỳ chi vào `execution.installments[]` và tăng dần số đã chi.
-     */
-    allow_partial: z.boolean().optional(),
     if_match: docVersion,
     request_id: uuid,
     /** thanh toán: execution (§8.2). */
@@ -372,22 +372,6 @@ export const documentDetail = z.object({
       bank_ref: z.string().nullable(),
       executed_by: objectId.nullable(),
       actual_amount: moneyWire.nullable(),
-      /** phiếu chi từng phần: cho phép chi nhiều lần, giữ phiếu mở tới khi chi hết. */
-      allow_partial: z.boolean().optional(),
-      /** tổng đã chi qua các kỳ. */
-      paid: moneyWire.nullable().optional(),
-      /** phần còn lại phải chi. */
-      remaining: moneyWire.nullable().optional(),
-      installments: z
-        .array(
-          z.object({
-            at: businessDate.nullable(),
-            amount: moneyWire,
-            bank_ref: z.string().nullable(),
-            executed_by: objectId.nullable(),
-          }),
-        )
-        .optional(),
     })
     .nullable(),
   override: z.object({ fast_tracked: z.boolean(), reason: z.string().nullable() }),

@@ -50,11 +50,10 @@ import {
   escalatedTopRole,
   FINAL_APPROVAL_STATUS,
   needsAmountRetype,
-  nextPartialStage,
   recalcStatusFromSteps,
   requiresStepUp,
+  resolveApprovalAmount,
   statusForStep,
-  sumInstallments,
   type StepState,
 } from './state-machine.ts';
 import type { ActorInfo, DomainDoc, StepRow } from '../types.ts';
@@ -65,10 +64,10 @@ export interface TransitionInput {
   reason?: string;
   verify?: { method: 'password' | 'otp'; value: string };
   confirm_amount_minor?: string;
+  /** cấp duyệt đổi số tiền của phiếu chi ngay khi duyệt (tăng thì phải kèm xác nhận). */
+  amount_minor?: string;
   /** cấp duyệt đổi tài khoản đích (phiếu thu) / nguồn (phiếu chi) — trong phạm vi công ty (§VIII). */
   source_account_id?: string;
-  /** cấp duyệt CUỐI bật chi từng phần — giữ phiếu mở tới khi chi hết. */
-  allow_partial?: boolean;
   if_match: number;
   request_id: string;
   execution?: { paid_at: string; bank_ref?: string; actual_amount_minor?: string; account_id?: string };
@@ -91,9 +90,6 @@ interface ExecutionPatch {
   executed_by: string;
   actual_amount_minor: bigint;
   actual_amount: { minor: bigint; currency: string; decimals: number };
-  allow_partial: boolean;
-  paid_minor: bigint;
-  installments: Record<string, unknown>[];
 }
 
 /** đọc hồ sơ ở dạng domain (BigInt đã chuẩn hoá) */
@@ -493,6 +489,31 @@ export async function transition(input: {
   }
   if (nextAccountId) await assertAccountAllowedForCompany(String(doc.company_id), nextAccountId);
 
+  // 1c. cấp duyệt đổi số tiền của phiếu chi ngay khi duyệt. Tăng số tiền so với đề nghị
+  //     ban đầu phải xác nhận lại (confirm_amount_minor = đúng số tiền mới).
+  const requestedAmountMinor = body.amount_minor != null ? BigInt(body.amount_minor) : null;
+  if (requestedAmountMinor != null) {
+    if (!isApproval || doc.kind !== 'spend') {
+      throw new ApiError({ code: 'FG-VAL-001', detail: 'Chỉ cấp duyệt phiếu chi mới được đổi số tiền' });
+    }
+    if (requestedAmountMinor <= 0n) {
+      throw new ApiError({ code: 'FG-VAL-001', detail: 'Số tiền phải lớn hơn 0', errors: { amount_minor: 'Số tiền phải lớn hơn 0' } });
+    }
+  }
+  const originalAmountMinor = BigInt(doc.amount.minor);
+  const resolvedAmount = resolveApprovalAmount(originalAmountMinor, requestedAmountMinor);
+  const effectiveAmountMinor = resolvedAmount.amount;
+  if (resolvedAmount.increased && body.confirm_amount_minor !== effectiveAmountMinor.toString()) {
+    throw new ApiError({
+      code: 'FG-WF-007',
+      detail: `Số tiền duyệt tăng từ ${formatMoney(money(originalAmountMinor, doc.amount.currency), { mode: 'compact' })} lên ${formatMoney(
+        money(effectiveAmountMinor, doc.amount.currency),
+        { mode: 'compact' },
+      )} — cần xác nhận`,
+      data: { need_confirm_amount: true, amount_minor: effectiveAmountMinor.toString(), previous_amount_minor: originalAmountMinor.toString() },
+    });
+  }
+
   // 2. step-up verify cho hành động nhạy cảm (§7.2) — mặc định TẮT (APPROVAL_STEP_UP=false)
   if (requiresStepUp(action) && getEnv().APPROVAL_STEP_UP === 'true') {
     await assertStepUp(actor.user_id, body.verify);
@@ -524,43 +545,15 @@ export async function transition(input: {
   }
 
   // 4. hạn mức duyệt — nêu rõ hạn mức trong detail (FG-RBAC-012)
-  if (isDecision && doc.amount.minor > actor.amount_limit_minor) {
+  if (isDecision && effectiveAmountMinor > actor.amount_limit_minor) {
     throw new ApiError({
       code: 'FG-RBAC-012',
-      detail: `Khoản ${formatMoney(money(doc.amount.minor, doc.amount.currency), { mode: 'compact' })} vượt hạn mức duyệt ${formatMoney(
+      detail: `Khoản ${formatMoney(money(effectiveAmountMinor, doc.amount.currency), { mode: 'compact' })} vượt hạn mức duyệt ${formatMoney(
         money(actor.amount_limit_minor, doc.amount.currency),
         { mode: 'compact' },
       )} của bạn`,
-      data: { amount_limit_minor: actor.amount_limit_minor.toString(), amount_minor: doc.amount.minor.toString() },
+      data: { amount_limit_minor: actor.amount_limit_minor.toString(), amount_minor: effectiveAmountMinor.toString() },
     });
-  }
-
-  // 4b. số dư tài khoản nguồn — phiếu chi không duyệt được khi vượt số dư khả dụng (FG-WF-010)
-  if (isApproval && doc.kind === 'spend') {
-    const accountId = nextAccountId
-      ? nextAccountId
-      : doc.source?.account_id
-        ? String(doc.source.account_id)
-        : doc.source?.group_account_id
-          ? String(doc.source.group_account_id)
-          : null;
-    if (accountId) {
-      const available = await availableBalanceOf(accountId);
-      if (doc.amount.minor > available) {
-        const account = await Models.BankAccount.findById(accountId)
-          .select({ bank_name: 1, account_number: 1 })
-          .lean();
-        const label = account ? `${account.bank_name} ${account.account_number ?? ''}`.trim() : 'tài khoản nguồn';
-        throw new ApiError({
-          code: 'FG-WF-010',
-          detail: `Số dư ${label} không đủ — khả dụng ${formatMoney(money(available, doc.amount.currency), { mode: 'compact' })}, cần ${formatMoney(
-            money(doc.amount.minor, doc.amount.currency),
-            { mode: 'compact' },
-          )}`,
-          data: { account_id: accountId, available_minor: available.toString(), amount_minor: doc.amount.minor.toString() },
-        });
-      }
-    }
   }
 
   // 5. chứng từ bắt buộc — trừ khi có override + lý do
@@ -617,76 +610,62 @@ export async function transition(input: {
       s.decided_at = now;
       s.opinion = body.opinion ?? null;
       s.reason = body.reason ?? null;
-      s.amount_at_decision = doc.amount.minor.toString();
+      s.amount_at_decision = effectiveAmountMinor.toString();
     }
   }
 
-  // Ghi nhận thực thi (pay): phiếu thường đóng ngay; phiếu "chi từng phần" cộng dồn
-  // các kỳ chi và chỉ đóng khi đã chi hết (feature "Phiếu chi từng phần").
-  const allowPartial = Boolean(doc.execution?.allow_partial);
+  // Ghi nhận thực thi (pay): phiếu chi đóng ngay trong MỘT lần chi (không còn chi từng phần).
   let executionPatch: ExecutionPatch | null = null;
-  let partialDelta: { amount: bigint; date: string } | null = null;
+  const amountCurrency = { currency: doc.amount.currency, decimals: doc.amount.decimals ?? 0 };
   if (action === 'pay') {
-    const total = BigInt(doc.amount.minor);
-    const prevInstallments = doc.execution?.installments ?? [];
-    const alreadyPaid = sumInstallments(prevInstallments);
+    const total = originalAmountMinor;
     const requested = body.execution?.actual_amount_minor ? BigInt(body.execution.actual_amount_minor) : null;
     const accountId = body.execution?.account_id ?? nextAccountId ?? oldAccountId;
-    const amountCurrency = { currency: doc.amount.currency, decimals: doc.amount.decimals ?? 0 };
+    const actual = requested ?? total;
 
-    const mapPrev = (): Record<string, unknown>[] =>
-      prevInstallments.map((i) => ({
-        at: i.at ?? null,
-        amount_minor: i.amount_minor ?? 0n,
-        amount: { minor: i.amount_minor ?? 0n, ...amountCurrency },
-        bank_ref: i.bank_ref ?? null,
-        account_id: i.account_id ?? null,
-        executed_by: i.executed_by ?? null,
-      }));
-
-    if (allowPartial) {
-      const res = nextPartialStage(total, alreadyPaid, requested);
-      if (!res.ok) throw new ApiError({ code: 'FG-VAL-001', detail: res.detail, errors: { actual_amount_minor: res.detail } });
-      const stage = res.stage;
-      // chưa chi hết → giữ phiếu mở (approved/processing); chi hết → paid
-      nextStatus = stage.finished ? 'paid' : doc.status === 'processing' ? 'processing' : 'approved';
-      executionPatch = {
-        paid_at: businessDate,
-        bank_ref: body.execution?.bank_ref ?? null,
-        executed_by: actor.user_id,
-        actual_amount_minor: stage.paid_total,
-        actual_amount: { minor: stage.paid_total, ...amountCurrency },
-        allow_partial: true,
-        paid_minor: stage.paid_total,
-        installments: [
-          ...mapPrev(),
-          { at: businessDate, amount_minor: stage.amount, amount: { minor: stage.amount, ...amountCurrency }, bank_ref: body.execution?.bank_ref ?? null, account_id: accountId, executed_by: actor.user_id },
-        ],
-      };
-      partialDelta = { amount: stage.amount, date: businessDate };
-    } else {
-      // phiếu thường: client có thể gửi số thực chi khác số đề nghị → đóng ngay như cũ
-      nextStatus = 'paid';
-      const actual = requested ?? total;
-      executionPatch = {
-        paid_at: body.execution?.paid_at ?? businessDate,
-        bank_ref: body.execution?.bank_ref ?? null,
-        executed_by: actor.user_id,
-        actual_amount_minor: actual,
-        actual_amount: { minor: actual, ...amountCurrency },
-        allow_partial: false,
-        paid_minor: actual,
-        installments: [
-          ...mapPrev(),
-          { at: businessDate, amount_minor: actual, amount: { minor: actual, ...amountCurrency }, bank_ref: body.execution?.bank_ref ?? null, account_id: accountId, executed_by: actor.user_id },
-        ],
-      };
-      partialDelta = { amount: actual, date: body.execution?.paid_at ?? businessDate };
+    // 4b. số dư tài khoản nguồn — CHỈ chặn ở bước THỰC THI, không chặn khi duyệt.
+    if (doc.kind === 'spend' && accountId) {
+      const available = await availableBalanceOf(accountId);
+      if (actual > available) {
+        const account = await Models.BankAccount.findById(accountId)
+          .select({ bank_name: 1, account_number: 1 })
+          .lean();
+        const label = account ? `${account.bank_name} ${account.account_number ?? ''}`.trim() : 'tài khoản nguồn';
+        throw new ApiError({
+          code: 'FG-WF-010',
+          detail: `Số dư ${label} không đủ — khả dụng ${formatMoney(money(available, doc.amount.currency), { mode: 'compact' })}, cần ${formatMoney(
+            money(actual, doc.amount.currency),
+            { mode: 'compact' },
+          )}`,
+          data: { account_id: accountId, available_minor: available.toString(), amount_minor: actual.toString() },
+        });
+      }
     }
+
+    nextStatus = 'paid';
+    executionPatch = {
+      paid_at: body.execution?.paid_at ?? businessDate,
+      bank_ref: body.execution?.bank_ref ?? null,
+      executed_by: actor.user_id,
+      actual_amount_minor: actual,
+      actual_amount: { minor: actual, ...amountCurrency },
+    };
   }
   if (action === 'queue_payment') nextStatus = 'processing';
   if (action === 'expire') nextStatus = 'expired';
   if (action === 'cancel') nextStatus = 'cancelled';
+
+  // Phiếu thu duyệt xong → TỰ ĐỘNG thực thi, cộng tiền vào tài khoản (không cần bước pay).
+  if (isDecision && nextStatus === 'approved' && doc.kind === 'income') {
+    nextStatus = 'paid';
+    executionPatch = {
+      paid_at: businessDate,
+      bank_ref: null,
+      executed_by: actor.user_id,
+      actual_amount_minor: effectiveAmountMinor,
+      actual_amount: { minor: effectiveAmountMinor, ...amountCurrency },
+    };
+  }
 
   // ý kiến bắt buộc
   if (ACTION_REQUIRES_OPINION[action] && !((body.reason ?? '') || (body.opinion ?? '')).trim()) {
@@ -695,11 +674,11 @@ export async function transition(input: {
 
   // gõ lại số tiền cho khoản lớn / ngoài ngân sách (DS §7.14 rule 4)
   const inPlan = doc.budget?.in_plan !== false;
-  if (isDecision && needsAmountRetype(doc.amount.minor, inPlan) && body.confirm_amount_minor !== doc.amount.minor.toString()) {
+  if (isDecision && needsAmountRetype(effectiveAmountMinor, inPlan) && body.confirm_amount_minor !== effectiveAmountMinor.toString()) {
     throw new ApiError({
       code: 'FG-WF-007',
       detail: 'Khoản vượt ngưỡng hoặc ngoài ngân sách — cần gõ lại số tiền để xác nhận',
-      data: { need_confirm_amount: true, amount_minor: doc.amount.minor.toString(), in_plan: inPlan },
+      data: { need_confirm_amount: true, amount_minor: effectiveAmountMinor.toString(), in_plan: inPlan },
     });
   }
 
@@ -711,7 +690,7 @@ export async function transition(input: {
       const matrixSteps = (await resolveMatrix({
         company_id: String(doc.company_id),
         kind: doc.kind,
-        amount_minor: doc.amount.minor,
+        amount_minor: effectiveAmountMinor,
         category_id: doc.category_id ? String(doc.category_id) : null,
       })).steps;
       const ms: MatrixStep | undefined = matrixSteps.find((s) => s.role === targetStep.role);
@@ -728,7 +707,7 @@ export async function transition(input: {
     actor: { user_id: actor.user_id, role: actor.role, name: actor.name },
     from: doc.status,
     to: nextStatus,
-    amount_at_decision: doc.amount.minor.toString(),
+    amount_at_decision: effectiveAmountMinor.toString(),
     opinion: body.opinion ?? null,
     reason: body.reason ?? null,
     request_id: body.request_id,
@@ -738,6 +717,7 @@ export async function transition(input: {
       ...(isDecision ? { skipped: skipped.map((s) => s.order) } : {}),
       ...(myStep ? { step_order: myStep.order } : {}),
       ...(nextAccountId && nextAccountId !== oldAccountId ? { account: { before: oldAccountId, after: nextAccountId } } : {}),
+      ...(resolvedAmount.changed ? { amount_change: { before: originalAmountMinor.toString(), after: effectiveAmountMinor.toString() } } : {}),
       ...(executionPatch
         ? {
             execution: {
@@ -749,21 +729,11 @@ export async function transition(input: {
             },
           }
         : {}),
-      ...(partialDelta && executionPatch
-        ? {
-            installment: {
-              amount_minor: partialDelta.amount.toString(),
-              paid_minor: executionPatch.paid_minor.toString(),
-              remaining_minor: (BigInt(doc.amount.minor) - executionPatch.paid_minor).toString(),
-              finished: nextStatus === 'paid',
-            },
-          }
-        : {}),
-      ...(action === 'approve' && body.allow_partial && nextStatus === 'approved' ? { partial_enabled: true } : {}),
     },
   });
 
   const set: Record<string, unknown> = { status: nextStatus };
+  if (resolvedAmount.changed) set['amount.minor'] = effectiveAmountMinor;
   if (nextAccountId && nextAccountId !== oldAccountId) set['source.account_id'] = nextAccountId;
   if (isDecision) set['approval.steps'] = nextSteps;
   if (isDecision) set.sla_deadline = nextStepAfter
@@ -775,8 +745,6 @@ export async function transition(input: {
     set.execution = executionPatch;
     if (body.execution?.account_id) set['source.account_id'] = body.execution.account_id;
   }
-  // Cấp duyệt cuối bật chi từng phần: chỉ áp dụng khi phiếu thực sự duyệt xong.
-  if (action === 'approve' && body.allow_partial && nextStatus === 'approved') set['execution.allow_partial'] = true;
   if (['paid', 'rejected', 'cancelled', 'expired'].includes(nextStatus)) set.closed_at = now;
   if (isDecision || action === 'pay') set.evidence = evidence;
 
@@ -823,8 +791,7 @@ export async function transition(input: {
     to: nextStatus,
     execution: set.execution as never,
     newAccountId: (set['source.account_id'] as string | undefined) ?? null,
-    actualDelta: partialDelta,
-    installmentIndex: executionPatch ? Math.max(0, executionPatch.installments.length - 1) : 0,
+    installmentIndex: 0,
   });
 
   // 8. thông báo cho cấp kế tiếp (email không await — arch §6)
@@ -833,8 +800,8 @@ export async function transition(input: {
       doc,
       actorName: actor.name,
       stepRole: nextStepAfter?.role ?? null,
-      amountMinor: doc.amount.minor,
-      compact: formatMoney(money(doc.amount.minor, doc.amount.currency), { mode: 'compact' }),
+      amountMinor: effectiveAmountMinor,
+      compact: formatMoney(money(effectiveAmountMinor, doc.amount.currency), { mode: 'compact' }),
       status: nextStatus,
       statusLabel: STATUS_REGISTRY[nextStatus]?.labelVi ?? nextStatus,
     });
