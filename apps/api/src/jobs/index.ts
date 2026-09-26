@@ -220,7 +220,7 @@ const DISPATCH: Record<TaskName, () => Promise<Record<string, unknown>>> = {
   archive: async () => archiveOldDocuments(),
   cleanup: async () => cleanupOrphans(),
 
-  /** Sao lưu dữ liệu mỗi 30' (cron GH Actions) + dọn bản cũ hơn 1 ngày. */
+  /** Sao lưu dữ liệu mỗi 30' (cron GH Actions) + dọn bản cũ hơn 30 ngày. */
   backup: async () => {
     const created = await createBackup();
     const pruned = await pruneBackups();

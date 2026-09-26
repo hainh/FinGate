@@ -1,5 +1,5 @@
 /**
- * ADM-14 — Sao lưu dữ liệu: job nền mỗi 30' giữ 1 ngày + tạo/tải bản sao lưu ngay.
+ * ADM-14 — Sao lưu dữ liệu: job nền mỗi 30' giữ 30 ngày + tạo/tải bản sao lưu ngay.
  * Chỉ tài khoản quản trị hệ thống (`admin:backup`).
  */
 
@@ -37,7 +37,7 @@ export function BackupScreen(): ReactNode {
       <AdminNav />
       <FgPageHeader
         title="Sao lưu dữ liệu"
-        meta="Hệ thống tự sao lưu mỗi 30 phút · giữ bản trong 1 ngày · tải bất kỳ lúc nào"
+        meta="Hệ thống tự sao lưu mỗi 30 phút · giữ bản trong 30 ngày · tải bất kỳ lúc nào"
         actions={
           <FgButton variant="primary" loading={create.isPending} onClick={() => void runNow()}>
             ⤓ Tạo &amp; tải bản sao lưu
@@ -57,7 +57,7 @@ export function BackupScreen(): ReactNode {
           ) : (
             <>
               <FgText style="caption" color="muted">
-                {data.items.length} bản còn giữ · tối đa {data.retain_hours} giờ
+                {data.items.length} bản còn giữ · tối đa {data.retain_days} ngày
               </FgText>
               <div className="fg-card" style={{ padding: 0 }}>
                 <FgTable<BackupFile>

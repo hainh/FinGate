@@ -1,7 +1,7 @@
 /**
  * Sao lưu dữ liệu (ADM-14) — chỉ tài khoản quản trị hệ thống (`admin:backup`).
  *
- * · GET  /system/backups          — danh sách bản còn giữ (≤ 1 ngày)
+ * · GET  /system/backups          — danh sách bản còn giữ (≤ 30 ngày)
  * · POST /system/backups          — tạo bản sao lưu ngay
  * · GET  /system/backups/:file    — tải 1 bản (fs: phục vụ bytes; s3: 302 presigned)
  */
@@ -37,9 +37,9 @@ export function backupRoutes(app: FastifyInstance): void {
     defineRoute({
       method: 'GET',
       url: '/system/backups',
-      config: { perms: ['admin:backup'] as Permission[], screen: 'ADM-14', summary: 'Danh sách bản sao lưu (giữ 1 ngày)' },
+      config: { perms: ['admin:backup'] as Permission[], screen: 'ADM-14', summary: 'Danh sách bản sao lưu (giữ 30 ngày)' },
       handler: async (_req, reply) =>
-        ok(reply, { data: { items: await listBackups(), retain_hours: BACKUP_RETAIN_MS / 3_600_000 } }),
+        ok(reply, { data: { items: await listBackups(), retain_days: BACKUP_RETAIN_MS / 86_400_000 } }),
     }),
   );
 

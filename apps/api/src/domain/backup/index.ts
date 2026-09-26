@@ -1,5 +1,5 @@
 /**
- * Sao lưu dữ liệu (logical dump) — job `backup` chạy mỗi 30', giữ 1 ngày.
+ * Sao lưu dữ liệu (logical dump) — job `backup` chạy mỗi 30', giữ 30 ngày.
  *
  * Xuất toàn bộ collection ra một file EJSON (canonical — giữ nguyên ObjectId/Date/Int64)
  * nén gzip rồi ghi qua StorageAdapter (`backups/fingate-YYYYMMDD-HHmmss.json.gz`).
@@ -14,8 +14,8 @@ import { getEnv } from '../../env.ts';
 
 const PREFIX = 'backups/';
 
-/** Giữ bản sao lưu trong 1 ngày (yêu cầu vận hành). */
-export const BACKUP_RETAIN_MS = 24 * 60 * 60 * 1000;
+/** Giữ bản sao lưu trong 30 ngày (yêu cầu vận hành). */
+export const BACKUP_RETAIN_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** `fingate-YYYYMMDD-HHmmss[-mmm].json.gz` — chặn path traversal ở route tải về. */
 export const BACKUP_FILE_RE = /^fingate-\d{8}-\d{6}(-\d{3})?\.json\.gz$/;
@@ -82,7 +82,7 @@ export async function listBackups(): Promise<BackupFile[]> {
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
-/** Xoá bản cũ hơn `retainMs` (mặc định 1 ngày). */
+/** Xoá bản cũ hơn `retainMs` (mặc định 30 ngày). */
 export async function pruneBackups(retainMs = BACKUP_RETAIN_MS): Promise<{ removed: number }> {
   const cutoff = Date.now() - retainMs;
   const adapter = storage();

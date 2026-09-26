@@ -221,7 +221,7 @@ ObjectId/Date/Int64) ra `backups/fingate-YYYYMMDD-HHmmss-mmm.json.gz` qua
 - **Job `backup` mỗi 30'**: workflow `.github/workflows/data-backup.yml`
   (`*/30 * * * *`) → `POST /api/v1/tasks/backup`; Profile O thêm cron
   `*/30 * * * * curl -fsS -X POST http://localhost:8080/api/v1/tasks/backup -H "x-task-token: $TASK_TOKEN"`.
-- **Retain 1 ngày**: mỗi lần chạy job xoá bản cũ hơn 24h (`pruneBackups`).
+- **Retain 30 ngày**: mỗi lần chạy job xoá bản cũ hơn 30 ngày (`pruneBackups`).
 - **API (chỉ `admin:backup` — tài khoản Quản trị hệ thống)**:
   - `GET  /api/v1/system/backups` → danh sách bản còn giữ
   - `POST /api/v1/system/backups` → tạo ngay

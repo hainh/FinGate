@@ -320,7 +320,7 @@ export function useBackups(enabled = true) {
   return useQuery({
     queryKey: ['backups'],
     enabled: enabled && can('admin:backup'),
-    queryFn: () => apiData<{ items: import('./types.ts').BackupFile[]; retain_hours: number }>('/system/backups'),
+    queryFn: () => apiData<{ items: import('./types.ts').BackupFile[]; retain_days: number }>('/system/backups'),
   });
 }
 

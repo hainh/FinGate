@@ -1,6 +1,6 @@
 name: data-backup
 
-# Sao lưu dữ liệu mỗi 30 phút; bản cũ hơn 1 ngày bị job `backup` tự dọn.
+# Sao lưu dữ liệu mỗi 30 phút; bản cũ hơn 30 ngày bị job `backup` tự dọn.
 on:
   schedule:
     - cron: '*/30 * * * *'
