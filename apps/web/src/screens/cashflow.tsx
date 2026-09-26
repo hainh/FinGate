@@ -193,6 +193,7 @@ export function CashflowHistoryScreen(): ReactNode {
               {lanes.map((lane) => (
                 <FgCard
                   key={lane.key}
+                  collapsible
                   title={<span>{lane.label}{lane.sub_label ? <span style={{ color: 'var(--fg-text-muted)', fontWeight: 400 }}> · {lane.sub_label}</span> : null}</span>}
                   style={{ marginTop: 'var(--fg-space-4)' }}
                   padded={false}

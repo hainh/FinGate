@@ -273,6 +273,35 @@ body {
   gap: var(--fg-space-2);
 }
 
+/* tiêu đề card ấn được để thu gọn / mở rộng (FgCard collapsible) */
+.fg-collapse-head {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fg-space-2);
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.fg-collapse-head:hover .fg-card-title {
+  color: var(--fg-text-link);
+}
+
+.fg-collapse-caret {
+  flex: 0 0 auto;
+  color: var(--fg-text-muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
 .fg-grid {
   display: grid;
   gap: var(--fg-space-4);
