@@ -83,7 +83,7 @@ export function BankAccountsScreen(): ReactNode {
                   title: 'Số dư',
                   key: 'bal',
                   align: 'right',
-                  render: (_v, r) => <FgMoney value={moneyFromWire(r.balance)} mode="compact" missingLabel="—" />,
+                  render: (_v, r) => <FgMoney value={moneyFromWire(r.balance)} mode="full" missingLabel="—" />,
                 },
                 {
                   title: 'Khả dụng',
@@ -91,7 +91,7 @@ export function BankAccountsScreen(): ReactNode {
                   align: 'right',
                   render: (_v, r) => (
                     <span className={r.breach ? 'fg-cell-breach' : undefined} style={{ padding: r.breach ? '2px 6px' : undefined, borderRadius: 'var(--fg-radius-sm)' }}>
-                      <FgMoney value={moneyFromWire(r.available)} mode="compact" />
+                      <FgMoney value={moneyFromWire(r.available)} mode="full" />
                       {r.breach ? ' ⛔' : ''}
                     </span>
                   ),
@@ -100,7 +100,7 @@ export function BankAccountsScreen(): ReactNode {
                   title: 'Ngưỡng tối thiểu',
                   key: 'min',
                   align: 'right',
-                  render: (_v, r) => <FgMoney value={moneyFromWire(r.min_balance)} mode="compact" />,
+                  render: (_v, r) => <FgMoney value={moneyFromWire(r.min_balance)} mode="full" />,
                 },
                 {
                   title: 'Trạng thái',

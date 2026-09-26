@@ -70,7 +70,7 @@ function SwimlaneChart({ buckets, lanes }: { buckets: string[]; lanes: CashflowL
             preserveAspectRatio="none"
             style={{ flex: 1, height: H, minWidth: 0 }}
             role="img"
-            aria-label={`${lane.label}: thu ${formatMoney(moneyFromWire(lane.total_inflow)!, { mode: 'compact' })} · chi ${formatMoney(moneyFromWire(lane.total_outflow)!, { mode: 'compact' })}`}
+            aria-label={`${lane.label}: thu ${formatMoney(moneyFromWire(lane.total_inflow)!, { mode: 'full' })} · chi ${formatMoney(moneyFromWire(lane.total_outflow)!, { mode: 'full' })}`}
           >
             {lane.points.map((p, i) => {
               const x = i * slot;
@@ -113,19 +113,19 @@ function LaneTable({ lane, granularity }: { lane: CashflowLane; granularity: Cas
       pagination={lane.points.length > 31 ? { pageSize: 31, size: 'small' } : false}
       columns={[
         { title: granularity === 'day' ? 'Ngày' : 'Tháng', dataIndex: 'bucket', render: (v: string) => <span className="fg-num">{bucketLabel(v)}</span> },
-        { title: 'Thu', dataIndex: 'inflow', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-        { title: 'Chi', dataIndex: 'outflow', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-        { title: 'Thuần', dataIndex: 'net', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-        { title: 'Luỹ kế', dataIndex: 'cumulative', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
+        { title: 'Thu', dataIndex: 'inflow', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="full" /> },
+        { title: 'Chi', dataIndex: 'outflow', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="full" /> },
+        { title: 'Thuần', dataIndex: 'net', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="full" /> },
+        { title: 'Luỹ kế', dataIndex: 'cumulative', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="full" emphasis /> },
       ]}
       summary={() => (
         <Table.Summary.Row>
           <Table.Summary.Cell index={0}>
             <FgText style="bodyS" strong>Tổng</FgText>
           </Table.Summary.Cell>
-          <Table.Summary.Cell index={1} align="right"><FgMoney value={moneyFromWire(lane.total_inflow)} mode="compact" /></Table.Summary.Cell>
-          <Table.Summary.Cell index={2} align="right"><FgMoney value={moneyFromWire(lane.total_outflow)} mode="compact" /></Table.Summary.Cell>
-          <Table.Summary.Cell index={3} align="right"><FgMoney value={moneyFromWire(lane.total_net)} mode="compact" /></Table.Summary.Cell>
+          <Table.Summary.Cell index={1} align="right"><FgMoney value={moneyFromWire(lane.total_inflow)} mode="full" /></Table.Summary.Cell>
+          <Table.Summary.Cell index={2} align="right"><FgMoney value={moneyFromWire(lane.total_outflow)} mode="full" /></Table.Summary.Cell>
+          <Table.Summary.Cell index={3} align="right"><FgMoney value={moneyFromWire(lane.total_net)} mode="full" /></Table.Summary.Cell>
           <Table.Summary.Cell index={4} />
         </Table.Summary.Row>
       )}
@@ -145,7 +145,7 @@ function KpiRow({ totals }: { totals: CashflowHistoryResult['totals'] }): ReactN
         <FgCard key={k.label} className="fg-kpi">
           <FgText style="caption" color="muted">{k.label}</FgText>
           <div className="fg-kpi-value">
-            <FgMoney value={k.value} mode="kpi" emphasis />
+            <FgMoney value={k.value} mode="full" emphasis />
           </div>
         </FgCard>
       ))}
