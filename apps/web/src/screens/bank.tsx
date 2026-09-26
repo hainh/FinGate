@@ -149,16 +149,20 @@ function FgTooltipNew(): ReactNode {
   );
 }
 
-/** Số tiền: bản đầy đủ ở trên, bản rút gọn (mờ) ở dưới. */
+/** Số tiền: bản đầy đủ ở trên, bản rút gọn (mờ) ở dưới — chỉ khi khác bản đầy đủ. */
 function MoneyStack({ value, missingLabel }: { value: MoneyWire | null; missingLabel?: string }): ReactNode {
   const m = moneyFromWire(value);
   if (!m) return <FgMoney value={null} mode="full" missingLabel={missingLabel} />;
+  const full = formatMoney(m, { mode: 'full' });
+  const compact = formatMoney(m, { mode: 'compact' });
   return (
     <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.35 }}>
       <FgMoney value={m} mode="full" />
-      <FgText style="caption" color="muted">
-        {formatMoney(m, { mode: 'compact' })}
-      </FgText>
+      {compact !== full ? (
+        <FgText style="caption" color="muted">
+          {compact}
+        </FgText>
+      ) : null}
     </span>
   );
 }
