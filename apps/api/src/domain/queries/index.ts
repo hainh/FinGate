@@ -831,15 +831,20 @@ export function weekdayVi(iso: string): string {
  * (thực thu/chi đã dịch chuyển; scope ép ở đầu mọi query)
  * ================================================================== */
 
-const MONTHS_BACK: Record<CashflowPeriod, number> = { '6m': 6, '1y': 12, '2y': 24 };
+/** Số ngày của các kỳ "theo ngày" (7/30/90). */
+const CASHFLOW_DAYS: Partial<Record<CashflowPeriod, number>> = { '7d': 7, '30d': 30, '90d': 90 };
+/** Số tháng của các kỳ "theo tháng" (6m/1y/2y). */
+const CASHFLOW_MONTHS: Partial<Record<CashflowPeriod, number>> = { '6m': 6, '1y': 12, '2y': 24 };
+
+export type CashflowGranularity = 'day' | 'month';
 
 export interface CashflowPoint {
-  /** `YYYY-MM`. */
-  month: string;
+  /** `YYYY-MM-DD` (theo ngày) hoặc `YYYY-MM` (theo tháng). */
+  bucket: string;
   inflow: WireAmount;
   outflow: WireAmount;
   net: WireAmount;
-  /** luỹ kế dòng tiền thuần trong kỳ (0 tại tháng đầu). */
+  /** luỹ kế dòng tiền thuần trong kỳ (0 tại mốc đầu). */
   cumulative: WireAmount;
 }
 
@@ -858,20 +863,28 @@ export interface CashflowLane {
 export interface CashflowHistoryResult {
   period: CashflowPeriod;
   group: CashflowGroup;
+  granularity: CashflowGranularity;
   from: string;
   to: string;
-  months: string[];
+  buckets: string[];
   lanes: CashflowLane[];
   totals: { inflow: WireAmount; outflow: WireAmount; net: WireAmount };
   scope_label: string;
 }
 
+/** `count` ngày gần nhất (tăng dần) — gồm cả hôm nay. */
+function lastDays(count: number): { from: string; to: string; buckets: string[] } {
+  const to = today();
+  const from = addDays(to, -(count - 1));
+  return { from, to, buckets: Array.from({ length: count }, (_, i) => addDays(from, i)) };
+}
+
 /** `count` tháng gần nhất (tăng dần) — gồm cả tháng hiện tại. */
-function lastMonths(count: number): string[] {
+function lastMonths(count: number): { from: string; to: string; buckets: string[] } {
   const [y, m] = today().split('-').map(Number) as [number, number];
-  const out: string[] = [];
-  for (let i = count - 1; i >= 0; i--) out.push(new Date(Date.UTC(y, m - 1 - i, 1)).toISOString().slice(0, 7));
-  return out;
+  const buckets: string[] = [];
+  for (let i = count - 1; i >= 0; i--) buckets.push(new Date(Date.UTC(y, m - 1 - i, 1)).toISOString().slice(0, 7));
+  return { from: `${buckets[0]}-01`, to: dayEndOf(today()), buckets };
 }
 
 export async function cashflowHistory(
@@ -880,19 +893,23 @@ export async function cashflowHistory(
 ): Promise<CashflowHistoryResult> {
   const period = opts.period ?? '1y';
   const group = opts.group ?? 'none';
-  const months = lastMonths(MONTHS_BACK[period]);
-  const from = opts.from ?? `${months[0]}-01`;
-  const to = opts.to ?? dayEndOf(today());
+  const days = CASHFLOW_DAYS[period];
+  const granularity: CashflowGranularity = days ? 'day' : 'month';
+  const range = days ? lastDays(days) : lastMonths(CASHFLOW_MONTHS[period] ?? 12);
+  const { buckets } = range;
+  const from = opts.from ?? range.from;
+  const to = opts.to ?? range.to;
+  const bucketExpr = granularity === 'day' ? '$date' : { $substr: ['$date', 0, 7] };
 
   const rows = await scopedAggregate<{
-    _id: { month: string; company_id: unknown; account_id: unknown };
+    _id: { bucket: string; company_id: unknown; account_id: unknown };
     in_minor: unknown;
     out_minor: unknown;
   }>(Models.CashEntry, scopeOf(scope), [
     { $match: { date: { $gte: from, $lte: to } } },
     {
       $group: {
-        _id: { month: { $substr: ['$date', 0, 7] }, company_id: '$company_id', account_id: '$account_id' },
+        _id: { bucket: bucketExpr, company_id: '$company_id', account_id: '$account_id' },
         in_minor: { $sum: { $cond: [{ $eq: ['$direction', 'in'] }, '$amount_minor', 0] } },
         out_minor: { $sum: { $cond: [{ $eq: ['$direction', 'out'] }, '$amount_minor', 0] } },
       },
@@ -920,7 +937,7 @@ export async function cashflowHistory(
     sub_label: string | null;
     company_id: string | null;
     account_id: string | null;
-    byMonth: Map<string, { in: bigint; out: bigint }>;
+    byBucket: Map<string, { in: bigint; out: bigint }>;
   }
   const lanes = new Map<string, LaneAcc>();
   const fresh = (l: LaneAcc): LaneAcc => {
@@ -931,10 +948,10 @@ export async function cashflowHistory(
   for (const r of rows) {
     let lane: LaneAcc;
     if (group === 'none') {
-      lane = lanes.get('all') ?? fresh({ key: 'all', label: 'Toàn phạm vi', sub_label: null, company_id: null, account_id: null, byMonth: new Map() });
+      lane = lanes.get('all') ?? fresh({ key: 'all', label: 'Toàn phạm vi', sub_label: null, company_id: null, account_id: null, byBucket: new Map() });
     } else if (group === 'company') {
       const cid = String(r._id.company_id);
-      lane = lanes.get(`c:${cid}`) ?? fresh({ key: `c:${cid}`, label: cname.get(cid) ?? '—', sub_label: null, company_id: cid, account_id: null, byMonth: new Map() });
+      lane = lanes.get(`c:${cid}`) ?? fresh({ key: `c:${cid}`, label: cname.get(cid) ?? '—', sub_label: null, company_id: cid, account_id: null, byBucket: new Map() });
     } else {
       const aid = String(r._id.account_id);
       const existing = lanes.get(`a:${aid}`);
@@ -949,23 +966,23 @@ export async function cashflowHistory(
           sub_label: cid ? cname.get(cid) ?? null : null,
           company_id: cid,
           account_id: aid,
-          byMonth: new Map(),
+          byBucket: new Map(),
         });
       }
     }
-    const month = String(r._id.month);
-    const cur = lane.byMonth.get(month) ?? { in: 0n, out: 0n };
+    const bucket = String(r._id.bucket);
+    const cur = lane.byBucket.get(bucket) ?? { in: 0n, out: 0n };
     cur.in += asBigInt(r.in_minor);
     cur.out += asBigInt(r.out_minor);
-    lane.byMonth.set(month, cur);
+    lane.byBucket.set(bucket, cur);
   }
 
   const toLane = (l: LaneAcc): CashflowLane => {
     let cumulative = 0n;
-    const points = months.map((month) => {
-      const v = l.byMonth.get(month) ?? { in: 0n, out: 0n };
+    const points = buckets.map((bucket) => {
+      const v = l.byBucket.get(bucket) ?? { in: 0n, out: 0n };
       cumulative += v.in - v.out;
-      return { month, inflow: wire(v.in), outflow: wire(v.out), net: wire(v.in - v.out), cumulative: wire(cumulative) };
+      return { bucket, inflow: wire(v.in), outflow: wire(v.out), net: wire(v.in - v.out), cumulative: wire(cumulative) };
     });
     const totalIn = points.reduce((a, p) => a + asBigInt(p.inflow.minor), 0n);
     const totalOut = points.reduce((a, p) => a + asBigInt(p.outflow.minor), 0n);
@@ -1002,9 +1019,10 @@ export async function cashflowHistory(
   return {
     period,
     group,
+    granularity,
     from,
     to,
-    months,
+    buckets,
     lanes: outLanes,
     totals: { inflow: wire(totalIn), outflow: wire(totalOut), net: wire(totalIn - totalOut) },
     scope_label,

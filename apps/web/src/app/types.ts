@@ -361,7 +361,7 @@ export interface RolloverResult {
 }
 
 export interface CashflowPoint {
-  month: string;
+  bucket: string;
   inflow: MoneyWire;
   outflow: MoneyWire;
   net: MoneyWire;
@@ -380,15 +380,17 @@ export interface CashflowLane {
   total_net: MoneyWire;
 }
 
-export type CashflowPeriod = '6m' | '1y' | '2y';
+export type CashflowPeriod = '7d' | '30d' | '90d' | '6m' | '1y' | '2y';
 export type CashflowGroup = 'none' | 'company' | 'account';
+export type CashflowGranularity = 'day' | 'month';
 
 export interface CashflowHistoryResult {
   period: CashflowPeriod;
   group: CashflowGroup;
+  granularity: CashflowGranularity;
   from: string;
   to: string;
-  months: string[];
+  buckets: string[];
   lanes: CashflowLane[];
   totals: { inflow: MoneyWire; outflow: MoneyWire; net: MoneyWire };
   scope_label: string;

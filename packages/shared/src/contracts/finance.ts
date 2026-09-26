@@ -269,12 +269,15 @@ export const agingMatrix = z.object({
  * Dòng tiền — lịch sử (thực thu/chi) + kế hoạch + ngân sách
  * ------------------------------------------------------------------ */
 
-/** CASH-01 — khoảng thời gian lịch sử dòng tiền. */
-export const CASHFLOW_PERIODS = ['6m', '1y', '2y'] as const;
+/** CASH-01 — khoảng thời gian lịch sử dòng tiền (7/30/90 ngày theo ngày; 6m/1y/2y theo tháng). */
+export const CASHFLOW_PERIODS = ['7d', '30d', '90d', '6m', '1y', '2y'] as const;
 /** CASH-01 — cách chia swimlane. */
 export const CASHFLOW_GROUPS = ['none', 'company', 'account'] as const;
+/** CASH-01 — độ mịn gốc dữ liệu. */
+export const CASHFLOW_GRANULARITIES = ['day', 'month'] as const;
 export type CashflowPeriod = (typeof CASHFLOW_PERIODS)[number];
 export type CashflowGroup = (typeof CASHFLOW_GROUPS)[number];
+export type CashflowGranularity = (typeof CASHFLOW_GRANULARITIES)[number];
 
 export const cashflowHistoryQuery = z.object({
   period: z.enum(lit(CASHFLOW_PERIODS)).default('1y'),
@@ -283,12 +286,12 @@ export const cashflowHistoryQuery = z.object({
 });
 
 export const cashflowPoint = z.object({
-  /** `YYYY-MM` */
-  month: z.string(),
+  /** `YYYY-MM-DD` (theo ngày) hoặc `YYYY-MM` (theo tháng). */
+  bucket: z.string(),
   inflow: moneyWire,
   outflow: moneyWire,
   net: moneyWire,
-  /** luỹ kế dòng tiền thuần trong kỳ (bắt đầu từ 0 tại tháng đầu). */
+  /** luỹ kế dòng tiền thuần trong kỳ (bắt đầu từ 0 tại mốc đầu). */
   cumulative: moneyWire,
 });
 
@@ -307,9 +310,10 @@ export const cashflowLane = z.object({
 export const cashflowHistoryResult = z.object({
   period: z.enum(lit(CASHFLOW_PERIODS)),
   group: z.enum(lit(CASHFLOW_GROUPS)),
+  granularity: z.enum(lit(CASHFLOW_GRANULARITIES)),
   from: businessDate,
   to: businessDate,
-  months: z.array(z.string()),
+  buckets: z.array(z.string()),
   lanes: z.array(cashflowLane),
   totals: z.object({ inflow: moneyWire, outflow: moneyWire, net: moneyWire }),
   scope_label: z.string(),
