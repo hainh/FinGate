@@ -184,6 +184,9 @@ export function CashflowHistoryScreen(): ReactNode {
             );
           }
           const lanes = [...data.lanes].sort((a, b) => (laneTotal(b) > laneTotal(a) ? 1 : -1));
+          // Ngày gần nhất lên trước (luỹ kế vẫn tính theo thứ tự thời gian).
+          const viewBuckets = [...data.buckets].reverse();
+          const viewLanes = lanes.map((l) => ({ ...l, points: [...l.points].reverse() }));
           const byDay = data.granularity === 'day';
           return (
             <>
@@ -203,9 +206,9 @@ export function CashflowHistoryScreen(): ReactNode {
                   </span>
                 }
               >
-                <SwimlaneChart buckets={data.buckets} lanes={lanes} />
+                <SwimlaneChart buckets={viewBuckets} lanes={viewLanes} />
               </FgCard>
-              {lanes.map((lane) => (
+              {viewLanes.map((lane) => (
                 <FgCard
                   key={lane.key}
                   collapsible
