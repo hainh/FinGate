@@ -360,26 +360,39 @@ export interface RolloverResult {
   prepared_percent?: number;
 }
 
-export interface ForecastRow {
-  date: string;
-  weekday: string;
-  opening: MoneyWire;
+export interface CashflowPoint {
+  month: string;
   inflow: MoneyWire;
   outflow: MoneyWire;
   net: MoneyWire;
-  closing: MoneyWire;
-  min_balance: MoneyWire;
-  breach: boolean;
-  drivers?: { kind: string; label: string; amount: MoneyWire; document_id: string | null }[];
+  cumulative: MoneyWire;
 }
 
-export interface ForecastResult {
-  rows: ForecastRow[];
-  totals: { inflow: MoneyWire; outflow: MoneyWire; net: MoneyWire; min_closing: MoneyWire };
-  first_breach_date: string | null;
-  shortfall_by_company?: { company_id: string; company_name: string; date: string; amount: MoneyWire }[];
+export interface CashflowLane {
+  key: string;
+  label: string;
+  sub_label: string | null;
+  company_id: string | null;
+  account_id: string | null;
+  points: CashflowPoint[];
+  total_inflow: MoneyWire;
+  total_outflow: MoneyWire;
+  total_net: MoneyWire;
+}
+
+export type CashflowPeriod = '6m' | '1y' | '2y';
+export type CashflowGroup = 'none' | 'company' | 'account';
+
+export interface CashflowHistoryResult {
+  period: CashflowPeriod;
+  group: CashflowGroup;
+  from: string;
+  to: string;
+  months: string[];
+  lanes: CashflowLane[];
+  totals: { inflow: MoneyWire; outflow: MoneyWire; net: MoneyWire };
+  scope_label: string;
   generated_at?: string;
-  stale?: boolean;
 }
 
 export interface Newsletter {

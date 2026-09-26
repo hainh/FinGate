@@ -21,6 +21,8 @@ import {
   money,
   statusLabel,
   today,
+  type CashflowGroup,
+  type CashflowPeriod,
   type DocKind,
   type Role,
 } from '@fingate/shared';
@@ -822,6 +824,191 @@ export async function forecast(
 const WEEKDAYS = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
 export function weekdayVi(iso: string): string {
   return WEEKDAYS[new Date(`${iso}T00:00:00Z`).getUTCDay()] ?? '';
+}
+
+/* ================================================================== *
+ * 5b. CASH-01 — lịch sử dòng tiền từ sổ cái `cash_entries`
+ * (thực thu/chi đã dịch chuyển; scope ép ở đầu mọi query)
+ * ================================================================== */
+
+const MONTHS_BACK: Record<CashflowPeriod, number> = { '6m': 6, '1y': 12, '2y': 24 };
+
+export interface CashflowPoint {
+  /** `YYYY-MM`. */
+  month: string;
+  inflow: WireAmount;
+  outflow: WireAmount;
+  net: WireAmount;
+  /** luỹ kế dòng tiền thuần trong kỳ (0 tại tháng đầu). */
+  cumulative: WireAmount;
+}
+
+export interface CashflowLane {
+  key: string;
+  label: string;
+  sub_label: string | null;
+  company_id: string | null;
+  account_id: string | null;
+  points: CashflowPoint[];
+  total_inflow: WireAmount;
+  total_outflow: WireAmount;
+  total_net: WireAmount;
+}
+
+export interface CashflowHistoryResult {
+  period: CashflowPeriod;
+  group: CashflowGroup;
+  from: string;
+  to: string;
+  months: string[];
+  lanes: CashflowLane[];
+  totals: { inflow: WireAmount; outflow: WireAmount; net: WireAmount };
+  scope_label: string;
+}
+
+/** `count` tháng gần nhất (tăng dần) — gồm cả tháng hiện tại. */
+function lastMonths(count: number): string[] {
+  const [y, m] = today().split('-').map(Number) as [number, number];
+  const out: string[] = [];
+  for (let i = count - 1; i >= 0; i--) out.push(new Date(Date.UTC(y, m - 1 - i, 1)).toISOString().slice(0, 7));
+  return out;
+}
+
+export async function cashflowHistory(
+  scope: ScopeLike,
+  opts: { period?: CashflowPeriod; group?: CashflowGroup; from?: string; to?: string } = {},
+): Promise<CashflowHistoryResult> {
+  const period = opts.period ?? '1y';
+  const group = opts.group ?? 'none';
+  const months = lastMonths(MONTHS_BACK[period]);
+  const from = opts.from ?? `${months[0]}-01`;
+  const to = opts.to ?? dayEndOf(today());
+
+  const rows = await scopedAggregate<{
+    _id: { month: string; company_id: unknown; account_id: unknown };
+    in_minor: unknown;
+    out_minor: unknown;
+  }>(Models.CashEntry, scopeOf(scope), [
+    { $match: { date: { $gte: from, $lte: to } } },
+    {
+      $group: {
+        _id: { month: { $substr: ['$date', 0, 7] }, company_id: '$company_id', account_id: '$account_id' },
+        in_minor: { $sum: { $cond: [{ $eq: ['$direction', 'in'] }, '$amount_minor', 0] } },
+        out_minor: { $sum: { $cond: [{ $eq: ['$direction', 'out'] }, '$amount_minor', 0] } },
+      },
+    },
+  ]);
+
+  const companyIds = [...new Set(rows.map((r) => String(r._id.company_id)))];
+  const accountIds = [...new Set(rows.map((r) => String(r._id.account_id)))];
+  const companies = companyIds.length
+    ? await Models.Company.find({ _id: { $in: companyIds as never } })
+        .select({ name: 1 })
+        .lean<{ _id: unknown; name?: string }[]>()
+    : [];
+  const accounts = accountIds.length
+    ? await Models.BankAccount.find({ _id: { $in: accountIds as never } })
+        .select({ bank_name: 1, account_number: 1, company_id: 1 })
+        .lean<{ _id: unknown; bank_name?: string; account_number?: string; company_id?: unknown }[]>()
+    : [];
+  const cname = new Map(companies.map((c) => [String(c._id), String(c.name ?? '—')]));
+  const amap = new Map(accounts.map((a) => [String(a._id), a]));
+
+  interface LaneAcc {
+    key: string;
+    label: string;
+    sub_label: string | null;
+    company_id: string | null;
+    account_id: string | null;
+    byMonth: Map<string, { in: bigint; out: bigint }>;
+  }
+  const lanes = new Map<string, LaneAcc>();
+  const fresh = (l: LaneAcc): LaneAcc => {
+    lanes.set(l.key, l);
+    return l;
+  };
+
+  for (const r of rows) {
+    let lane: LaneAcc;
+    if (group === 'none') {
+      lane = lanes.get('all') ?? fresh({ key: 'all', label: 'Toàn phạm vi', sub_label: null, company_id: null, account_id: null, byMonth: new Map() });
+    } else if (group === 'company') {
+      const cid = String(r._id.company_id);
+      lane = lanes.get(`c:${cid}`) ?? fresh({ key: `c:${cid}`, label: cname.get(cid) ?? '—', sub_label: null, company_id: cid, account_id: null, byMonth: new Map() });
+    } else {
+      const aid = String(r._id.account_id);
+      const existing = lanes.get(`a:${aid}`);
+      if (existing) {
+        lane = existing;
+      } else {
+        const a = amap.get(aid);
+        const cid = a?.company_id ? String(a.company_id) : null;
+        lane = fresh({
+          key: `a:${aid}`,
+          label: a ? `${a.bank_name ?? '—'} · ${a.account_number ?? ''}` : '—',
+          sub_label: cid ? cname.get(cid) ?? null : null,
+          company_id: cid,
+          account_id: aid,
+          byMonth: new Map(),
+        });
+      }
+    }
+    const month = String(r._id.month);
+    const cur = lane.byMonth.get(month) ?? { in: 0n, out: 0n };
+    cur.in += asBigInt(r.in_minor);
+    cur.out += asBigInt(r.out_minor);
+    lane.byMonth.set(month, cur);
+  }
+
+  const toLane = (l: LaneAcc): CashflowLane => {
+    let cumulative = 0n;
+    const points = months.map((month) => {
+      const v = l.byMonth.get(month) ?? { in: 0n, out: 0n };
+      cumulative += v.in - v.out;
+      return { month, inflow: wire(v.in), outflow: wire(v.out), net: wire(v.in - v.out), cumulative: wire(cumulative) };
+    });
+    const totalIn = points.reduce((a, p) => a + asBigInt(p.inflow.minor), 0n);
+    const totalOut = points.reduce((a, p) => a + asBigInt(p.outflow.minor), 0n);
+    return {
+      key: l.key,
+      label: l.label,
+      sub_label: l.sub_label,
+      company_id: l.company_id,
+      account_id: l.account_id,
+      points,
+      total_inflow: wire(totalIn),
+      total_outflow: wire(totalOut),
+      total_net: wire(totalIn - totalOut),
+    };
+  };
+
+  const outLanes = [...lanes.values()]
+    .map(toLane)
+    .sort((a, b) => {
+      const av = asBigInt(a.total_inflow.minor) + asBigInt(a.total_outflow.minor);
+      const bv = asBigInt(b.total_inflow.minor) + asBigInt(b.total_outflow.minor);
+      return av < bv ? 1 : av > bv ? -1 : 0;
+    });
+
+  const totalIn = outLanes.reduce((a, l) => a + asBigInt(l.total_inflow.minor), 0n);
+  const totalOut = outLanes.reduce((a, l) => a + asBigInt(l.total_outflow.minor), 0n);
+  const scope_label =
+    scope.companyIds === null
+      ? 'Toàn tập đoàn'
+      : (await Models.Company.find({ _id: { $in: scope.companyIds as never } })
+          .select({ name: 1 })
+          .lean<{ name?: string }[]>()).map((c) => String(c.name ?? '—')).join(' · ') || '—';
+
+  return {
+    period,
+    group,
+    from,
+    to,
+    months,
+    lanes: outLanes,
+    totals: { inflow: wire(totalIn), outflow: wire(totalOut), net: wire(totalIn - totalOut) },
+    scope_label,
+  };
 }
 
 /* ================================================================== *

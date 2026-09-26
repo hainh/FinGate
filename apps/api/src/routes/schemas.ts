@@ -17,6 +17,7 @@ import {
   budgetUpsertBody,
   categoryUpsertBody,
   changePasswordBody,
+  cashflowHistoryQuery,
   companyUpsertBody,
   debtListQuery,
   debtUpsertBody,
@@ -27,7 +28,6 @@ import {
   documentUpdateBody,
   exportRequestBody,
   forgotPasswordBody,
-  forecastQuery,
   internalTransferBody,
   loanUpsertBody,
   loginBody,
@@ -116,6 +116,6 @@ export const dashboardQuerySchema = j(dashboardQuery);
 export const newsletterQuerySchema = j(newsletterQuery);
 export const reportQuerySchema = j(reportQuery);
 export const exportRequestBodySchema = j(exportRequestBody);
-export const forecastQuerySchema = j(forecastQuery);
+export const cashflowHistoryQuerySchema = j(cashflowHistoryQuery);
 export const notificationListQuerySchema = j(notificationListQuery);
 export const searchQuerySchema = j(searchQuery);

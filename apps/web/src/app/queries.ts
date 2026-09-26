@@ -12,11 +12,11 @@ import type {
   AlertRow,
   BankAccountDetail,
   BankAccountRow,
+  CashflowHistoryResult,
   DashboardOverview,
   DecisionPack,
   DebtRowWire,
   DocumentDetail,
-  ForecastResult,
   ListResult,
   LoanRow,
   MatrixEntry,
@@ -197,11 +197,11 @@ export function useDebts(kind: 'receivable' | 'payable', extra?: Record<string, 
   });
 }
 
-export function useForecast(horizon: string) {
+export function useCashflowHistory(period: string, group: string) {
   const { scope } = useAuth();
   return useQuery({
-    queryKey: ['forecast', scope, horizon],
-    queryFn: () => apiData<ForecastResult>('/cashflow/forecast', { query: { scope, horizon } }),
+    queryKey: ['cashflow-history', scope, period, group],
+    queryFn: () => apiData<CashflowHistoryResult>('/cashflow/history', { query: { scope, period, group } }),
   });
 }
 

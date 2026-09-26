@@ -266,51 +266,54 @@ export const agingMatrix = z.object({
 });
 
 /* ------------------------------------------------------------------ *
- * Dòng tiền — forecast (§XV) + kế hoạch + ngân sách
+ * Dòng tiền — lịch sử (thực thu/chi) + kế hoạch + ngân sách
  * ------------------------------------------------------------------ */
 
-export const forecastQuery = z.object({
-  horizon: z.enum(['7', '30', '60', '90']).default('30'),
+/** CASH-01 — khoảng thời gian lịch sử dòng tiền. */
+export const CASHFLOW_PERIODS = ['6m', '1y', '2y'] as const;
+/** CASH-01 — cách chia swimlane. */
+export const CASHFLOW_GROUPS = ['none', 'company', 'account'] as const;
+export type CashflowPeriod = (typeof CASHFLOW_PERIODS)[number];
+export type CashflowGroup = (typeof CASHFLOW_GROUPS)[number];
+
+export const cashflowHistoryQuery = z.object({
+  period: z.enum(lit(CASHFLOW_PERIODS)).default('1y'),
+  group: z.enum(lit(CASHFLOW_GROUPS)).default('none'),
   scope: z.string().max(64).optional(),
-  company_id: objectId.optional(),
-  from: businessDate.optional(),
 });
 
-export const forecastRow = z.object({
-  date: businessDate,
-  weekday: z.string(),
-  opening: moneyWire,
+export const cashflowPoint = z.object({
+  /** `YYYY-MM` */
+  month: z.string(),
   inflow: moneyWire,
   outflow: moneyWire,
   net: moneyWire,
-  closing: moneyWire,
-  min_balance: moneyWire,
-  breach: z.boolean(),
-  /** nguồn của dòng tiền: kế hoạch thu, phiếu chi đã duyệt, đáo hạn, chi định kỳ. */
-  drivers: z
-    .array(z.object({ kind: z.string(), label: z.string(), amount: moneyWire, document_id: objectId.nullable() }))
-    .default([]),
+  /** luỹ kế dòng tiền thuần trong kỳ (bắt đầu từ 0 tại tháng đầu). */
+  cumulative: moneyWire,
 });
 
-export const forecastResult = z.object({
+export const cashflowLane = z.object({
+  key: z.string(),
+  label: z.string(),
+  sub_label: z.string().nullable(),
+  company_id: objectId.nullable(),
+  account_id: objectId.nullable(),
+  points: z.array(cashflowPoint),
+  total_inflow: moneyWire,
+  total_outflow: moneyWire,
+  total_net: moneyWire,
+});
+
+export const cashflowHistoryResult = z.object({
+  period: z.enum(lit(CASHFLOW_PERIODS)),
+  group: z.enum(lit(CASHFLOW_GROUPS)),
   from: businessDate,
   to: businessDate,
-  rows: z.array(forecastRow),
-  totals: z.object({ inflow: moneyWire, outflow: moneyWire, net: moneyWire, min_closing: moneyWire }),
-  first_breach_date: businessDate.nullable(),
-  /** "Công ty B có khả năng thiếu tiền 5 tỷ vào ngày 12/09" — bản tin §XIV. */
-  shortfall_alerts: z
-    .array(
-      z.object({
-        company_id: objectId,
-        company_name: z.string(),
-        date: businessDate,
-        amount: moneyWire,
-      }),
-    )
-    .default([]),
+  months: z.array(z.string()),
+  lanes: z.array(cashflowLane),
+  totals: z.object({ inflow: moneyWire, outflow: moneyWire, net: moneyWire }),
+  scope_label: z.string(),
   generated_at: z.string(),
-  stale: z.boolean(),
 });
 
 /** CASH-05 what-if — không ghi vào dữ liệu thật. */

@@ -1,5 +1,5 @@
 /**
- * Nhóm route điều hành: DASH-01 · DASH-03/04 (bản tin) · CASH-01 (forecast) ·
+ * Nhóm route điều hành: DASH-01 · DASH-03/04 (bản tin) · CASH-01 (lịch sử dòng tiền) ·
  * RPT-00→13 (báo cáo) · NOTI-01 · SRCH-02.
  *
  * Dashboard là MỘT endpoint gộp (`Promise.all`, query có index) + `max-age=15` + ETag
@@ -18,8 +18,8 @@ import {
 import { Models } from '../db/models.ts';
 import { defineRoute, requireActor, requireScope, validate } from '../lib/http.ts';
 import { ok } from '../lib/serialize.ts';
-import { dashboardQuery, forecastQuery, reportQuery, searchQuery, newsletterQuery, notificationListQuery } from '@fingate/shared';
-import { accountSnapshots, asBigInt, awaitingBadge, compact, dashboardOverview, forecast, maturityLadder, scopeOf, wire } from '../domain/queries/index.ts';
+import { cashflowHistoryQuery, dashboardQuery, reportQuery, searchQuery, newsletterQuery, notificationListQuery } from '@fingate/shared';
+import { accountSnapshots, asBigInt, awaitingBadge, cashflowHistory, compact, dashboardOverview, maturityLadder, scopeOf, wire } from '../domain/queries/index.ts';
 import { buildNewsletter, cachedNewsletter, storeNewsletter } from '../domain/newsletter/index.ts';
 import { reportPreset } from '../domain/reports/index.ts';
 import { scopedFind, scopedOne } from '../lib/mongo.ts';
@@ -128,17 +128,17 @@ export function dashboardRoutes(app: FastifyInstance): void {
     }),
   );
 
-  /** CASH-01 — dự báo dòng tiền 7/30/60/90. */
+  /** CASH-01 — lịch sử dòng tiền 6 tháng / 1 năm / 2 năm, chia swimlane theo công ty / tài khoản. */
   app.route(
     defineRoute({
       method: 'GET',
-      url: '/cashflow/forecast',
-      config: { perms: ['forecast:read'] as Permission[], screen: 'CASH-01', summary: 'Cash flow forecast' },
+      url: '/cashflow/history',
+      config: { perms: ['forecast:read'] as Permission[], screen: 'CASH-01', summary: 'Cash flow history' },
       handler: async (req, reply) => {
         const scope = requireScope(req);
-        const q = validate(forecastQuery, req.query);
-        const data = await forecast(scope, { horizon: Number(q.horizon), from: q.from });
-        return ok(reply, { data: { ...data, horizon: q.horizon }, generated_at: new Date().toISOString() }, { maxAge: 30, etag: `fc-${q.horizon}-${today()}` });
+        const q = validate(cashflowHistoryQuery, req.query);
+        const data = await cashflowHistory(scope, { period: q.period, group: q.group });
+        return ok(reply, { data: { ...data, generated_at: new Date().toISOString() } }, { maxAge: 30, etag: `cf-${q.period}-${q.group}-${today()}` });
       },
     }),
   );
