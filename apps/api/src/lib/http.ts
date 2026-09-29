@@ -313,6 +313,8 @@ export function installHttpLayer(app: FastifyInstance): void {
     const requested = scopeHeader(req);
     const identity = await resolveIdentity(session.user_id, {
       activeCompanyId: requested && requested !== 'all' ? requested : session.active_company_id,
+      // công ty "nhà" của phiên — chức danh cấp công ty bị ghim vào đây, không đổi bằng header
+      pinnedCompanyId: session.active_company_id,
     });
     if (!identity) {
       await revokeSession(session.session_id);

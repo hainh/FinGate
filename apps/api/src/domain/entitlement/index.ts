@@ -7,9 +7,9 @@
 
 import {
   buildEntitlements,
+  canSpanCompanies,
   formatMoney,
   hasPermission,
-  isGroupOnlyRole,
   money,
   PERMISSIONS,
   ROLE_LABEL,
@@ -53,10 +53,12 @@ function asBigInt(v: unknown): bigint {
 /**
  * Đọc user + assignment đang hoạt động. `activeCompanyId` đến từ phiên
  * (header `x-company-scope` hoặc prefs) — nếu không hợp lệ thì null.
+ * `pinnedCompanyId` là công ty "nhà" của phiên: chức danh cấp công ty bị ghim vào đây,
+ * không thể đổi công ty bằng header (§XXIX — chỉ cấp Tập đoàn mới xuyên công ty con).
  */
 export async function resolveIdentity(
   userId: string,
-  opts: { activeCompanyId?: string | null } = {},
+  opts: { activeCompanyId?: string | null; pinnedCompanyId?: string | null } = {},
 ): Promise<ResolvedIdentity | null> {
   const user = await Models.User.findOne({ _id: userId, status: 'active' })
     .select({
@@ -104,19 +106,21 @@ export async function resolveIdentity(
     denied_permissions: (r.denied_permissions ?? []) as Permission[],
   }));
 
-  const wanted = opts.activeCompanyId;
+  const spansCompanies = assignments.some((a) => canSpanCompanies(a.role));
+  // Cấp Tập đoàn/quản trị: đổi công ty theo yêu cầu. Chức danh cấp công ty: ghim vào công ty
+  // "nhà" của phiên (không đổi được bằng header), fallback dòng phân công đầu tiên.
+  const wanted = spansCompanies ? opts.activeCompanyId : (opts.pinnedCompanyId ?? opts.activeCompanyId);
   const chosen = (wanted ? assignments.find((a) => a.company_id === wanted) : undefined) ?? assignments[0]!;
 
   const permissions = new Set<Permission>();
-  let scope_all = false;
   for (const a of assignments) {
     for (const p of buildEntitlements({ role: a.role, company_id: a.company_id }).permissions) permissions.add(p);
     for (const p of a.extra_permissions) permissions.add(p);
-    if (a.scope_all) scope_all = true;
   }
   for (const a of assignments) for (const p of a.denied_permissions) permissions.delete(p);
-  // chức danh cấp Tập đoàn (P.TGĐ, TGĐ) + quản trị thấy mọi công ty của tập đoàn (blueprint §XXIX)
-  if (assignments.some((a) => isGroupOnlyRole(a.role) || a.role === 'admin')) scope_all = true;
+  // CHỈ chức danh cấp Tập đoàn (P.TGĐ/TGĐ) + quản trị mới có phạm vi xuyên công ty con.
+  // Chức danh cấp công ty (kể cả cờ `scope_all` cũ) chỉ thuộc MỘT công ty (blueprint §XXIX).
+  const scope_all = spansCompanies;
 
   return {
     user,
@@ -133,19 +137,18 @@ export async function resolveIdentity(
 }
 
 export function scopeFor(identity: ResolvedIdentity, requested?: string | null): ScopeLike {
-  const ids = identity.assignments.map((a) => a.company_id);
-  // Yêu cầu MỘT công ty cụ thể → LUÔN thu hẹp về đúng công ty đó, kể cả người có
-  // `scope_all` (chủ tịch/quản trị). Nếu không, bộ chuyển phạm vi ở header vô tác dụng
-  // và dữ liệu công ty A vẫn hiện khi đang chọn công ty B (§7.5).
-  if (requested && requested !== 'all') {
-    if (!identity.scope_all && !ids.includes(requested)) return { companyIds: [] }; // ngoài scope → rỗng, không 500
-    return { companyIds: [requested] };
-  }
   if (identity.scope_all) {
-    // không yêu cầu gì → chủ tịch/quản trị thấy mọi công ty của tập đoàn
+    // Yêu cầu MỘT công ty cụ thể → thu hẹp về đúng công ty đó (chủ tịch/quản trị đổi phạm vi).
+    // Không yêu cầu gì → thấy mọi công ty của tập đoàn.
+    if (requested && requested !== 'all') return { companyIds: [requested] };
     return { companyIds: null };
   }
-  return { companyIds: ids };
+  // Chức danh cấp công ty: chỉ thuộc ĐÚNG MỘT công ty — không bao giờ thấy dữ liệu công ty khác,
+  // kể cả khi hồ sơ cũ có nhiều dòng phân công (blueprint §XXIX: mỗi công ty con có nhân sự riêng).
+  const own = identity.company_id;
+  if (!own) return { companyIds: [] };
+  if (requested && requested !== 'all' && requested !== own) return { companyIds: [] }; // ngoài công ty → rỗng, không 500
+  return { companyIds: [own] };
 }
 
 export function actorInfoFrom(identity: ResolvedIdentity, sessionId: string): ActorInfo {

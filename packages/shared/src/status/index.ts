@@ -40,6 +40,15 @@ export function isGroupOnlyRole(role: string): boolean {
   return (GROUP_ONLY_ROLES as readonly string[]).includes(role);
 }
 
+/**
+ * Vai trò được phép có phạm vi NHIỀU công ty / toàn tập đoàn. Chỉ cấp Tập đoàn (TGĐ/P.TGĐ)
+ * và Quản trị hệ thống mới thấy dữ liệu xuyên công ty con; mọi chức danh cấp công ty
+ * (staff…director) chỉ thuộc MỘT công ty (blueprint §XXIX).
+ */
+export function canSpanCompanies(role: string): boolean {
+  return isGroupOnlyRole(role) || role === 'admin';
+}
+
 /** Cấp bậc chức danh từ thấp → cao (dùng để sắp xếp/hiển thị). `admin` ngoài thang. */
 export const ROLE_LEVEL: Record<Role, number> = {
   staff: 1,

@@ -394,11 +394,15 @@ export function authRoutes(app: FastifyInstance): void {
         const { actor, identity } = requestCtx(req);
         if (!actor || !identity) throw new ApiError({ code: 'FG-AUTH-001' });
         const u = identity.user as { _id?: unknown; email?: string; display_name?: string; status?: string; last_login_at?: Date; prefs?: Record<string, unknown>; totp?: { enabled?: boolean } };
-        // scope_all (quản trị/TGĐ/P.TGĐ): phạm vi chuyển được tới MỌI công ty con, không
-        // chỉ pháp nhân Tập đoàn mà họ được gán → trả về toàn bộ công ty đang hoạt động.
+        // CHỈ cấp Tập đoàn (TGĐ/P.TGĐ) + quản trị mới thấy nhiều công ty. Chức danh cấp công ty
+        // chỉ thuộc MỘT công ty — lọc bỏ mọi phân công khác (kể cả hồ sơ cũ bị gán nhiều công ty).
+        const effectiveAssignments = actor.scope_all
+          ? identity.assignments
+          : identity.assignments.filter((a) => a.company_id === identity.company_id).slice(0, 1);
+        // scope_all: phạm vi chuyển được tới MỌI công ty con, không chỉ pháp nhân Tập đoàn được gán.
         const companies = actor.scope_all
           ? await Models.Company.find({ status: 'active' } as never).select({ name: 1, code: 1 }).sort({ is_group: -1, code: 1 }).lean()
-          : await Models.Company.find({ _id: { $in: identity.assignments.map((a) => a.company_id) } }).select({ name: 1, code: 1 }).lean();
+          : await Models.Company.find({ _id: { $in: effectiveAssignments.map((a) => a.company_id) } }).select({ name: 1, code: 1 }).lean();
         const cmap = new Map(companies.map((c) => [String(c._id), c]));
         const companyOptions = companies.map((c) => ({
           company_id: String(c._id),
@@ -408,7 +412,7 @@ export function authRoutes(app: FastifyInstance): void {
         const user = await Models.User.findById(actor.user_id)
           .select({ email: 1, display_name: 1, status: 1, prefs: 1, totp: 1, last_login_at: 1 })
           .lean();
-        const assignments = identity.assignments.map((a) => ({
+        const assignments = effectiveAssignments.map((a) => ({
           company_id: a.company_id,
           company_name: String(cmap.get(a.company_id)?.name ?? ''),
           company_code: String(cmap.get(a.company_id)?.code ?? ''),
@@ -417,7 +421,8 @@ export function authRoutes(app: FastifyInstance): void {
           role: a.role,
           role_label: ROLE_LABEL[a.role] ?? a.role,
           amount_limit_minor: a.amount_limit_minor.toString(),
-          scope_all: a.scope_all,
+          // phạm vi toàn tập đoàn nay theo CHỨC DANH (chỉ TGĐ/P.TGĐ/quản trị), không theo cột cũ
+          scope_all: actor.scope_all,
         }));
         void u;
         return {

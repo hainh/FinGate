@@ -144,7 +144,19 @@ export function AppProviders({ children }: { children: ReactNode }) {
       setStatus('authed');
       const active = profile.scope?.active_company_id;
       const def = profile.prefs?.default_scope;
-      const next = def === 'all' || !def ? SCOPE_ALL : active && profile.scope.company_ids.includes(def) ? def : SCOPE_ALL;
+      const allowed = profile.scope?.company_ids ?? [];
+      // Chức danh cấp công ty không có "toàn tập đoàn" — luôn ghim về đúng công ty của họ.
+      const next = !profile.scope.all
+        ? def && def !== SCOPE_ALL && allowed.includes(def)
+          ? def
+          : active && allowed.includes(active)
+            ? active
+            : (allowed[0] ?? SCOPE_ALL)
+        : def === 'all' || !def
+          ? SCOPE_ALL
+          : allowed.includes(def)
+            ? def
+            : SCOPE_ALL;
       // Đặt provider đồng bộ TRƯỚC khi setState để các query mount sau đó gửi đúng
       // phạm vi (effect cập nhật provider chạy sau con của nó → dễ lệch ở lần tải đầu).
       setScopeProvider(() => (next !== SCOPE_ALL ? next : null));

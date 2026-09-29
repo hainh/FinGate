@@ -38,7 +38,7 @@ const NAV: NavItem[] = [
   { to: '/ngan-hang/taikhoan', label: 'Ngân hàng', glyph: '▤', perm: 'bank:read', match: ['/ngan-hang', '/ngan-hang/khoan-vay'] },
   { to: '/ngan-hang/dao-han', label: 'Đáo hạn', glyph: '⧗', mobile: true, perm: 'loan:read', dev: true, match: ['/ngan-hang/dao-han'] },
   { to: '/cong-no/phai-thu', label: 'Công nợ', glyph: '≡', perm: 'debt:read', dev: true, match: ['/cong-no'] },
-  { to: '/dong-tien', label: 'Dòng tiền', glyph: '∿', mobile: true, perm: 'forecast:read', dev: true, match: ['/dong-tien'] },
+  { to: '/dong-tien', label: 'Dòng tiền', glyph: '∿', mobile: true, perm: 'forecast:read', match: ['/dong-tien'] },
   { to: '/baocao', label: 'Báo cáo', glyph: '☰', perm: 'report:view', dev: true, match: ['/baocao'] },
   { to: '/ban-tin/ngay', label: 'Bản tin', glyph: '✉', perm: 'report:view', match: ['/ban-tin'] },
   // Ai được vào BẤT KỲ tab Quản trị nào (nhân sự · công ty · ma trận · audit) đều thấy mục này.
@@ -220,7 +220,7 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
           <Dropdown
             menu={{
               items: [
-                { key: SCOPE_ALL, label: 'Toàn tập đoàn' },
+                ...(me?.scope.all ? [{ key: SCOPE_ALL, label: 'Toàn tập đoàn' }] : []),
                 ...companies.map((c) => ({ key: c.company_id, label: `${c.company_code} · ${c.company_name}` })),
               ],
               selectable: true,

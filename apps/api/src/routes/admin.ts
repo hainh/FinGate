@@ -11,6 +11,7 @@ import mongoose from 'mongoose';
 import ExcelJS from 'exceljs';
 import {
   ApiError,
+  canSpanCompanies,
   DEFAULT_AMOUNT_LIMIT_MINOR,
   isGroupOnlyRole,
   MFA_REQUIRED_ROLES,
@@ -209,8 +210,9 @@ export function adminRoutes(app: FastifyInstance): void {
           companyIds = actor.company_id ? [actor.company_id] : companyIds;
         }
         if (!companyIds.length) throw new ApiError({ code: 'FG-HR-002', detail: 'Chưa xác định công ty' });
-        // chức danh cấp Tập đoàn chỉ gán cho pháp nhân Tập đoàn
+        // chức danh cấp Tập đoàn chỉ gán cho pháp nhân Tập đoàn; cấp công ty chỉ một công ty
         await assertGroupOnlyRoleCompany(String(body.role), companyIds);
+        assertCompanyBoundedRole(String(body.role), companyIds);
         const primaryCompanyId = companyIds[0] as string;
         const departments: Record<string, string | null> = {};
         for (const cid of companyIds) {
@@ -774,6 +776,7 @@ export function adminRoutes(app: FastifyInstance): void {
           }
         }
         await assertGroupOnlyRoleCompany(nextRole, nextCompanyIds);
+        assertCompanyBoundedRole(nextRole, nextCompanyIds);
         const nextLimit = body.amount_limit_minor !== undefined ? BigInt(body.amount_limit_minor) : asBigInt(primary?.amount_limit_minor);
         const prevExtra = (primary?.extra_permissions ?? []) as string[];
         const prevDenied = (primary?.denied_permissions ?? []) as string[];
@@ -1989,6 +1992,21 @@ async function assertCompanyAccess(req: FastifyRequest, companyId: string): Prom
 async function groupCompanyId(): Promise<string | null> {
   const c = await Models.Company.findOne({ is_group: true } as never).select({ _id: 1 }).lean();
   return c ? String((c as { _id: unknown })._id) : null;
+}
+
+/**
+ * Chức danh cấp công ty (staff…director) chỉ thuộc ĐÚNG MỘT công ty. Chỉ cấp Tập đoàn
+ * (TGĐ/P.TGĐ) và quản trị mới được gán nhiều công ty con (blueprint §XXIX).
+ */
+function assertCompanyBoundedRole(role: string, companyIds: string[]): void {
+  if (canSpanCompanies(role)) return;
+  if (companyIds.length > 1) {
+    throw new ApiError({
+      code: 'FG-VAL-001',
+      detail: 'Chức danh cấp công ty chỉ thuộc một công ty — không gán nhiều công ty con',
+      errors: { company_ids: 'Chỉ chọn một công ty cho chức danh cấp công ty' },
+    });
+  }
 }
 
 /** Chức danh cấp Tập đoàn (P.TGĐ/TGĐ) chỉ được gán cho đúng pháp nhân Tập đoàn. */

@@ -26,19 +26,22 @@ function identity(companyIds: string[], scopeAll: boolean): ResolvedIdentity {
 }
 
 describe('scopeFor — phạm vi dữ liệu theo công ty', () => {
-  it('người bị ghim công ty: chỉ thấy công ty được chọn', () => {
-    expect(scopeFor(identity(['A', 'B'], false), 'B')).toEqual({ companyIds: ['B'] });
+  it('chức danh cấp công ty: chỉ thấy ĐÚNG công ty của mình', () => {
+    expect(scopeFor(identity(['A'], false), 'A')).toEqual({ companyIds: ['A'] });
+    expect(scopeFor(identity(['A'], false), null)).toEqual({ companyIds: ['A'] });
+    expect(scopeFor(identity(['A'], false), 'all')).toEqual({ companyIds: ['A'] });
   });
 
-  it('người bị ghim công ty: chọn công ty ngoài phạm vi → rỗng', () => {
-    expect(scopeFor(identity(['A'], false), 'C')).toEqual({ companyIds: [] });
+  it('chức danh cấp công ty: yêu cầu công ty khác → rỗng (không rò dữ liệu chéo)', () => {
+    expect(scopeFor(identity(['A'], false), 'B')).toEqual({ companyIds: [] });
   });
 
-  it('người bị ghim công ty: không chọn → mọi công ty được gán', () => {
-    expect(scopeFor(identity(['A', 'B'], false), null)).toEqual({ companyIds: ['A', 'B'] });
+  it('hồ sơ cũ gán nhiều công ty nhưng chức danh cấp công ty → chỉ công ty đầu tiên', () => {
+    expect(scopeFor(identity(['A', 'B'], false), null)).toEqual({ companyIds: ['A'] });
+    expect(scopeFor(identity(['A', 'B'], false), 'B')).toEqual({ companyIds: [] });
   });
 
-  it('scope_all: chọn 1 công ty → THU HẸP về đúng công ty đó (không rò dữ liệu chéo)', () => {
+  it('scope_all: chọn 1 công ty → THU HẸP về đúng công ty đó', () => {
     expect(scopeFor(identity(['A', 'B'], true), 'B')).toEqual({ companyIds: ['B'] });
   });
 

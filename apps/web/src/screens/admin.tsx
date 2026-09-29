@@ -12,6 +12,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Checkbox } from 'antd';
 import {
   accountStatusFor,
+  canSpanCompanies,
   formatMoney,
   isGroupOnlyRole,
   money,
@@ -458,10 +459,15 @@ function InviteModal({
   const groupId = (companies.data?.items ?? []).find((c) => c.is_group)?._id;
   const groupRoleSelected = isGroupOnlyRole(role);
   const companyLocked = lockedToOwnCompany || groupRoleSelected;
+  // Chức danh cấp công ty chỉ thuộc một công ty — không cho chọn nhiều.
+  const canSpan = canSpanCompanies(role);
   useEffect(() => {
     if (groupRoleSelected && groupId) setCompanyIds([groupId]);
     else if (lockedToOwnCompany && currentCompany) setCompanyIds([currentCompany]);
   }, [groupRoleSelected, groupId, lockedToOwnCompany, currentCompany]);
+  useEffect(() => {
+    if (!canSpan && companyIds.length > 1) setCompanyIds([companyIds[0]!]);
+  }, [canSpan, companyIds]);
 
   useEffect(() => {
     if (!open) return;
@@ -549,21 +555,37 @@ function InviteModal({
           <FgInput type="email" value={email} onChange={(e: { target: { value: string } }) => setEmail(e.target.value)} placeholder="ban@congty.vn" />
         </FgField>
         <FgField label="Công ty" required error={fieldErrors.company_ids ?? fieldErrors.company_id ?? null}>
-          <FgMultiSelect
-            options={companyOptions}
-            value={companyIds}
-            onChange={(v) => {
-              setCompanyIds(v);
-              setDeptByCompany((prev) => {
-                const next: Record<string, string | undefined> = {};
-                for (const cid of v) next[cid] = prev[cid];
-                return next;
-              });
-            }}
-            placeholder="Chọn một hoặc nhiều công ty"
-            disabled={companyLocked}
-            style={{ width: '100%' }}
-          />
+          {canSpan ? (
+            <FgMultiSelect
+              options={companyOptions}
+              value={companyIds}
+              onChange={(v) => {
+                setCompanyIds(v);
+                setDeptByCompany((prev) => {
+                  const next: Record<string, string | undefined> = {};
+                  for (const cid of v) next[cid] = prev[cid];
+                  return next;
+                });
+              }}
+              placeholder="Chọn một hoặc nhiều công ty"
+              disabled={companyLocked}
+              style={{ width: '100%' }}
+            />
+          ) : (
+            <FgSelect
+              options={companyOptions}
+              value={companyIds[0]}
+              onChange={(v) => {
+                const next = v ? [v] : [];
+                setCompanyIds(next);
+                setDeptByCompany((prev) => (next[0] ? { [next[0]]: prev[next[0]] } : {}));
+              }}
+              placeholder="Chọn công ty"
+              disabled={companyLocked}
+              allowClear
+              style={{ width: '100%' }}
+            />
+          )}
           {groupRoleSelected ? (
             <FgText style="caption" color="muted">
               Chức danh cấp Tập đoàn chỉ gán cho pháp nhân Tập đoàn.
@@ -572,7 +594,11 @@ function InviteModal({
             <FgText style="caption" color="muted">
               Bạn chỉ mời được nhân sự cho công ty của mình
             </FgText>
-          ) : null}
+          ) : canSpan ? null : (
+            <FgText style="caption" color="muted">
+              Chức danh cấp công ty chỉ thuộc một công ty. Dùng chức danh Tổng Giám đốc/Phó Tổng Giám đốc nếu cần quản lý nhiều công ty con.
+            </FgText>
+          )}
         </FgField>
         <FgField label="Vai trò (phân quyền)" required>
           <FgSelect
@@ -621,7 +647,17 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
   const companies = useCompanies();
   const canMoveCompany = can('hr:transfer');
   const [name, setName] = useState(row.display_name);
-  const [companyIds, setCompanyIds] = useState<string[]>(row.companies?.length ? row.companies.map((c) => c.company_id) : row.company_id ? [row.company_id] : []);
+  const [companyIds, setCompanyIds] = useState<string[]>(() =>
+    !canSpanCompanies(row.role || 'staff')
+      ? row.company_id
+        ? [row.company_id]
+        : []
+      : row.companies?.length
+        ? row.companies.map((c) => c.company_id)
+        : row.company_id
+          ? [row.company_id]
+          : [],
+  );
   const [role, setRole] = useState<string>(row.role || 'staff');
   const [deptByCompany, setDeptByCompany] = useState<Record<string, string | undefined>>(() => {
     const map: Record<string, string | undefined> = {};
@@ -663,9 +699,11 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
   const roleOpts = roleLocked ? GROUP_ROLE_OPTIONS : ROLE_OPTIONS;
   const groupRoleSelected = isGroupOnlyRole(role);
   const companyLockedToGroup = roleLocked || groupRoleSelected;
+  const canSpan = canSpanCompanies(role);
   useEffect(() => {
     if (companyLockedToGroup && groupId) setCompanyIds([groupId]);
-  }, [companyLockedToGroup, groupId]);
+    else if (!canSpan && companyIds.length > 1) setCompanyIds([companyIds[0]!]);
+  }, [companyLockedToGroup, groupId, canSpan, companyIds]);
 
   const roleDefaults = useMemo(() => permissionsForRole((role || 'staff') as Role), [role]);
 
@@ -729,21 +767,37 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
           <FgInput value={row.email} readOnly disabled />
         </FgField>
         <FgField label="Công ty" required error={fieldErrors.company_ids ?? fieldErrors.company_id ?? null}>
-          <FgMultiSelect
-            options={companyOptions}
-            value={companyIds}
-            onChange={(v) => {
-              setCompanyIds(v);
-              setDeptByCompany((prev) => {
-                const next: Record<string, string | undefined> = {};
-                for (const cid of v) next[cid] = prev[cid];
-                return next;
-              });
-            }}
-            placeholder="Chọn một hoặc nhiều công ty"
-            disabled={!canMoveCompany || companyLockedToGroup}
-            style={{ width: '100%' }}
-          />
+          {canSpan ? (
+            <FgMultiSelect
+              options={companyOptions}
+              value={companyIds}
+              onChange={(v) => {
+                setCompanyIds(v);
+                setDeptByCompany((prev) => {
+                  const next: Record<string, string | undefined> = {};
+                  for (const cid of v) next[cid] = prev[cid];
+                  return next;
+                });
+              }}
+              placeholder="Chọn một hoặc nhiều công ty"
+              disabled={!canMoveCompany || companyLockedToGroup}
+              style={{ width: '100%' }}
+            />
+          ) : (
+            <FgSelect
+              options={companyOptions}
+              value={companyIds[0]}
+              onChange={(v) => {
+                const next = v ? [v] : [];
+                setCompanyIds(next);
+                setDeptByCompany((prev) => (next[0] ? { [next[0]]: prev[next[0]] } : {}));
+              }}
+              placeholder="Chọn công ty"
+              disabled={!canMoveCompany || companyLockedToGroup}
+              allowClear
+              style={{ width: '100%' }}
+            />
+          )}
           {companyLockedToGroup ? (
             <FgText style="caption" color="muted">
               Chức danh cấp Tập đoàn không đổi được công ty — luôn thuộc pháp nhân Tập đoàn.
@@ -752,7 +806,11 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
             <FgText style="caption" color="muted">
               Bạn không có quyền chuyển công ty — liên hệ Tổng Giám đốc/Quản trị hệ thống
             </FgText>
-          ) : null}
+          ) : canSpan ? null : (
+            <FgText style="caption" color="muted">
+              Chức danh cấp công ty chỉ thuộc một công ty. Dùng chức danh Tổng Giám đốc/Phó Tổng Giám đốc nếu cần quản lý nhiều công ty con.
+            </FgText>
+          )}
         </FgField>
         <FgField label="Vai trò (phân quyền)" required>
           <FgSelect
