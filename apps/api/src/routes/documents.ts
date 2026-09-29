@@ -8,7 +8,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   ApiError,
-  canSpanCompanies,
   currencyDecimals,
   DOC_KIND_LABEL,
   effectivePermissions,
@@ -954,11 +953,8 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
   ]);
 
   const actorCompany = assignments.find((a) => String(a.company_id) === String(doc.company_id)) ?? assignments[0];
-  // Chức danh cấp công ty chỉ thấy công ty của mình — không tính các dòng phân công cũ khác công ty.
-  const spansCompanies = assignments.some((a) => canSpanCompanies(String(a.role ?? 'staff')));
-  const actorCompanies = spansCompanies
-    ? assignments.map((a) => String(a.company_id))
-    : [String(actorCompany?.company_id ?? '')].filter(Boolean);
+  // Nhân sự có thể trực thuộc nhiều công ty → thấy hồ sơ của mọi công ty mình được gán.
+  const actorCompanies = assignments.map((a) => String(a.company_id)).filter(Boolean);
   const rawSteps = ((doc.approval as { steps?: { order: number; role: Role; user_id: unknown; state: string }[] }) ?? { steps: [] }).steps ?? [];
   // `.lean()` trả ObjectId cho user_id nhúng trong steps → so sánh với string luôn sai (bug can.approve).
   const steps = rawSteps.map((s) => ({ ...s, user_id: s.user_id == null ? null : String(s.user_id) }));

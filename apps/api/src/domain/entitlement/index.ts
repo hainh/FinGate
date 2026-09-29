@@ -107,9 +107,10 @@ export async function resolveIdentity(
   }));
 
   const spansCompanies = assignments.some((a) => canSpanCompanies(a.role));
-  // Cấp Tập đoàn/quản trị: đổi công ty theo yêu cầu. Chức danh cấp công ty: ghim vào công ty
-  // "nhà" của phiên (không đổi được bằng header), fallback dòng phân công đầu tiên.
-  const wanted = spansCompanies ? opts.activeCompanyId : (opts.pinnedCompanyId ?? opts.activeCompanyId);
+  // Cấp Tập đoàn/quản trị: đổi công ty theo yêu cầu (kể cả công ty không được gán). Chức danh
+  // cấp công ty: đổi được giữa các công ty CHÍNH MÌNH được gán (header); yêu cầu ngoài phạm vi
+  // bị bỏ qua (fallback công ty đầu) và `scopeFor` chặn truy cập — chỉ xem MỘT công ty mỗi lúc.
+  const wanted = spansCompanies ? opts.activeCompanyId : (opts.activeCompanyId ?? opts.pinnedCompanyId);
   const chosen = (wanted ? assignments.find((a) => a.company_id === wanted) : undefined) ?? assignments[0]!;
 
   const permissions = new Set<Permission>();
@@ -119,7 +120,7 @@ export async function resolveIdentity(
   }
   for (const a of assignments) for (const p of a.denied_permissions) permissions.delete(p);
   // CHỈ chức danh cấp Tập đoàn (P.TGĐ/TGĐ) + quản trị mới có phạm vi xuyên công ty con.
-  // Chức danh cấp công ty (kể cả cờ `scope_all` cũ) chỉ thuộc MỘT công ty (blueprint §XXIX).
+  // Chức danh cấp công ty (kể cả khi trực thuộc nhiều công ty) KHÔNG có "toàn tập đoàn".
   const scope_all = spansCompanies;
 
   return {
@@ -143,12 +144,13 @@ export function scopeFor(identity: ResolvedIdentity, requested?: string | null):
     if (requested && requested !== 'all') return { companyIds: [requested] };
     return { companyIds: null };
   }
-  // Chức danh cấp công ty: chỉ thuộc ĐÚNG MỘT công ty — không bao giờ thấy dữ liệu công ty khác,
-  // kể cả khi hồ sơ cũ có nhiều dòng phân công (blueprint §XXIX: mỗi công ty con có nhân sự riêng).
-  const own = identity.company_id;
-  if (!own) return { companyIds: [] };
-  if (requested && requested !== 'all' && requested !== own) return { companyIds: [] }; // ngoài công ty → rỗng, không 500
-  return { companyIds: [own] };
+  // Chức danh cấp công ty: có thể trực thuộc NHIỀU công ty, nhưng chỉ xem MỘT công ty mỗi lúc —
+  // chuyển qua lại bằng bộ chọn phạm vi. Yêu cầu công ty ngoài phạm vi → rỗng (không rò dữ liệu).
+  const own = identity.assignments.map((a) => a.company_id);
+  if (!own.length) return { companyIds: [] };
+  if (requested && requested !== 'all') return own.includes(requested) ? { companyIds: [requested] } : { companyIds: [] };
+  const primary = identity.company_id ?? own[0]!;
+  return { companyIds: [primary] };
 }
 
 export function actorInfoFrom(identity: ResolvedIdentity, sessionId: string): ActorInfo {

@@ -49,6 +49,17 @@ export function canSpanCompanies(role: string): boolean {
   return isGroupOnlyRole(role) || role === 'admin';
 }
 
+/**
+ * Chức danh được phép được GÁN NHIỀU công ty con (chức danh cấp công ty + quản trị).
+ * Khác `canSpanCompanies` (phạm vi DỮ LIỆU xuyên công ty con — chỉ cấp Tập đoàn/quản trị):
+ * một nhân sự cấp công ty có thể trực thuộc nhiều công ty, nhưng vẫn chỉ thao tác MỘT công ty
+ * tại một thời điểm qua bộ chọn phạm vi. Chỉ chức danh cấp Tập đoàn bị khóa về đúng pháp nhân
+ * Tập đoàn nên luôn chỉ có một công ty.
+ */
+export function canHoldMultipleCompanies(role: string): boolean {
+  return !isGroupOnlyRole(role);
+}
+
 /** Cấp bậc chức danh từ thấp → cao (dùng để sắp xếp/hiển thị). `admin` ngoài thang. */
 export const ROLE_LEVEL: Record<Role, number> = {
   staff: 1,

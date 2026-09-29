@@ -36,9 +36,12 @@ describe('scopeFor — phạm vi dữ liệu theo công ty', () => {
     expect(scopeFor(identity(['A'], false), 'B')).toEqual({ companyIds: [] });
   });
 
-  it('hồ sơ cũ gán nhiều công ty nhưng chức danh cấp công ty → chỉ công ty đầu tiên', () => {
+  it('chức danh cấp công ty gán nhiều công ty: xem từng công ty một, chuyển được giữa các công ty của mình', () => {
     expect(scopeFor(identity(['A', 'B'], false), null)).toEqual({ companyIds: ['A'] });
-    expect(scopeFor(identity(['A', 'B'], false), 'B')).toEqual({ companyIds: [] });
+    expect(scopeFor(identity(['A', 'B'], false), 'B')).toEqual({ companyIds: ['B'] });
+    expect(scopeFor(identity(['A', 'B'], false), 'all')).toEqual({ companyIds: ['A'] });
+    // công ty KHÔNG được gán → rỗng (không rò dữ liệu chéo)
+    expect(scopeFor(identity(['A', 'B'], false), 'C')).toEqual({ companyIds: [] });
   });
 
   it('scope_all: chọn 1 công ty → THU HẸP về đúng công ty đó', () => {

@@ -12,7 +12,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Checkbox } from 'antd';
 import {
   accountStatusFor,
-  canSpanCompanies,
+  canHoldMultipleCompanies,
   formatMoney,
   isGroupOnlyRole,
   money,
@@ -459,15 +459,12 @@ function InviteModal({
   const groupId = (companies.data?.items ?? []).find((c) => c.is_group)?._id;
   const groupRoleSelected = isGroupOnlyRole(role);
   const companyLocked = lockedToOwnCompany || groupRoleSelected;
-  // Chức danh cấp công ty chỉ thuộc một công ty — không cho chọn nhiều.
-  const canSpan = canSpanCompanies(role);
+  // Chức danh cấp công ty nay có thể trực thuộc nhiều công ty (chỉ cấp Tập đoàn mới khóa 1 công ty).
+  const canSpan = canHoldMultipleCompanies(role);
   useEffect(() => {
     if (groupRoleSelected && groupId) setCompanyIds([groupId]);
     else if (lockedToOwnCompany && currentCompany) setCompanyIds([currentCompany]);
   }, [groupRoleSelected, groupId, lockedToOwnCompany, currentCompany]);
-  useEffect(() => {
-    if (!canSpan && companyIds.length > 1) setCompanyIds([companyIds[0]!]);
-  }, [canSpan, companyIds]);
 
   useEffect(() => {
     if (!open) return;
@@ -594,11 +591,7 @@ function InviteModal({
             <FgText style="caption" color="muted">
               Bạn chỉ mời được nhân sự cho công ty của mình
             </FgText>
-          ) : canSpan ? null : (
-            <FgText style="caption" color="muted">
-              Chức danh cấp công ty chỉ thuộc một công ty. Dùng chức danh Tổng Giám đốc/Phó Tổng Giám đốc nếu cần quản lý nhiều công ty con.
-            </FgText>
-          )}
+          ) : null}
         </FgField>
         <FgField label="Vai trò (phân quyền)" required>
           <FgSelect
@@ -648,15 +641,11 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
   const canMoveCompany = can('hr:transfer');
   const [name, setName] = useState(row.display_name);
   const [companyIds, setCompanyIds] = useState<string[]>(() =>
-    !canSpanCompanies(row.role || 'staff')
-      ? row.company_id
+    row.companies?.length
+      ? row.companies.map((c) => c.company_id)
+      : row.company_id
         ? [row.company_id]
-        : []
-      : row.companies?.length
-        ? row.companies.map((c) => c.company_id)
-        : row.company_id
-          ? [row.company_id]
-          : [],
+        : [],
   );
   const [role, setRole] = useState<string>(row.role || 'staff');
   const [deptByCompany, setDeptByCompany] = useState<Record<string, string | undefined>>(() => {
@@ -699,11 +688,10 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
   const roleOpts = roleLocked ? GROUP_ROLE_OPTIONS : ROLE_OPTIONS;
   const groupRoleSelected = isGroupOnlyRole(role);
   const companyLockedToGroup = roleLocked || groupRoleSelected;
-  const canSpan = canSpanCompanies(role);
+  const canSpan = canHoldMultipleCompanies(role);
   useEffect(() => {
     if (companyLockedToGroup && groupId) setCompanyIds([groupId]);
-    else if (!canSpan && companyIds.length > 1) setCompanyIds([companyIds[0]!]);
-  }, [companyLockedToGroup, groupId, canSpan, companyIds]);
+  }, [companyLockedToGroup, groupId]);
 
   const roleDefaults = useMemo(() => permissionsForRole((role || 'staff') as Role), [role]);
 
@@ -806,11 +794,7 @@ function EditPersonnelModal({ row, onClose, onDone }: { row: PersonnelRow; onClo
             <FgText style="caption" color="muted">
               Bạn không có quyền chuyển công ty — liên hệ Tổng Giám đốc/Quản trị hệ thống
             </FgText>
-          ) : canSpan ? null : (
-            <FgText style="caption" color="muted">
-              Chức danh cấp công ty chỉ thuộc một công ty. Dùng chức danh Tổng Giám đốc/Phó Tổng Giám đốc nếu cần quản lý nhiều công ty con.
-            </FgText>
-          )}
+          ) : null}
         </FgField>
         <FgField label="Vai trò (phân quyền)" required>
           <FgSelect
