@@ -61,7 +61,7 @@ echo "[server] Trạng thái container:"
 docker compose -f deploy/compose.yml ps
 echo "[server] Log gần nhất:"
 sleep 3
-docker compose -f deploy/compose.yml logs --tail=15 app
+docker compose -f deploy/compose.yml logs --tail=15 fingate
 EOF
 
 # 4. Kiểm tra sức khỏe qua ssh
