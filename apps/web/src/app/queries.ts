@@ -166,6 +166,25 @@ export function useBalancesHistory(date?: string) {
   });
 }
 
+/** CHI-02 — gợi ý "Đơn vị nhận tiền" = mọi tài khoản tiền toàn tập đoàn (server chuẩn hoá định dạng). */
+export function usePayeeAccountOptions() {
+  return useQuery({
+    queryKey: ['payee-account-options'],
+    staleTime: 300_000,
+    queryFn: () => apiCall<{ items: import('./types.ts').PayeeAccountOption[] }>('/bank-accounts/payee-options'),
+  });
+}
+
+/** BANK-05 — lịch sử giao dịch của một tài khoản tiền. */
+export function useBankAccountTransactions(id: string | undefined) {
+  const { scope } = useAuth();
+  return useQuery({
+    queryKey: ['bank-account-transactions', scope, id],
+    enabled: !!id,
+    queryFn: () => apiData<import('./types.ts').BankAccountTransactions>(`/bank-accounts/${id}/transactions`, { query: { scope } }),
+  });
+}
+
 export function useLoans() {
   const { scope } = useAuth();
   return useQuery({

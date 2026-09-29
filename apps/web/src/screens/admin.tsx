@@ -37,7 +37,7 @@ import { FgQuery, toastOk } from '../components/pagekit.tsx';
 import { AUDIT_ACTION_LABEL, ROLES_LABEL } from '../components/labels.ts';
 import { ApiRequestError, apiCall } from '../app/api.ts';
 import { APPROVAL_ORDER, DOC_KIND_LABEL, DOC_KINDS, type DocKind } from '@fingate/shared';
-import type { CompanyRow, InviteLinkResult, MatrixEntry, PersonnelRow } from '../app/types.ts';
+import type { CompanyRow, InviteLinkResult, MatrixEntry, PersonnelRow, AuditRow } from '../app/types.ts';
 
 /** Chọn chức danh theo CẤP BẬC từ thấp → cao (1 Kế toán viên … 6 Tổng Giám đốc; admin ngoài thang). */
 const ROLE_OPTIONS: { value: string; label: string }[] = (Object.keys(ROLES_LABEL) as Role[])
@@ -113,18 +113,30 @@ export function PersonnelScreen(): ReactNode {
               rowKey="user_id"
               dataSource={data.items}
               columns={[
-                { title: 'Họ tên', dataIndex: 'display_name', key: 'n', render: (v: string) => <FgText strong>{v}</FgText> },
+                { title: 'Họ tên', dataIndex: 'display_name', key: 'n', width: 250, ellipsis: true, render: (v: string) => <FgText strong>{v}</FgText> },
                 {
                   title: 'Email',
                   dataIndex: 'email',
                   key: 'e',
+                  width: 250,
+                  ellipsis: true,
                 },
                 {
                   title: 'Công ty',
                   key: 'c',
+                  width: 250,
                   render: (_v, r) => {
-                    const names = r.companies?.length ? r.companies.map((c) => c.company_name) : [r.company_name];
-                    return <span>{names.filter(Boolean).join(', ') || '—'}</span>;
+                    const names = (r.companies?.length ? r.companies.map((c) => c.company_name) : [r.company_name]).filter(Boolean) as string[];
+                    if (!names.length) return '—';
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', maxWidth: 250 }}>
+                        {names.map((n, i) => (
+                          <span key={`${n}-${i}`} title={n} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {n}
+                          </span>
+                        ))}
+                      </div>
+                    );
                   },
                 },
                 { title: 'Vai trò', dataIndex: 'role_label', key: 'r' },
@@ -883,6 +895,8 @@ export function CompaniesScreen(): ReactNode {
                       title: 'Tên',
                       dataIndex: 'name',
                       key: 'name',
+                      width: 400,
+                      ellipsis: true,
                       render: (v: string, r: CompanyRow) => (
                         <span>
                           <FgText strong>{v}</FgText>
@@ -1534,6 +1548,70 @@ function MatrixModal({
 
 /* ================= ADM-12 ================= */
 
+/** Stringify giá trị trong diff audit cho dễ đọc (object → JSON nhiều dòng). */
+function prettyDiffValue(v: unknown): string {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'bigint') return v.toString();
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  try {
+    return JSON.stringify(v, (_k, val) => (typeof val === 'bigint' ? val.toString() : val), 2);
+  } catch {
+    return String(v);
+  }
+}
+
+/** `<pre><code>` gọn cho một value audit (giữ xuống dòng, không tràn cột). */
+function DiffPre({ value }: { value: unknown }): ReactNode {
+  return (
+    <pre
+      className="fg-mono"
+      style={{
+        margin: 0,
+        padding: '4px 6px',
+        fontSize: 11,
+        lineHeight: 1.4,
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        background: 'var(--fg-bg-subtle)',
+        border: '1px solid var(--fg-border-subtle)',
+        borderRadius: 'var(--fg-radius-sm)',
+      }}
+    >
+      {prettyDiffValue(value)}
+    </pre>
+  );
+}
+
+function AuditDiffCell({ fields }: { fields: AuditRow['diff_fields'] }): ReactNode {
+  if (!fields?.length) return '—';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 220 }}>
+      {fields.map((d, i) => {
+        const hasBefore = d.before !== null && d.before !== undefined;
+        return (
+          <div key={`${d.field}-${i}`} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span className="fg-mono" style={{ fontSize: 'var(--fg-font-caption-size)', color: 'var(--fg-text-secondary)' }}>
+              {d.field}
+            </span>
+            {hasBefore ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <DiffPre value={d.before} />
+                <span className="fg-muted" style={{ fontSize: 11, textAlign: 'center' }}>
+                  ↓
+                </span>
+                <DiffPre value={d.after} />
+              </div>
+            ) : (
+              <DiffPre value={d.after} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function AuditLogScreen(): ReactNode {
   const [page, setPage] = useState(1);
   const query = useAuditLog(page);
@@ -1549,10 +1627,11 @@ export function AuditLogScreen(): ReactNode {
                 rowKey="_id"
                 dataSource={data.items}
                 columns={[
-                  { title: 'Thời gian', dataIndex: 'at', key: 'at', render: (v: string) => dateTimeLabel(v), width: 160 },
+                  { title: 'Thời gian', dataIndex: 'at', key: 'at', render: (v: string) => dateTimeLabel(v), width: 180 },
                   {
                     title: 'Người',
                     key: 'actor',
+                    width: 180,
                     render: (_v, r) => (
                       <span>
                         <FgText strong>{r.actor.name}</FgText>
@@ -1563,18 +1642,20 @@ export function AuditLogScreen(): ReactNode {
                       </span>
                     ),
                   },
-                  { title: 'Hành động', dataIndex: 'action', key: 'act', render: (v: string) => AUDIT_ACTION_LABEL[v] ?? v },
+                  { title: 'Hành động', dataIndex: 'action', key: 'act', width: 180, ellipsis: true, render: (v: string) => AUDIT_ACTION_LABEL[v] ?? v },
                   {
                     title: 'Đối tượng',
                     key: 'subj',
+                    width: 180,
+                    ellipsis: true,
                     render: (_v, r) => `${r.subject.type}${r.subject.code ? ` · ${r.subject.code}` : ''}`,
                   },
                   {
                     title: 'Trường thay đổi',
                     key: 'diff',
-                    render: (_v, r) => (r.diff_fields?.length ? r.diff_fields.join(', ') : '—'),
+                    render: (_v, r) => <AuditDiffCell fields={r.diff_fields} />,
                   },
-                  { title: 'IP', key: 'ip', render: (_v, r) => <span className="fg-mono">{r.ip ?? '—'}</span> },
+                  { title: 'IP', key: 'ip', width: 180, ellipsis: true, render: (_v, r) => <span className="fg-mono">{r.ip ?? '—'}</span> },
                 ]}
               />
             </div>

@@ -405,6 +405,11 @@ export const DocumentSchema = new Schema(
     /** các request_id đã xử lý — chặn double-click/retry tạo 2 bước (§6) */
     processed_requests: { type: [String], default: [] },
 
+    /** phiếu thu tự động sinh khi thực thi phiếu chi — trỏ về phiếu chi nguồn (chống tạo trùng). */
+    auto_source_document_id: { type: Schema.Types.ObjectId, default: null },
+    /** đánh dấu phiếu được hệ thống nhập tự động (không qua người lập). */
+    auto_created: { type: Boolean, default: false },
+
     /** SLA & overdue là dẫn xuất, lưu để query nhanh */
     sla_deadline: { type: Date, default: null },
     overdue: { type: Boolean, default: false },

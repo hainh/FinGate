@@ -3,7 +3,7 @@
  */
 
 import { useState, type ReactNode } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { formatMoney, moneyFromWire } from '@fingate/shared';
 import { useBankAccounts } from '../app/queries.ts';
 import { useAuth } from '../app/store.tsx';
@@ -16,6 +16,7 @@ import type { BankAccountRow, MoneyWire } from '../app/types.ts';
 export function BankAccountsScreen(): ReactNode {
   const query = useBankAccounts();
   const { can } = useAuth();
+  const navigate = useNavigate();
   const [kindFilter, setKindFilter] = useState<'all' | 'cash' | 'bank'>('all');
   const canEdit = (r: BankAccountRow) => can('bank:write') && (!r.is_group || can('admin:group_accounts'));
   return (
@@ -48,6 +49,11 @@ export function BankAccountsScreen(): ReactNode {
             <FgTable<BankAccountRow>
               rowKey="_id"
               dataSource={items}
+              onRow={(r) => ({
+                onClick: () => navigate(`/ngan-hang/taikhoan/${r._id}`),
+                style: { cursor: 'pointer' },
+                title: 'Xem lịch sử giao dịch',
+              })}
               columns={[
                 {
                   title: 'Tài khoản',
@@ -126,9 +132,11 @@ export function BankAccountsScreen(): ReactNode {
                   width: 90,
                   render: (_v, r) =>
                     canEdit(r) ? (
-                      <Link to={`/ngan-hang/taikhoan/${r._id}/sua`}>
-                        <FgButton size="small">Sửa</FgButton>
-                      </Link>
+                      <span onClick={(e) => e.stopPropagation()}>
+                        <Link to={`/ngan-hang/taikhoan/${r._id}/sua`}>
+                          <FgButton size="small">Sửa</FgButton>
+                        </Link>
+                      </span>
                     ) : null,
                 },
               ]}

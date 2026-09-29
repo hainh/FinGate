@@ -411,6 +411,7 @@ export interface BankAccountRow {
   _id: string;
   company_id: string | null;
   company_name: string | null;
+  company_code?: string | null;
   is_group: boolean;
   label: string;
   bank_name: string;
@@ -447,6 +448,54 @@ export interface BankAccountDetail {
   status: string;
   note: string | null;
   updated_at: string | null;
+}
+
+/** GET /bank-accounts/payee-options — gợi ý "Đơn vị nhận tiền" (toàn tập đoàn). */
+export interface PayeeAccountOption {
+  _id: string;
+  value: string;
+  label: string;
+  company_id: string | null;
+  company_code: string;
+  is_group: boolean;
+  kind: string;
+  bank_name: string;
+  account_number: string;
+}
+
+/** GET /bank-accounts/:id/transactions — một dòng lịch sử giao dịch. */
+export interface BankTransactionRow {
+  _id: string;
+  at: string | null;
+  date: string;
+  direction: 'in' | 'out';
+  kind: string;
+  direction_label: string;
+  direction_tone: string;
+  opening: MoneyWire;
+  amount: MoneyWire;
+  closing: MoneyWire;
+  currency: string;
+  content: string;
+  counterparty: string;
+  reason: string;
+  document: { id: string; code: string; kind: string; href: string } | null;
+}
+
+export interface BankAccountTransactions {
+  account: {
+    _id: string;
+    company_id: string | null;
+    company_name: string | null;
+    is_group: boolean;
+    label: string;
+    bank_name: string;
+    account_number: string;
+    account_name: string;
+    kind: string;
+    currency: string;
+  };
+  items: BankTransactionRow[];
 }
 
 export interface LoanRow {
@@ -587,7 +636,7 @@ export interface AuditRow {
   subject: { type: string; id: string; code: string | null };
   company_id: string | null;
   company_name: string | null;
-  diff_fields: string[];
+  diff_fields: { field: string; before: unknown; after: unknown }[];
   ip: string | null;
   ua: string | null;
 }

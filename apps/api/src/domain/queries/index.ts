@@ -410,6 +410,7 @@ export interface AccountSnapshot {
   account_id: string;
   company_id: string;
   company_name: string;
+  company_code: string;
   label: string;
   account_number_masked: string;
   kind: string;
@@ -462,18 +463,23 @@ export async function accountSnapshots(
 
   // TK tập đoàn có company_id = null → lọc rỗng để tránh CastError khi tra tên công ty
   const companyIds = [...new Set(accounts.map((a) => (a.company_id ? String(a.company_id) : '')))].filter(Boolean);
-  const companies = await Models.Company.find({ _id: { $in: companyIds as never } }).select({ name: 1 }).lean();
+  const companies = await Models.Company.find({ _id: { $in: companyIds as never } }).select({ name: 1, code: 1 }).lean();
   const cname = new Map(companies.map((c) => [String(c._id), String(c.name)]));
+  const ccode = new Map(companies.map((c) => [String(c._id), String(c.code ?? '')]));
+  const groupCompany = await Models.Company.findOne({ is_group: true }).select({ code: 1 }).lean<{ code?: string } | null>();
+  const groupCode = String(groupCompany?.code ?? 'GROUP');
 
   return accounts.map((a) => {
     const rec = byAccount.get(String(a._id));
     const closing = asBigInt(rec?.closing ?? 0n);
     const blocked = asBigInt(rec?.blocked ?? 0n);
     const min = asBigInt(a.min_balance_minor ?? 0n);
+    const companyId = String(a.company_id ?? '');
     return {
       account_id: String(a._id),
-      company_id: String(a.company_id ?? ''),
-      company_name: cname.get(String(a.company_id ?? '')) ?? (a.is_group ? 'Tập đoàn' : '—'),
+      company_id: companyId,
+      company_name: cname.get(companyId) ?? (a.is_group ? 'Tập đoàn' : '—'),
+      company_code: a.is_group ? groupCode : (ccode.get(companyId) ?? ''),
       label: `${a.bank_name} ${maskAccount(String(a.account_number ?? ''))}`,
       account_number_masked: maskAccount(String(a.account_number ?? '')),
       kind: String(a.kind ?? 'bank'),

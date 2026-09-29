@@ -30,7 +30,7 @@ import {
   statementImportBody,
 } from '@fingate/shared';
 import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, debtUpsertBodySchema, internalTransferBodySchema, loanUpsertBodySchema, statementImportBodySchema } from './schemas.ts';
-import { accountSnapshots, asBigInt, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
+import { accountSnapshots, asBigInt, docHref, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
 import { scopedFind } from '../lib/mongo.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
 import { nextDocumentCode } from '../domain/numbering/index.ts';
@@ -84,6 +84,7 @@ export function financeRoutes(app: FastifyInstance): void {
               _id: r.account_id,
               company_id: r.company_id,
               company_name: r.company_name,
+              company_code: r.company_code,
               is_group: r.is_group,
               label: r.label,
               bank_name: r.label.split(' ')[0] ?? '',
@@ -353,6 +354,157 @@ export function financeRoutes(app: FastifyInstance): void {
             }),
           },
           { maxAge: 30 },
+        );
+      },
+    }),
+  );
+
+  /**
+   * CHI-02 — "Đơn vị nhận tiền": danh sách MỌI tài khoản tiền toàn tập đoàn dưới dạng
+   * `Mã công ty - Tên ngân hàng hoặc tên quỹ - Số tài khoản hoặc mã quỹ` (phân tách ` - `).
+   * Server là nguồn chuẩn để FE prefill + để parser khi thực thi đối chiếu.
+   */
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/bank-accounts/payee-options',
+      config: { perms: ['doc:read'] as Permission[], screen: 'CHI-02', summary: 'Tài khoản tiền toàn tập đoàn (gợi ý Đơn vị nhận tiền)' },
+      handler: async (_req, reply) => {
+        const accounts = await Models.BankAccount.find({ status: 'active' } as never)
+          .select({ company_id: 1, is_group: 1, bank_name: 1, account_number: 1, account_name: 1, kind: 1 })
+          .lean();
+        const companies = await Models.Company.find({}).select({ code: 1, is_group: 1 }).lean();
+        const cmap = new Map(companies.map((c) => [String(c._id), String(c.code ?? '')]));
+        const groupCode = String(companies.find((c) => c.is_group)?.code ?? 'GROUP');
+        const items = accounts
+          .map((a) => {
+            const code = a.is_group ? groupCode : (cmap.get(String(a.company_id ?? '')) ?? '');
+            if (!code) return null;
+            const bankName = String(a.bank_name ?? '');
+            const number = String(a.account_number ?? '');
+            if (!bankName || !number) return null;
+            return {
+              _id: String(a._id),
+              value: `${code} - ${bankName} - ${number}`,
+              label: `${code} - ${bankName} - ${number}`,
+              company_id: a.company_id ? String(a.company_id) : null,
+              company_code: code,
+              is_group: Boolean(a.is_group),
+              kind: String(a.kind ?? 'bank'),
+              bank_name: bankName,
+              account_number: number,
+            };
+          })
+          .filter((x): x is NonNullable<typeof x> => Boolean(x));
+        return ok(reply, { items }, { maxAge: 60 });
+      },
+    }),
+  );
+
+  /** BANK-05 — lịch sử giao dịch (sổ cái) của MỘT tài khoản, kèm số dư đầu/cuối từng dòng. */
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/bank-accounts/:id/transactions',
+      config: { perms: ['bank:read'] as Permission[], screen: 'BANK-05', summary: 'Lịch sử giao dịch của tài khoản' },
+      handler: async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const account = await Models.BankAccount.findById(id)
+          .select({ company_id: 1, is_group: 1, bank_name: 1, account_number: 1, account_name: 1, kind: 1, currency: 1 })
+          .lean<Record<string, unknown> | null>();
+        if (!account) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy tài khoản tiền' });
+        const isGroup = Boolean(account.is_group);
+        if (!isGroup) assertCompanyScope(req, account.company_id ? String(account.company_id) : null);
+
+        const limitRaw = Number((req.query as { limit?: string }).limit ?? 500);
+        const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 2000) : 500;
+        const entries = await Models.CashEntry.find({ account_id: id } as never)
+          .sort({ date: 1, created_at: 1 })
+          .limit(limit)
+          .lean<Record<string, unknown>[]>();
+
+        // số dư đầu/cuối chạy dồn theo thời gian (in = +, out = −)
+        let running = 0n;
+        const withBalance = entries.map((e) => {
+          const amount = asBigInt(e.amount_minor);
+          const direction = String(e.direction ?? 'in');
+          const opening = running;
+          running = direction === 'in' ? running + amount : running - amount;
+          return { entry: e, direction, amount, opening, closing: running };
+        });
+
+        const docIds = [...new Set(entries.map((e) => (e.document_id ? String(e.document_id) : '')).filter(Boolean))];
+        const docs = docIds.length
+          ? await Models.Document.find({ _id: { $in: docIds } } as never)
+              .select({ code: 1, kind: 1, title: 1, purpose: 1, payee: 1, execution: 1 })
+              .lean<Record<string, unknown>[]>()
+          : [];
+        const dmap = new Map(docs.map((d) => [String(d._id), d]));
+        const company = account.company_id ? await Models.Company.findById(account.company_id).select({ name: 1 }).lean<{ name?: string } | null>() : null;
+
+        const money = (v: bigint): { minor: string; currency: string; decimals: number } => ({
+          minor: v.toString(),
+          currency: String(account.currency ?? 'VND'),
+          decimals: 0,
+        });
+
+        const items = withBalance
+          .reverse() // mới nhất lên trước
+          .map(({ entry, direction, amount, opening, closing }) => {
+            const doc = entry.document_id ? dmap.get(String(entry.document_id)) : undefined;
+            const exec = (doc?.execution ?? null) as { paid_at?: string | null } | null;
+            const createdAt = entry.created_at ? new Date(String(entry.created_at)).toISOString() : null;
+            // ưu tiên mốc thực thi (nếu có giờ), còn lại dùng created_at (đủ giây).
+            const at = exec?.paid_at && exec.paid_at.length > 10 ? exec.paid_at : createdAt;
+            const payee = (doc?.payee ?? null) as { name?: string } | null;
+            const kind = doc?.kind ? String(doc.kind) : '';
+            const counterparty = payee?.name ? String(payee.name) : direction === 'in' ? '—' : '—';
+            return {
+              _id: String(entry._id),
+              at,
+              date: String(entry.date ?? ''),
+              direction,
+              kind,
+              direction_label: direction === 'in' ? 'Thu' : 'Chi',
+              direction_tone: direction === 'in' ? 'success' : 'attention',
+              opening: money(opening),
+              amount: money(amount),
+              closing: money(closing),
+              currency: String(account.currency ?? 'VND'),
+              content: doc ? String(doc.purpose ?? doc.title ?? '') : '',
+              counterparty,
+              reason: String(entry.reason ?? 'paid'),
+              document: doc
+                ? {
+                    id: String(doc._id),
+                    code: String(doc.code ?? ''),
+                    kind,
+                    href: docHref(kind, String(doc._id)),
+                  }
+                : null,
+            };
+          });
+
+        return ok(
+          reply,
+          {
+            data: {
+              account: {
+                _id: String(account._id),
+                company_id: account.company_id ? String(account.company_id) : null,
+                company_name: company?.name ? String(company.name) : isGroup ? 'Tập đoàn' : null,
+                is_group: isGroup,
+                label: `${String(account.bank_name ?? '')} ${String(account.account_number ?? '')}`.trim(),
+                bank_name: String(account.bank_name ?? ''),
+                account_number: String(account.account_number ?? ''),
+                account_name: String(account.account_name ?? ''),
+                kind: String(account.kind ?? 'bank'),
+                currency: String(account.currency ?? 'VND'),
+              },
+              items,
+            },
+          },
+          { maxAge: 15 },
         );
       },
     }),

@@ -12,7 +12,7 @@ import dayjs from 'dayjs';
 import { DOC_KIND_LABEL, formatMoney, moneyFromWire, normalizePlannedDate, statusLabel, type Money } from '@fingate/shared';
 import { ApiRequestError, apiData } from '../app/api.ts';
 import { SCOPE_ALL, useAuth, useCurrentCompanyId } from '../app/store.tsx';
-import { useBankAccounts, useDocument, usePayeeNames } from '../app/queries.ts';
+import { useBankAccounts, useDocument, usePayeeAccountOptions, usePayeeNames } from '../app/queries.ts';
 import { FgAlert, FgButton, FgField, FgFreeSelect, FgInput, FgMoneyInput, FgSelect, FgTextarea, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
@@ -71,6 +71,7 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
   const existing = useDocument(id);
   const accounts = useBankAccounts();
   const payees = usePayeeNames();
+  const payeeAccounts = usePayeeAccountOptions();
   const [f, setF] = useState<FormState>(initial);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -88,7 +89,15 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
     }));
 
   // Gợi ý đối tượng: mọi tên đã dùng ở bất kỳ phiếu nào trong phạm vi (chọn lại, hoặc nhập mới).
-  const payeeOptions = (payees.data ?? []).map((name) => ({ value: name, label: name }));
+  // Với phiếu CHI, thêm sẵn các tài khoản tiền toàn tập đoàn dạng
+  // "Mã công ty - Tên ngân hàng/quỹ - Số tài khoản/mã quỹ" (server chuẩn hoá) — chọn để hệ thống
+  // tự sinh phiếu thu khi phiếu chi được thực thi.
+  const payeeOptions = (() => {
+    const accountOpts = kind === 'spend' ? (payeeAccounts.data?.items ?? []).map((a) => ({ value: a.value, label: a.value })) : [];
+    const nameOpts = (payees.data ?? []).map((name) => ({ value: name, label: name }));
+    const seen = new Set<string>();
+    return [...accountOpts, ...nameOpts].filter((o) => (seen.has(o.value) ? false : (seen.add(o.value), true)));
+  })();
 
 
   const buildBody = () => {
@@ -203,13 +212,21 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
             <FgField label={`Tiêu đề (bỏ trống sẽ tự sinh)`} error={errors.title}>
               <FgInput value={f.title} onChange={(e) => set('title', e.target.value)} disabled={!canEdit} />
             </FgField>
-            <FgField label={kind === 'income' ? 'Khách hàng trả tiền *' : 'Đơn vị nhận tiền *'} error={errors['payee.name']} help="Chọn đối tượng đã có ở phiếu khác, hoặc gõ tên mới">
+            <FgField
+              label={kind === 'income' ? 'Khách hàng trả tiền *' : 'Đơn vị nhận tiền *'}
+              error={errors['payee.name']}
+              help={
+                kind === 'spend'
+                  ? 'Chọn tài khoản tiền (Mã công ty - Tên ngân hàng/quỹ - Số tài khoản/mã quỹ) để khi thực thi tự sinh phiếu thu, hoặc chọn/gõ đối tượng khác'
+                  : 'Chọn đối tượng đã có ở phiếu khác, hoặc gõ tên mới'
+              }
+            >
               <FgFreeSelect
                 options={payeeOptions}
                 value={f.payee_name}
                 onChange={(v) => set('payee_name', v)}
                 placeholder="Chọn hoặc nhập mới…"
-                loading={payees.isLoading}
+                loading={payees.isLoading || (kind === 'spend' && payeeAccounts.isLoading)}
                 style={{ width: '100%' }}
                 disabled={!canEdit}
               />

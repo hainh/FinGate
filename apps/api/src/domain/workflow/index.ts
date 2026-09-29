@@ -39,6 +39,7 @@ import { resolveMatrix, type MatrixStep } from './matrix.ts';
 import { DEFAULT_CALENDAR, slaDeadline, type WorkingCalendar } from '../calendar/index.ts';
 import { nextDocumentCode } from '../numbering/index.ts';
 import { notifyNextApprover, rebuildEvidence, syncBalancesForDocument } from '../side-effects.ts';
+import { createAutoIncomeForSpend } from './auto-income.ts';
 import { bookedBalance } from '../ledger/index.ts';
 import { assertAccountAllowedForCompany } from '../accounts.ts';
 import {
@@ -793,6 +794,24 @@ export async function transition(input: {
     newAccountId: (set['source.account_id'] as string | undefined) ?? null,
     installmentIndex: 0,
   });
+
+  // 7b. phiếu chi vừa thực thi → nếu "Đơn vị nhận tiền" khớp một tài khoản tiền trong hệ
+  //     thống thì tự sinh phiếu thu tương ứng (đã duyệt bởi người duyệt phiếu chi, tự thực thi).
+  //     Best-effort: lỗi ở đây KHÔNG làm hỏng việc chi đã commit.
+  if (action === 'pay' && doc.kind === 'spend' && executionPatch) {
+    try {
+      await createAutoIncomeForSpend({
+        spend: doc,
+        actor,
+        paidAt: executionPatch.paid_at,
+        amountMinor: executionPatch.actual_amount_minor,
+        requestId: body.request_id,
+        ip: input.ip,
+      });
+    } catch (err) {
+      console.warn('[auto-income] tạo phiếu thu tự động thất bại:', (err as Error).message);
+    }
+  }
 
   // 8. thông báo cho cấp kế tiếp (email không await — arch §6)
   if (isDecision || action === 'pay' || action === 'queue_payment') {
