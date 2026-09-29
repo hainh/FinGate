@@ -137,7 +137,8 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
   const badgeCount = (b?: string): number =>
     b === 'awaiting' ? (overview?.counts?.awaiting_me ?? 0) : b === 'unread' ? (unread?.count ?? 0) : 0;
 
-  const companies = me?.assignments ?? [];
+  const companies = me?.companies ?? [];
+  const assignments = me?.assignments ?? [];
 
   return (
     <div className="fg-shell">
@@ -310,7 +311,7 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
                 </FgText>
                 <br />
                 <FgText style="caption" color="muted">
-                  {companies.find((c) => c.company_id === (scope === SCOPE_ALL ? me?.scope.active_company_id : scope))?.role_label ?? me?.entitlements.role}
+                  {assignments.find((a) => a.company_id === (scope === SCOPE_ALL ? me?.scope.active_company_id : scope))?.role_label ?? me?.entitlements.role}
                 </FgText>
               </span>
             </button>

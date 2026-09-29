@@ -66,7 +66,7 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
   const currentCompany = useCurrentCompanyId();
   const { me, scope } = useAuth();
   const scopeAll = scope === SCOPE_ALL;
-  const companyName = me?.assignments.find((a) => a.company_id === currentCompany)?.company_name ?? null;
+  const companyName = me?.companies.find((c) => c.company_id === currentCompany)?.company_name ?? null;
   const { message } = useToast();
   const existing = useDocument(id);
   const accounts = useBankAccounts();

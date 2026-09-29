@@ -25,6 +25,12 @@ export interface MeAssignment {
   scope_all: boolean;
 }
 
+export interface MeCompany {
+  company_id: string;
+  company_name: string;
+  company_code: string;
+}
+
 export interface Entitlements {
   role: string;
   company_id: string | null;
@@ -55,6 +61,7 @@ export interface MeProfile {
   mfa_required: boolean;
   last_login_at: string | null;
   assignments: MeAssignment[];
+  companies: MeCompany[];
   scope: { company_ids: string[]; all: boolean; active_company_id: string | null };
   entitlements: Entitlements;
   prefs: Prefs;
