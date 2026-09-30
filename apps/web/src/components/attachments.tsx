@@ -23,7 +23,14 @@ export function isPdf(att: AttachmentRef): boolean {
 }
 
 export function attachmentHref(att: AttachmentRef, download = false): string {
-  return `/api/v1/attachments/${att.id}${download ? '?download=1' : ''}`;
+  // `<img>`/`<iframe>`/window.open không gắn được header → truyền phạm vi qua query `scope`
+  // (server đọc cả header lẫn query; thiếu sẽ xét nhầm về công ty nhà của phiên → 403).
+  const params = new URLSearchParams();
+  if (download) params.set('download', '1');
+  const scope = currentScope();
+  if (scope) params.set('scope', scope);
+  const qs = params.toString();
+  return `/api/v1/attachments/${att.id}${qs ? `?${qs}` : ''}`;
 }
 
 function acceptForUpload(file: File): boolean {
