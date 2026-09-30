@@ -7,7 +7,7 @@ import { useRef, useState, type ReactNode } from 'react';
 import { message } from 'antd';
 import { EVIDENCE_LABEL, EVIDENCE_TYPES, type EvidenceType } from '@fingate/shared';
 import type { AttachmentRef, DocumentDetail } from '../app/types.ts';
-import { ApiRequestError, apiData } from '../app/api.ts';
+import { ApiRequestError, apiData, currentScope } from '../app/api.ts';
 import { FgAlert, FgButton, FgField, FgSelect, FgText, FgTooltip } from './primitives.tsx';
 import { FgEmptyState, FgModal, FgProgressBar } from './uitk.tsx';
 
@@ -102,7 +102,12 @@ function putFile(url: string, file: File, headers: Record<string, string>, onPro
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url, true);
-    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+    // fs/dev: PUT same-origin qua app nên server chặn theo phạm vi công ty → phải gắn scope
+    // đang chọn (nếu không sẽ xét nhầm về công ty nhà của phiên → 403 với chứng từ công ty con khác).
+    // s3/R2: presigned URL đi thẳng kho, không qua RBAC app → không thêm header (tránh vỡ CORS).
+    const scope = url.startsWith('/') ? currentScope() : undefined;
+    const allHeaders = scope ? { ...headers, 'x-company-scope': scope } : headers;
+    for (const [k, v] of Object.entries(allHeaders)) xhr.setRequestHeader(k, v);
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress((e.loaded / e.total) * 100);
     };

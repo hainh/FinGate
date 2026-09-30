@@ -43,6 +43,10 @@ let signedOut = false;
 export function setScopeProvider(fn: () => string | null): void {
   scopeProvider = fn;
 }
+/** Phạm vi đang chọn — dùng cho request thủ công (vd PUT upload chứng từ) phải gắn `x-company-scope`. */
+export function currentScope(): string | undefined {
+  return scopeProvider() ?? undefined;
+}
 export function setUnauthorizedHandler(fn: () => void): void {
   unauthorizedHandler = fn;
 }
