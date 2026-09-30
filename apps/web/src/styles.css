@@ -307,6 +307,83 @@ body {
   gap: var(--fg-space-4);
 }
 
+/* ---------------- table → card list (≤767px, DS §5.4) ---------------- */
+
+.fg-mcards {
+  display: flex;
+  flex-direction: column;
+  background: var(--fg-bg-surface);
+}
+
+.fg-mcard {
+  padding: var(--fg-space-3) var(--fg-space-4);
+  border-bottom: var(--fg-border-w-1) solid var(--fg-border-subtle);
+}
+
+.fg-mcard:last-child {
+  border-bottom: 0;
+}
+
+.fg-mcard[data-clickable='true'] {
+  cursor: pointer;
+}
+
+.fg-mcard[data-clickable='true']:active {
+  background: var(--fg-bg-subtle);
+}
+
+.fg-mcard-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--fg-space-2);
+}
+
+.fg-mcard-head-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.fg-mcard-head-extra {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--fg-space-2);
+}
+
+.fg-mcard-body {
+  margin-top: var(--fg-space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--fg-space-1);
+}
+
+.fg-mcard-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--fg-space-3);
+  font-size: var(--fg-font-body-s-size);
+  line-height: var(--fg-font-body-s-line);
+}
+
+.fg-mcard-label {
+  flex: 0 0 auto;
+  color: var(--fg-text-muted);
+}
+
+.fg-mcard-value {
+  min-width: 0;
+  text-align: end;
+  word-break: break-word;
+}
+
+.fg-mcard-expand {
+  margin-top: var(--fg-space-3);
+  padding-top: var(--fg-space-3);
+  border-top: var(--fg-border-w-1) dashed var(--fg-border-subtle);
+}
+
 /* ---------------- text (DS §6.2) ---------------- */
 
 .fg-muted {

@@ -109,6 +109,7 @@ function LaneTable({ lane, granularity }: { lane: CashflowLane; granularity: Cas
     <FgTable
       rowKey="bucket"
       size="small"
+      mobileCards={false}
       dataSource={lane.points}
       pagination={lane.points.length > 31 ? { pageSize: 31, size: 'small' } : false}
       columns={[
