@@ -10,6 +10,7 @@ import { apiCall, apiData, uuid } from './api.ts';
 import { useAuth } from './store.tsx';
 import type {
   AlertRow,
+  ApprovalThresholdResult,
   BankAccountDetail,
   BankAccountRow,
   CashflowHistoryResult,
@@ -304,6 +305,29 @@ export function useMatrixUpsert() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['matrix'] });
     },
+  });
+}
+
+/** Ngưỡng Chairman (ADM-04) — mặc định toàn tập đoàn + override theo công ty, tách theo loại hồ sơ. */
+export function useApprovalThreshold() {
+  const { scope } = useAuth();
+  return useQuery({
+    queryKey: ['approval-threshold', scope],
+    queryFn: () => apiData<ApprovalThresholdResult>('/admin/approval-threshold'),
+  });
+}
+
+export interface ApprovalThresholdUpsertInput {
+  company_id: string | null;
+  amount_minor: string | null;
+  by_kind: { spend?: string | null; income?: string | null; rollover?: string | null; internal?: string | null };
+}
+
+export function useApprovalThresholdUpsert() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ApprovalThresholdUpsertInput) => apiData('/admin/approval-threshold', { method: 'POST', body }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['approval-threshold'] }),
   });
 }
 

@@ -563,6 +563,31 @@ export interface MatrixEntry {
   active: boolean;
 }
 
+export interface ApprovalThresholdKindValues {
+  spend?: string | null;
+  income?: string | null;
+  rollover?: string | null;
+  internal?: string | null;
+}
+
+export interface ApprovalThresholdCompany {
+  company_id: string;
+  company_name: string;
+  /** ngưỡng chung override cho công ty (null = kế thừa mặc định). */
+  amount_minor: string | null;
+  /** ngưỡng theo loại hồ sơ override cho công ty (null = kế thừa). */
+  by_kind: ApprovalThresholdKindValues;
+  /** ngưỡng hiệu lực từng loại sau khi kế thừa. */
+  effective: Record<'spend' | 'income' | 'rollover' | 'internal', string>;
+}
+
+export interface ApprovalThresholdResult {
+  default_minor: string;
+  amount_minor: string | null;
+  by_kind: ApprovalThresholdKindValues;
+  companies: ApprovalThresholdCompany[];
+}
+
 export interface PersonnelCompany {
   company_id: string;
   company_name: string;

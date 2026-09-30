@@ -27,7 +27,7 @@ import {
   type Role,
   type Money,
 } from '@fingate/shared';
-import { useAuditLog, useCompanies, useDepartments, useMatrix, useMatrixUpsert, usePersonnel, type DepartmentRow } from '../app/queries.ts';
+import { useApprovalThreshold, useApprovalThresholdUpsert, useAuditLog, useCompanies, useDepartments, useMatrix, useMatrixUpsert, usePersonnel, type DepartmentRow } from '../app/queries.ts';
 import { useAuth, useUi, useCurrentCompanyId } from '../app/store.tsx';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgMultiSelect, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -38,7 +38,7 @@ import { FgQuery, toastOk } from '../components/pagekit.tsx';
 import { AUDIT_ACTION_LABEL, ROLES_LABEL } from '../components/labels.ts';
 import { ApiRequestError, apiCall } from '../app/api.ts';
 import { APPROVAL_ORDER, DOC_KIND_LABEL, DOC_KINDS, type DocKind } from '@fingate/shared';
-import type { CompanyRow, InviteLinkResult, MatrixEntry, PersonnelRow, AuditRow } from '../app/types.ts';
+import type { ApprovalThresholdCompany, ApprovalThresholdResult, CompanyRow, InviteLinkResult, MatrixEntry, PersonnelRow, AuditRow } from '../app/types.ts';
 
 /** Chọn chức danh theo CẤP BẬC từ thấp → cao (1 Kế toán viên … 6 Tổng Giám đốc; admin ngoài thang). */
 const ROLE_OPTIONS: { value: string; label: string }[] = (Object.keys(ROLES_LABEL) as Role[])
@@ -58,6 +58,7 @@ const ADMIN_TABS: { to: string; label: string; perm: string }[] = [
   { to: '/quantri/nguoidung', label: 'Nhân sự', perm: 'hr:invite' },
   { to: '/quantri/cong-ty', label: 'Công ty & bộ phận', perm: 'admin:settings' },
   { to: '/quantri/quy-trinh-duyet', label: 'Ma trận duyệt', perm: 'admin:matrix' },
+  { to: '/quantri/nguong-duyet', label: 'Ngưỡng duyệt', perm: 'admin:settings' },
   { to: '/quantri/audit', label: 'Audit log', perm: 'audit:read' },
   { to: '/quantri/sao-luu', label: 'Sao lưu', perm: 'admin:backup' },
 ];
@@ -1585,6 +1586,145 @@ function MatrixModal({
         {error ? <FgAlert tone="danger" title={error} /> : null}
       </div>
     </FgModal>
+  );
+}
+
+/* ================= ADM-04 · Ngưỡng duyệt Chairman ================= */
+
+const THRESHOLD_KINDS = [...DOC_KINDS] as DocKind[];
+
+/** Ngưỡng hồ sơ phải qua thêm Tổng Giám đốc (Chủ tịch) — mặc định + theo công ty · loại hồ sơ. */
+export function ApprovalThresholdScreen(): ReactNode {
+  const { can } = useAuth();
+  const query = useApprovalThreshold();
+  const companies = useCompanies();
+  const canEdit = can('admin:settings');
+  // '' = cấp toàn tập đoàn (mặc định cho mọi công ty chưa cấu hình riêng).
+  const [scopeId, setScopeId] = useState('');
+  return (
+    <>
+      <AdminNav />
+      <FgPageHeader
+        title="Ngưỡng duyệt"
+        meta="Hồ sơ vượt ngưỡng phải qua thêm Tổng Giám đốc (Chủ tịch) — đặt chung, và tách theo từng công ty · loại hồ sơ; mọi thay đổi vào audit"
+      />
+      <FgQuery query={query} skeleton={<FgSkeletonTable rows={4} cols={5} />}>
+        {(data) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)' }}>
+            <FgCard>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)' }}>
+                <FgField label="Phạm vi" help="Chọn công ty để đặt ngưỡng riêng; để trống = ngưỡng mặc định toàn tập đoàn">
+                  <FgSelect
+                    ariaLabel="Phạm vi ngưỡng"
+                    options={[
+                      { value: '', label: 'Toàn tập đoàn (mặc định cho mọi công ty)' },
+                      ...(companies.data?.items ?? []).map((c) => ({ value: c._id, label: `${c.code} · ${c.name}` })),
+                    ]}
+                    value={scopeId}
+                    onChange={(v) => setScopeId(v ?? '')}
+                    disabled={!canEdit}
+                  />
+                </FgField>
+                <ThresholdEditor key={scopeId} scopeId={scopeId} canEdit={canEdit} data={data} />
+              </div>
+            </FgCard>
+            <div className="fg-card" style={{ padding: 0 }}>
+              <FgTable
+                rowKey="company_id"
+                dataSource={data.companies}
+                columns={[
+                  {
+                    title: 'Ngưỡng hiệu lực theo công ty',
+                    dataIndex: 'company_name',
+                    key: 'n',
+                    render: (v: string) => <FgText strong>{v}</FgText>,
+                  },
+                  ...THRESHOLD_KINDS.map((k) => ({
+                    title: DOC_KIND_LABEL[k],
+                    key: k,
+                    align: 'right' as const,
+                    render: (_v: unknown, r: ApprovalThresholdCompany) => <FgMoney value={money(r.effective[k])} mode="compact" />,
+                  })),
+                ]}
+              />
+            </div>
+          </div>
+        )}
+      </FgQuery>
+    </>
+  );
+}
+
+/** Form sửa ngưỡng cho một phạm vi (toàn tập đoàn hoặc 1 công ty): chung + từng loại hồ sơ. */
+function ThresholdEditor({
+  scopeId,
+  canEdit,
+  data,
+}: {
+  scopeId: string;
+  canEdit: boolean;
+  data: ApprovalThresholdResult;
+}): ReactNode {
+  const save = useApprovalThresholdUpsert();
+  const company = scopeId ? (data.companies.find((c) => c.company_id === scopeId) ?? null) : null;
+  const srcAmount = company ? company.amount_minor : data.amount_minor;
+  const srcByKind = company ? company.by_kind : data.by_kind;
+  const [amount, setAmount] = useState<Money | null>(() => (srcAmount ? money(srcAmount) : null));
+  const [byKind, setByKind] = useState<Record<string, Money | null>>(() =>
+    Object.fromEntries(THRESHOLD_KINDS.map((k) => [k, srcByKind[k] ? money(srcByKind[k] as string) : null])),
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (): Promise<void> => {
+    setError(null);
+    setBusy(true);
+    try {
+      await save.mutateAsync({
+        company_id: scopeId || null,
+        amount_minor: amount ? moneyToWire(amount).minor : null,
+        by_kind: Object.fromEntries(THRESHOLD_KINDS.map((k) => [k, byKind[k] ? moneyToWire(byKind[k] as Money).minor : null])),
+      });
+      toastOk('Đã lưu ngưỡng duyệt');
+    } catch (e) {
+      if (e instanceof ApiRequestError) setError(e.problem.detail ?? e.problem.title);
+      else setError('Không lưu được ngưỡng duyệt');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)' }}>
+      <FgText style="bodyS" color="muted">
+        {scopeId
+          ? 'Ngưỡng riêng cho công ty đang chọn — ô để trống nghĩa là kế thừa mặc định.'
+          : 'Ngưỡng mặc định áp cho mọi công ty chưa đặt ngưỡng riêng.'}
+      </FgText>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 'var(--fg-space-4)' }}>
+        <FgField label="Chung (mọi loại hồ sơ)" help={`Để trống = mặc định ${formatMoney(money(data.default_minor), { mode: 'compact' })}`}>
+          <FgMoneyInput value={amount} onChange={setAmount} disabled={!canEdit} ariaLabel="Ngưỡng chung" />
+        </FgField>
+        {THRESHOLD_KINDS.map((k) => (
+          <FgField key={k} label={DOC_KIND_LABEL[k]} help="Để trống = kế thừa ngưỡng chung">
+            <FgMoneyInput
+              value={byKind[k] ?? null}
+              onChange={(m) => setByKind((s) => ({ ...s, [k]: m }))}
+              disabled={!canEdit}
+              ariaLabel={`Ngưỡng ${DOC_KIND_LABEL[k]}`}
+            />
+          </FgField>
+        ))}
+      </div>
+      {error ? <FgAlert tone="danger" title={error} /> : null}
+      {canEdit ? (
+        <div>
+          <FgButton variant="primary" loading={busy} onClick={() => void submit()}>
+            Lưu ngưỡng
+          </FgButton>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

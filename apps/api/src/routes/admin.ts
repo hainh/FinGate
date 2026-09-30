@@ -12,6 +12,8 @@ import ExcelJS from 'exceljs';
 import {
   ApiError,
   DEFAULT_AMOUNT_LIMIT_MINOR,
+  DEFAULT_CHAIRMAN_THRESHOLD_MINOR,
+  DOC_KINDS,
   isGroupOnlyRole,
   MFA_REQUIRED_ROLES,
   ROLE_LABEL,
@@ -35,6 +37,7 @@ import {
   personnelTransferBody,
   recurringUpsertBody,
   settingUpsertBody,
+  approvalThresholdUpsertBody,
   auditLogQuery,
   budgetUpsertBody,
   alertRuleUpsertBody,
@@ -53,6 +56,7 @@ import {
   personnelTransferBodySchema,
   recurringUpsertBodySchema,
   settingUpsertBodySchema,
+  approvalThresholdUpsertBodySchema,
 } from './schemas.ts';
 import {
   DEFAULT_INVITE_DAYS,
@@ -64,7 +68,7 @@ import {
 } from '../lib/invite.ts';
 import { mirrorAudit } from '../domain/audit/index.ts';
 import { scopedAggregate } from '../lib/mongo.ts';
-import { assertMatrixSteps } from '../domain/workflow/matrix.ts';
+import { assertMatrixSteps, CHAIRMAN_THRESHOLD_KEY, resolveChairmanThreshold, type ChairmanThresholdConfig } from '../domain/workflow/matrix.ts';
 import { rerunPendingApprovals } from '../domain/workflow/rerun.ts';
 import { DECISION_STATUSES, asBigInt, wire } from '../domain/queries/index.ts';
 import { mailTemplates, sendMail } from '../mail/sender.ts';
@@ -1885,6 +1889,100 @@ export function adminRoutes(app: FastifyInstance): void {
           subject: { type: 'setting', id: body.key, code: null },
           company_id: null,
           diff_fields: { before: (before as { value?: unknown } | null)?.value ?? null, after: body.value },
+          request_id: body.request_id,
+          ip: requestCtx(req).ip,
+        });
+        return { data: { ok: true } };
+      },
+    }),
+  );
+
+  /* =============== ADM-04: NGƯỠNG CHAIRMAN (theo loại hồ sơ × công ty) =============== */
+
+  /** Ngưỡng Chairman hiệu lực: mặc định toàn tập đoàn + override theo công ty, tách theo loại hồ sơ. */
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/admin/approval-threshold',
+      config: { perms: ['admin:settings'] as Permission[], screen: 'ADM-04', summary: 'Ngưỡng duyệt Chairman' },
+      handler: async (req, reply) => {
+        const scope = requireScope(req);
+        const setting = await Models.Setting.findOne({ key: CHAIRMAN_THRESHOLD_KEY }).lean<{ value?: ChairmanThresholdConfig } | null>();
+        const config = setting?.value ?? null;
+        const rows =
+          scope.companyIds === null
+            ? await Models.Company.find({}).sort({ code: 1 }).select({ name: 1 }).lean()
+            : await Models.Company.find({ _id: { $in: scope.companyIds as never } }).sort({ code: 1 }).select({ name: 1 }).lean();
+        return ok(
+          reply,
+          {
+            default_minor: DEFAULT_CHAIRMAN_THRESHOLD_MINOR,
+            amount_minor: config?.amount_minor ?? null,
+            by_kind: config?.by_kind ?? {},
+            companies: rows.map((c) => {
+              const id = String(c._id);
+              return {
+                company_id: id,
+                company_name: String(c.name),
+                amount_minor: config?.companies?.[id]?.amount_minor ?? null,
+                by_kind: config?.companies?.[id]?.by_kind ?? {},
+                effective: Object.fromEntries(DOC_KINDS.map((k) => [k, resolveChairmanThreshold(config, id, k).toString()])),
+              };
+            }),
+          },
+          { maxAge: 30 },
+        );
+      },
+    }),
+  );
+
+  /** Lưu ngưỡng Chairman; merge vào `value` để giữ override của các công ty khác. */
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/admin/approval-threshold',
+      config: { perms: ['admin:settings'] as Permission[], screen: 'ADM-04', stepUp: true, summary: 'Đổi ngưỡng duyệt Chairman (audit)' },
+      schema: { tags: ['admin'], body: approvalThresholdUpsertBodySchema },
+      handler: async (req) => {
+        const actor = requireActor(req);
+        const scope = requireScope(req);
+        const body = validate(approvalThresholdUpsertBody, req.body);
+        if (body.company_id) await assertCompanyAccess(req, body.company_id);
+        else if (scope.companyIds !== null) {
+          throw new ApiError({ code: 'FG-RBAC-002', detail: 'Chỉ cấp tập đoàn cấu hình ngưỡng mặc định toàn tập đoàn' });
+        }
+
+        const before = await Models.Setting.findOne({ key: CHAIRMAN_THRESHOLD_KEY }).lean<{ value?: ChairmanThresholdConfig } | null>();
+        const current = before?.value ?? {};
+        const previous = body.company_id
+          ? (current.companies?.[body.company_id] ?? null)
+          : { amount_minor: current.amount_minor ?? null, by_kind: current.by_kind ?? {} };
+        const next = { amount_minor: body.amount_minor, by_kind: body.by_kind };
+        // ghi cả value (merge JS) để không phụ thuộc dot-path vào Mixed; giữ override công ty khác.
+        const value: ChairmanThresholdConfig = body.company_id
+          ? { ...current, companies: { ...(current.companies ?? {}), [body.company_id]: next } }
+          : { amount_minor: body.amount_minor, by_kind: body.by_kind, companies: current.companies ?? {} };
+
+        await Models.Setting.updateOne(
+          { key: CHAIRMAN_THRESHOLD_KEY },
+          {
+            $set: {
+              value,
+              key: CHAIRMAN_THRESHOLD_KEY,
+              description: 'Ngưỡng hồ sơ phải qua Tổng Giám đốc (Chủ tịch) — mặc định + theo loại hồ sơ + theo công ty',
+              updated_at: new Date(),
+              updated_by: actor.user_id,
+            },
+          },
+          { upsert: true },
+        ).exec();
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'setting.update',
+          subject: { type: 'setting', id: CHAIRMAN_THRESHOLD_KEY, code: body.company_id ?? 'global' },
+          company_id: body.company_id ?? null,
+          diff_fields: { before: previous, after: next },
           request_id: body.request_id,
           ip: requestCtx(req).ip,
         });

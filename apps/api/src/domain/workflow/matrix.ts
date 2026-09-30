@@ -142,7 +142,7 @@ export async function resolveMatrix(input: {
     return input.amount_minor >= min && (max === null || input.amount_minor < max);
   });
 
-  const chairmanThreshold = await chairmanThresholdFor(input.company_id);
+  const chairmanThreshold = await chairmanThresholdFor(input.company_id, input.kind);
   const baseSteps = DEFAULT_STEPS[input.kind].steps;
 
   if (inRange.length) {
@@ -168,11 +168,52 @@ export async function resolveMatrix(input: {
   };
 }
 
-export async function chairmanThresholdFor(companyId: string | null): Promise<bigint> {
-  const s = await Models.Setting.findOne({ key: 'approval.chairman_threshold_minor' }).lean<{ value?: { amount_minor?: string; company_id?: string } } | null>();
-  if (!s?.value) return big(DEFAULT_CHAIRMAN_THRESHOLD_MINOR);
-  if (s.value.company_id && companyId && s.value.company_id !== companyId) return big(DEFAULT_CHAIRMAN_THRESHOLD_MINOR);
-  return big(s.value.amount_minor);
+/** Key Setting cho ngưỡng Chairman (giá trị là cấu hình đa chiều bên dưới). */
+export const CHAIRMAN_THRESHOLD_KEY = 'approval.chairman_threshold_minor';
+
+/**
+ * Cấu hình ngưỡng Chairman — MỘT document Setting (unique key), giá trị đa chiều:
+ * mặc định chung · theo loại hồ sơ · override theo công ty (kèm theo loại hồ sơ).
+ */
+export interface ChairmanThresholdConfig {
+  /** ngưỡng chung mọi công ty, mọi loại hồ sơ. */
+  amount_minor?: string | null;
+  /** ngưỡng chung theo loại hồ sơ (khi công ty không override). */
+  by_kind?: Partial<Record<DocKind, string | null>>;
+  /** override theo công ty (khoá = company_id). */
+  companies?: Record<string, { amount_minor?: string | null; by_kind?: Partial<Record<DocKind, string | null>> }>;
+  /** @deprecated dữ liệu cũ: giới hạn `amount_minor` cho một công ty. */
+  company_id?: string | null;
+}
+
+const pickMinor = (v: string | null | undefined): bigint | null => (v === null || v === undefined || v === '' ? null : big(v));
+
+/**
+ * Chọn ngưỡng hiệu lực theo thứ tự cụ thể dần:
+ * (công ty, loại hồ sơ) → (công ty) → (loại hồ sơ) → chung → hằng số mặc định.
+ */
+export function resolveChairmanThreshold(
+  config: ChairmanThresholdConfig | null | undefined,
+  companyId: string | null,
+  kind: DocKind,
+  fallbackMinor: bigint = big(DEFAULT_CHAIRMAN_THRESHOLD_MINOR),
+): bigint {
+  const company = companyId ? config?.companies?.[companyId] : undefined;
+  // dữ liệu cũ: doc toàn cục bị khoá vào 1 công ty → chỉ áp cho đúng công ty đó
+  const legacyGlobal = config?.company_id && config.company_id !== companyId ? null : config?.amount_minor;
+  return (
+    pickMinor(company?.by_kind?.[kind]) ??
+    pickMinor(company?.amount_minor) ??
+    pickMinor(config?.by_kind?.[kind]) ??
+    pickMinor(legacyGlobal) ??
+    fallbackMinor
+  );
+}
+
+/** Đọc cấu hình ngưỡng Chairman từ Setting rồi chọn theo (công ty, loại hồ sơ). */
+export async function chairmanThresholdFor(companyId: string | null, kind: DocKind): Promise<bigint> {
+  const s = await Models.Setting.findOne({ key: CHAIRMAN_THRESHOLD_KEY }).lean<{ value?: ChairmanThresholdConfig } | null>();
+  return resolveChairmanThreshold(s?.value, companyId, kind);
 }
 
 function formatRange(min: bigint, max: bigint | null): string {

@@ -9,6 +9,7 @@
 import {
   activateBody,
   alertRuleUpsertBody,
+  approvalThresholdUpsertBody,
   attachmentConfirmBody,
   attachmentPrepareBody,
   attachmentRemoveBody,
@@ -86,6 +87,7 @@ export const companyUpsertBodySchema = j(companyUpsertBody);
 export const departmentUpsertBodySchema = j(departmentUpsertBody);
 export const categoryUpsertBodySchema = j(categoryUpsertBody);
 export const settingUpsertBodySchema = j(settingUpsertBody);
+export const approvalThresholdUpsertBodySchema = j(approvalThresholdUpsertBody);
 export const alertRuleUpsertBodySchema = j(alertRuleUpsertBody);
 export const auditLogQuerySchema = j(auditLogQuery);
 

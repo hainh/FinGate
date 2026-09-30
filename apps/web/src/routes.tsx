@@ -27,7 +27,7 @@ import { BankAccountFormScreen } from './screens/bank-account-form.tsx';
 import { DebtsScreen, LoansScreen, RolloversScreen } from './screens/loans.tsx';
 import { CashflowHistoryScreen } from './screens/cashflow.tsx';
 import { ReportLibraryScreen, ReportRunnerScreen } from './screens/reports.tsx';
-import { PersonnelScreen, MatrixScreen, AuditLogScreen, SettingsScreen, CompaniesScreen } from './screens/admin.tsx';
+import { PersonnelScreen, MatrixScreen, ApprovalThresholdScreen, AuditLogScreen, SettingsScreen, CompaniesScreen } from './screens/admin.tsx';
 import { BackupScreen } from './screens/backup.tsx';
 import { NewsletterScreen, NotificationsScreen, SearchScreen } from './screens/misc.tsx';
 import { DocumentFormScreen } from './screens/create-form.tsx';
@@ -169,6 +169,7 @@ export function AppRoutes(): ReactNode {
       <Route path="/quantri/nguoidung" element={<Shell><PersonnelScreen /></Shell>} /> {/* ADM-01 */}
       <Route path="/quantri/cong-ty" element={<Shell><CompaniesScreen /></Shell>} /> {/* ADM-06/07 */}
       <Route path="/quantri/quy-trinh-duyet" element={<Shell><MatrixScreen /></Shell>} /> {/* ADM-04 */}
+      <Route path="/quantri/nguong-duyet" element={<Shell><ApprovalThresholdScreen /></Shell>} /> {/* ADM-04 · ngưỡng Chairman */}
       <Route path="/quantri/audit" element={<Shell><AuditLogScreen /></Shell>} /> {/* ADM-12 */}
       <Route path="/quantri/sao-luu" element={<Shell><BackupScreen /></Shell>} /> {/* ADM-14 */}
       <Route path="/ca-nhan" element={<Shell><SettingsScreen /></Shell>} /> {/* PREF-01 */}

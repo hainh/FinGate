@@ -408,6 +408,26 @@ export const settingUpsertBody = z.object({
   request_id: uuid,
 });
 
+/**
+ * Ngưỡng Chairman (ADM-04): hồ sơ vượt ngưỡng phải qua thêm bước Chairman.
+ * `amount_minor`/`by_kind.<loại>` = null nghĩa là "kế thừa cấp ngoài" (bỏ override).
+ */
+const thresholdAmount = z.string().regex(/^\d+$/, 'Ngưỡng phải là số nguyên (minor units)').nullable();
+const thresholdByKind = z.object({
+  spend: thresholdAmount.optional(),
+  income: thresholdAmount.optional(),
+  rollover: thresholdAmount.optional(),
+  internal: thresholdAmount.optional(),
+}).default({});
+
+export const approvalThresholdUpsertBody = z.object({
+  /** null = cấp toàn tập đoàn (mặc định cho mọi công ty). */
+  company_id: objectId.nullable().default(null),
+  amount_minor: thresholdAmount.default(null),
+  by_kind: thresholdByKind,
+  request_id: uuid,
+});
+
 export const searchQuery = z.object({
   q: z.string().min(1).max(200),
   limit: z.coerce.number().int().min(1).max(50).default(20),
