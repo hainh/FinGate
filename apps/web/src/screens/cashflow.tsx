@@ -8,7 +8,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { Table } from 'antd';
-import { formatMoney, moneyFromWire } from '@fingate/shared';
+import { moneyFromWire } from '@fingate/shared';
 import { useCashflowHistory } from '../app/queries.ts';
 import { FgButton, FgMoney, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -21,7 +21,6 @@ import type {
   CashflowHistoryResult,
   CashflowLane,
   CashflowPeriod,
-  MoneyWire,
 } from '../app/types.ts';
 
 const PERIODS: { key: CashflowPeriod; label: string }[] = [
@@ -39,71 +38,11 @@ const GROUPS: { key: CashflowGroup; label: string }[] = [
   { key: 'account', label: 'Theo tài khoản' },
 ];
 
-const toTy = (m: MoneyWire): number => Number(BigInt(m.minor)) / 1e9;
 /** `YYYY-MM` → `MM/YYYY`; `YYYY-MM-DD` → `DD/MM`. */
 const bucketLabel = (b: string): string => (b.length === 7 ? `${b.slice(5)}/${b.slice(0, 4)}` : `${b.slice(8)}/${b.slice(5, 7)}`);
 const laneTotal = (l: CashflowLane): bigint => BigInt(l.total_inflow.minor) + BigInt(l.total_outflow.minor);
 
-/** Swimlane — mỗi làn một hàng, trục thời gian chung, cột thu xanh · chi đỏ. */
-function SwimlaneChart({ buckets, lanes }: { buckets: string[]; lanes: CashflowLane[] }): ReactNode {
-  const n = buckets.length;
-  const H = 46;
-  const max = Math.max(1, ...lanes.flatMap((l) => l.points.flatMap((p) => [toTy(p.inflow), toTy(p.outflow)])));
-  const slot = 100 / Math.max(1, n);
-  const barW = slot * 0.34;
-  const step = Math.max(1, Math.ceil(n / 12));
-  return (
-    <div>
-      {lanes.map((lane) => (
-        <div
-          key={lane.key}
-          style={{ display: 'flex', alignItems: 'center', gap: 10, borderTop: '1px solid var(--fg-border-subtle)', padding: '6px 0' }}
-        >
-          <div style={{ flex: '0 0 190px', maxWidth: 190 }}>
-            <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={lane.label}>
-              {lane.label}
-            </div>
-            {lane.sub_label ? <FgText style="caption" color="muted">{lane.sub_label}</FgText> : null}
-          </div>
-          <svg
-            viewBox={`0 0 100 ${H}`}
-            preserveAspectRatio="none"
-            style={{ flex: 1, height: H, minWidth: 0 }}
-            role="img"
-            aria-label={`${lane.label}: thu ${formatMoney(moneyFromWire(lane.total_inflow)!, { mode: 'full' })} · chi ${formatMoney(moneyFromWire(lane.total_outflow)!, { mode: 'full' })}`}
-          >
-            {lane.points.map((p, i) => {
-              const x = i * slot;
-              const hi = (toTy(p.inflow) / max) * H;
-              const ho = (toTy(p.outflow) / max) * H;
-              return (
-                <g key={p.bucket}>
-                  <rect x={x + slot * 0.1} y={H - hi} width={barW} height={Math.max(0.6, hi)} fill="var(--fg-chart-2)" />
-                  <rect x={x + slot * 0.1 + barW + slot * 0.06} y={H - ho} width={barW} height={Math.max(0.6, ho)} fill="var(--fg-chart-9)" />
-                </g>
-              );
-            })}
-          </svg>
-        </div>
-      ))}
-      <div style={{ display: 'flex', gap: 10, paddingTop: 4 }}>
-        <div style={{ flex: '0 0 190px', maxWidth: 190 }} />
-        <div style={{ flex: 1, display: 'flex' }}>
-          {buckets.map((b, i) => (
-            <span
-              key={b}
-              className="fg-num"
-              style={{ flex: 1, textAlign: 'center', fontSize: 10, color: 'var(--fg-text-muted)', whiteSpace: 'nowrap' }}
-            >
-              {i % step === 0 ? bucketLabel(b) : ''}
-            </span>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
+/** Bảng chi tiết từng kỳ của một làn (ngày/tháng). */
 function LaneTable({ lane, granularity }: { lane: CashflowLane; granularity: CashflowGranularity }): ReactNode {
   return (
     <FgTable
@@ -186,29 +125,10 @@ export function CashflowHistoryScreen(): ReactNode {
           }
           const lanes = [...data.lanes].sort((a, b) => (laneTotal(b) > laneTotal(a) ? 1 : -1));
           // Ngày gần nhất lên trước (luỹ kế vẫn tính theo thứ tự thời gian).
-          const viewBuckets = [...data.buckets].reverse();
           const viewLanes = lanes.map((l) => ({ ...l, points: [...l.points].reverse() }));
-          const byDay = data.granularity === 'day';
           return (
             <>
               <KpiRow totals={data.totals} />
-              <FgCard
-                title={`Dòng tiền theo ${byDay ? 'ngày' : 'tháng'} (${PERIODS.find((p) => p.key === period)?.label} · ${GROUPS.find((g) => g.key === group)?.label.toLowerCase()})`}
-                extra={
-                  <span style={{ display: 'flex', gap: 12 }}>
-                    <FgText style="caption" color="muted">
-                      <span style={{ display: 'inline-block', width: 10, height: 10, background: 'var(--fg-chart-2)', borderRadius: 2, marginRight: 4 }} aria-hidden />
-                      Thu
-                    </FgText>
-                    <FgText style="caption" color="muted">
-                      <span style={{ display: 'inline-block', width: 10, height: 10, background: 'var(--fg-chart-9)', borderRadius: 2, marginRight: 4 }} aria-hidden />
-                      Chi
-                    </FgText>
-                  </span>
-                }
-              >
-                <SwimlaneChart buckets={viewBuckets} lanes={viewLanes} />
-              </FgCard>
               {viewLanes.map((lane) => (
                 <FgCard
                   key={lane.key}
