@@ -196,6 +196,8 @@ export async function notifyNextApprover(input: {
       }
     }
     invalidateFor(String(doc.company_id));
+    // Badge "Chờ tôi duyệt" của các cấp kế tiếp đổi ngay; không xoá thì họ thấy số cũ tới hết TTL.
+    for (const id of recipients) cacheInvalidate(`badge:${id}`);
   } catch (err) {
     console.warn('[notify] thất bại (bỏ qua — web vẫn còn qua poll 30s):', (err as Error).message);
   }

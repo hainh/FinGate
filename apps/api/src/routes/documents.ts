@@ -554,6 +554,9 @@ export function documentRoutes(app: FastifyInstance): void {
         }
 
         const result = await transition({ doc, actor, body, ip: requestCtx(req).ip });
+        // Đổi trạng thái duyệt → số "Chờ tôi duyệt" (badge) và overview đổi ngay;
+        // không xoá cache thì badge giữ số cũ tới hết TTL (60s) dù danh sách đã tươi.
+        invalidateFor(String(doc.company_id), actor.user_id);
         const fresh = await detailOf(params.id, actor.user_id);
         return ok(reply, { data: fresh, transition: result }, { etag: result.version });
       },
