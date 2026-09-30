@@ -115,12 +115,12 @@ export function PersonnelScreen(): ReactNode {
               rowKey="user_id"
               dataSource={data.items}
               columns={[
-                { title: 'Họ tên', dataIndex: 'display_name', key: 'n', width: 250, ellipsis: true, render: (v: string) => <FgText strong>{v}</FgText> },
+                { title: 'Họ tên', dataIndex: 'display_name', key: 'n', width: 150, ellipsis: true, render: (v: string) => <FgText strong>{v}</FgText> },
                 {
                   title: 'Email',
                   dataIndex: 'email',
                   key: 'e',
-                  width: 250,
+                  width: 150,
                   ellipsis: true,
                 },
                 {

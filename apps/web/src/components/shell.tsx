@@ -32,18 +32,19 @@ interface NavItem {
 const NAV: NavItem[] = [
   { to: '/dashboard', label: 'Tổng quan', glyph: '◧', mobile: true, perm: 'doc:read', match: ['/dashboard', '/hom-nay'] },
   { to: '/cho-toi-duyet', label: 'Chờ tôi duyệt', glyph: '✍', badge: 'awaiting', mobile: true, perm: ['approval:act', 'payment:mark'], match: ['/cho-toi-duyet', '/toi-da-duyet', '/can-bo-sung'] },
-  { to: '/can-xu-ly', label: 'Cần xử lý', glyph: '⚑', badge: 'unread', mobile: true, perm: 'doc:read', match: ['/can-xu-ly'] },
-  { to: '/chi', label: 'Chi', glyph: '↗', perm: 'doc:read', match: ['/chi'] },
-  { to: '/thu', label: 'Thu', glyph: '↙', perm: 'doc:read', match: ['/thu'] },
-  { to: '/ngan-hang/taikhoan', label: 'Ngân hàng', glyph: '▤', perm: 'bank:read', match: ['/ngan-hang', '/ngan-hang/khoan-vay'] },
+  // Tạm thời đóng màn "Cần xử lý"
+  // { to: '/can-xu-ly', label: 'Cần xử lý', glyph: '⚑', badge: 'unread', mobile: true, perm: 'doc:read', match: ['/can-xu-ly'] },
+  { to: '/chi', label: 'Chi', glyph: '↗', mobile: true, perm: 'doc:read', match: ['/chi'] },
+  { to: '/thu', label: 'Thu', glyph: '↙', mobile: true, perm: 'doc:read', match: ['/thu'] },
+  { to: '/ngan-hang/taikhoan', label: 'Ngân hàng', glyph: '▤', mobile: true, perm: 'bank:read', match: ['/ngan-hang', '/ngan-hang/khoan-vay'] },
   { to: '/ngan-hang/dao-han', label: 'Đáo hạn', glyph: '⧗', mobile: true, perm: 'loan:read', dev: true, match: ['/ngan-hang/dao-han'] },
-  { to: '/cong-no/phai-thu', label: 'Công nợ', glyph: '≡', perm: 'debt:read', dev: true, match: ['/cong-no'] },
+  { to: '/cong-no/phai-thu', label: 'Công nợ', glyph: '≡', mobile: true, perm: 'debt:read', dev: true, match: ['/cong-no'] },
   { to: '/dong-tien', label: 'Dòng tiền', glyph: '∿', mobile: true, perm: 'forecast:read', match: ['/dong-tien'] },
-  { to: '/baocao', label: 'Báo cáo', glyph: '☰', perm: 'report:view', dev: true, match: ['/baocao'] },
-  { to: '/ban-tin/ngay', label: 'Bản tin', glyph: '✉', perm: 'report:view', match: ['/ban-tin'] },
+  { to: '/baocao', label: 'Báo cáo', glyph: '☰', mobile: true, perm: 'report:view', dev: true, match: ['/baocao'] },
+  { to: '/ban-tin/ngay', label: 'Bản tin', glyph: '✉', mobile: true, perm: 'report:view', match: ['/ban-tin'] },
   // Ai được vào BẤT KỲ tab Quản trị nào (nhân sự · công ty · ma trận · audit) đều thấy mục này.
   // KTT sau khi bỏ quyền nhân sự vẫn giữ `audit:read` → vẫn xem được audit log.
-  { to: '/quantri', label: 'Quản trị', glyph: '⚙', perm: ['hr:invite', 'admin:settings', 'admin:matrix', 'audit:read'], match: ['/quantri'] },
+  { to: '/quantri', label: 'Quản trị', glyph: '⚙', mobile: true, perm: ['hr:invite', 'admin:settings', 'admin:matrix', 'audit:read'], match: ['/quantri'] },
 ];
 
 /**
