@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import {
   STATUS_KEYS,
   daysBetween,
@@ -192,6 +192,7 @@ export function DocListScreen({
 }: DocListConfig): ReactNode {
   const { can } = useAuth();
   const canCreate = can('doc:create');
+  const navigate = useNavigate();
   const [params, setParams] = useUrlSearchParamsShim();
   const get = (k: string) => params.get(k) ?? '';
   const setFilter = (k: string, v: string) => {
@@ -359,7 +360,7 @@ export function DocListScreen({
                 onRow={(r) => ({
                   onClick: (e) => {
                     if ((e.target as HTMLElement).closest('a,input,button')) return;
-                    window.location.href = deepLink(r);
+                    navigate(deepLink(r));
                   },
                   style: { cursor: 'pointer' },
                 })}
