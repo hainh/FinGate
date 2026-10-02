@@ -3,14 +3,14 @@
  * Cấn trừ với phiếu thu/chi — liên kết bất kỳ lúc nào, hiệu lực khi phiếu ở trạng thái "Đã thanh toán".
  */
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { DatePicker } from 'antd';
 import dayjs from 'dayjs';
 import { ACCOUNT_CODE_BY_PARTY, DEBT_PARTY_LABEL, DEBT_SIDE_LABEL, moneyFromWire, type DebtPartyType, type Money } from '@fingate/shared';
 import { ApiRequestError, currentScope } from '../app/api.ts';
-import { useCurrentCompanyId } from '../app/store.tsx';
-import { useBankDebtCandidates, useCreateDebtVoucher, useDebtCandidates, useDebtVoucher, useDebtVouchers, useLinkDebt, useUnlinkDebt } from '../app/queries.ts';
+import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
+import { useBankDebtCandidates, useCreateDebtVoucher, useDebtCandidates, useDebtVoucher, useDebtVouchers, useDeleteDebtVoucher, useLinkDebt, useUnlinkDebt, useUpdateDebtVoucher } from '../app/queries.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTextarea } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
@@ -94,14 +94,18 @@ export function DebtListScreen({ side, title }: { side: 'debit' | 'credit'; titl
   );
 }
 
-/* ============================== DEBT-01 create ============================== */
+/* ===================== DEBT-01/DEBT-02 create + edit ===================== */
 
-export function DebtVoucherFormScreen({ side }: { side: 'debit' | 'credit' }): ReactNode {
+export function DebtVoucherFormScreen({ side }: { side?: 'debit' | 'credit' }): ReactNode {
+  const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
   const company = useCurrentCompanyId();
+  const existing = useDebtVoucher(id);
   const create = useCreateDebtVoucher();
+  const update = useUpdateDebtVoucher(id ?? '');
   const { message } = useToast();
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [prefilled, setPrefilled] = useState(false);
   const [f, setF] = useState<{
     party_type: DebtPartyType;
     party_code: string;
@@ -115,12 +119,29 @@ export function DebtVoucherFormScreen({ side }: { side: 'debit' | 'credit' }): R
     note: string;
   }>({ party_type: 'customer', party_code: '', party_name: '', party_tax_code: '', party_bank_account: '', value: null, due_date: dayjs().add(7, 'day').format('YYYY-MM-DD'), contract_code: '', priority: 'normal', note: '' });
 
+  const editMode = !!id;
+  const effectiveSide: 'debit' | 'credit' = editMode ? (existing.data?.side ?? 'debit') : (side ?? 'debit');
+
+  useEffect(() => {
+    const d = existing.data;
+    if (!d || prefilled) return;
+    setF({
+      party_type: d.party_type,
+      party_code: d.party_code,
+      party_name: d.party_name,
+      party_tax_code: d.party_tax_code ?? '',
+      party_bank_account: d.party_bank_account ?? '',
+      value: moneyFromWire(d.value),
+      due_date: d.due_date,
+      contract_code: d.contract_code ?? '',
+      priority: d.priority,
+      note: d.note ?? '',
+    });
+    setPrefilled(true);
+  }, [existing.data, prefilled]);
+
   const submit = async (): Promise<void> => {
     setErrors({});
-    if (!company) {
-      message.error('Chưa chọn công ty');
-      return;
-    }
     if (!f.party_code.trim() || !f.party_name.trim()) {
       message.error('Nhập mã và tên đối tượng');
       return;
@@ -129,21 +150,30 @@ export function DebtVoucherFormScreen({ side }: { side: 'debit' | 'credit' }): R
       message.error('Nhập số tiền');
       return;
     }
+    const body: Record<string, unknown> = {
+      party_type: f.party_type,
+      party_code: f.party_code.trim(),
+      party_name: f.party_name.trim(),
+      party_tax_code: f.party_tax_code.trim() || undefined,
+      party_bank_account: f.party_bank_account.trim() || undefined,
+      value: { amount_minor: f.value.minor.toString(), currency: f.value.currency },
+      due_date: f.due_date,
+      contract_code: f.contract_code.trim() || undefined,
+      priority: f.priority,
+      note: f.note.trim() || undefined,
+    };
     try {
-      const r = await create.mutateAsync({
-        company_id: company,
-        party_type: f.party_type,
-        party_code: f.party_code.trim(),
-        party_name: f.party_name.trim(),
-        party_tax_code: f.party_tax_code.trim() || undefined,
-        party_bank_account: f.party_bank_account.trim() || undefined,
-        side,
-        value: { amount_minor: f.value.minor.toString(), currency: f.value.currency },
-        due_date: f.due_date,
-        contract_code: f.contract_code.trim() || undefined,
-        priority: f.priority,
-        note: f.note.trim() || undefined,
-      });
+      if (editMode) {
+        await update.mutateAsync(body);
+        message.success('Đã cập nhật phiếu công nợ');
+        navigate(`/cong-no/phieu/${id}`);
+        return;
+      }
+      if (!company) {
+        message.error('Chưa chọn công ty');
+        return;
+      }
+      const r = await create.mutateAsync({ company_id: company, side: effectiveSide, ...body });
       message.success('Đã lưu phiếu công nợ');
       navigate(`/cong-no/phieu/${r._id}`);
     } catch (e) {
@@ -154,7 +184,10 @@ export function DebtVoucherFormScreen({ side }: { side: 'debit' | 'credit' }): R
 
   return (
     <>
-      <FgPageHeader title={`Tạo phiếu công nợ — ${DEBT_SIDE_LABEL[side]}`} meta={`TK tự suy theo loại đối tượng: KH 131 · NCC 331 · NV 334`} />
+      <FgPageHeader
+        title={editMode ? `Sửa phiếu công nợ ${existing.data?.code ?? ''}` : `Tạo phiếu công nợ — ${DEBT_SIDE_LABEL[effectiveSide]}`}
+        meta={`TK tự suy theo loại đối tượng: KH 131 · NCC 331 · NV 334`}
+      />
       <FgCard>
         <FgField label="Loại đối tượng *" error={errors['party_type']}>
           <FgSelect options={PARTY_OPTIONS} value={f.party_type} onChange={(v) => setF((s) => ({ ...s, party_type: (v as DebtPartyType) ?? 'customer' }))} style={{ width: '100%' }} />
@@ -197,8 +230,8 @@ export function DebtVoucherFormScreen({ side }: { side: 'debit' | 'credit' }): R
           <FgTextarea rows={3} value={f.note} onChange={(e) => setF((s) => ({ ...s, note: e.target.value }))} />
         </FgField>
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-          <FgButton variant="primary" loading={create.isPending} onClick={() => void submit()}>
-            Lưu phiếu công nợ
+          <FgButton variant="primary" loading={create.isPending || update.isPending} onClick={() => void submit()}>
+            {editMode ? 'Lưu thay đổi' : 'Lưu phiếu công nợ'}
           </FgButton>
           <FgButton onClick={() => navigate(-1)}>Hủy</FgButton>
         </div>
@@ -211,11 +244,15 @@ export function DebtVoucherFormScreen({ side }: { side: 'debit' | 'credit' }): R
 
 export function DebtDetailScreen(): ReactNode {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { can } = useAuth();
   const query = useDebtVoucher(id);
   const link = useLinkDebt(id ?? '');
   const unlink = useUnlinkDebt(id ?? '');
+  const del = useDeleteDebtVoucher();
   const { message } = useToast();
   const [linkOpen, setLinkOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   return (
     <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={3} />}>
@@ -225,9 +262,17 @@ export function DebtDetailScreen(): ReactNode {
             title={`${d.code} · ${d.party_name}`}
             meta={`${DEBT_PARTY_LABEL[d.party_type]} · TK ${d.account_code} · ghi ${DEBT_SIDE_LABEL[d.side]}`}
             actions={
-              <FgButton variant="primary" onClick={() => setLinkOpen(true)}>
-                + Liên kết phiếu thu/chi
-              </FgButton>
+              <>
+                <FgButton variant="primary" onClick={() => setLinkOpen(true)}>
+                  + Liên kết phiếu thu/chi
+                </FgButton>
+                {can('debt:update') ? <FgButton onClick={() => navigate(`/cong-no/phieu/${id}/sua`)}>Sửa</FgButton> : null}
+                {can('debt:delete') ? (
+                  <FgButton variant="danger" onClick={() => setDeleteOpen(true)}>
+                    Xoá
+                  </FgButton>
+                ) : null}
+              </>
             }
           />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 'var(--fg-space-3)', marginBottom: 'var(--fg-space-4)' }}>
@@ -290,6 +335,40 @@ export function DebtDetailScreen(): ReactNode {
                 )
               }
             />
+          ) : null}
+
+          {deleteOpen && id ? (
+            <FgModal
+              open
+              title="Xoá phiếu công nợ"
+              onCancel={() => setDeleteOpen(false)}
+              width={480}
+              footer={
+                <>
+                  <FgButton onClick={() => setDeleteOpen(false)} disabled={del.isPending}>
+                    Hủy
+                  </FgButton>
+                  <FgButton
+                    variant="danger"
+                    loading={del.isPending}
+                    onClick={() =>
+                      del.mutate(id, {
+                        onSuccess: () => {
+                          message.success('Đã xoá phiếu công nợ');
+                          navigate('/cong-no/phai-thu');
+                        },
+                      })
+                    }
+                  >
+                    Xoá
+                  </FgButton>
+                </>
+              }
+            >
+              <FgText style="body">
+                Xoá vĩnh viễn phiếu <strong>{d.code}</strong> · {d.party_name}? Thao tác ghi audit và không thể hoàn tác.
+              </FgText>
+            </FgModal>
           ) : null}
         </>
       )}

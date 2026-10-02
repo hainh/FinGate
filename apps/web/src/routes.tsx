@@ -165,6 +165,7 @@ export function AppRoutes(): ReactNode {
       <Route path="/cong-no/phai-tra" element={<Shell><DebtListScreen side="credit" title="Công nợ ghi Có (phải trả)" /></Shell>} /> {/* DEBT-03 */}
       <Route path="/cong-no/phai-tra/moi" element={<Shell><DebtVoucherFormScreen side="credit" /></Shell>} />
       <Route path="/cong-no/phieu/:id" element={<Shell><DebtDetailScreen /></Shell>} /> {/* DEBT-02/04 */}
+      <Route path="/cong-no/phieu/:id/sua" element={<Shell><DebtVoucherFormScreen /></Shell>} /> {/* DEBT-02 sửa */}
       <Route path="/dong-tien" element={<Shell><CashflowHistoryScreen /></Shell>} /> {/* CASH-01 */}
       <Route path="/baocao" element={<Shell><ReportLibraryScreen /></Shell>} /> {/* RPT-00 */}
       <Route path="/baocao/:preset" element={<Shell><ReportRunnerScreen /></Shell>} /> {/* RPT-01→13 */}

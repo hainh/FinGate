@@ -26,6 +26,7 @@ import { scopedFind } from '../lib/mongo.ts';
 import { asBigInt, wire } from '../domain/queries/index.ts';
 import { buildHistoryEntry, mirrorAudit } from '../domain/audit/index.ts';
 import { nextSequentialCode } from '../domain/numbering/index.ts';
+import { storage } from '../storage/index.ts';
 import { registerOwnerAttachmentRoutes } from './attachment-owner.ts';
 import { debtAgingBucket, debtStatus, fetchLinkedDocs, settledFromLinks, type LinkedDocInfo, type OffsetLink } from '../domain/debt/index.ts';
 
@@ -281,7 +282,7 @@ export function debtRoutes(app: FastifyInstance): void {
     defineRoute({
       method: 'PATCH',
       url: '/debts/:id',
-      config: { perms: ['debt:write'] as Permission[], screen: 'DEBT-02', summary: 'Sửa phiếu công nợ' },
+      config: { perms: ['debt:update'] as Permission[], screen: 'DEBT-02', summary: 'Sửa phiếu công nợ' },
       schema: { tags: ['debt'], body: debtVoucherUpsertBodySchema },
       handler: async (req, reply) => {
         const actor = requireActor(req);
@@ -325,6 +326,41 @@ export function debtRoutes(app: FastifyInstance): void {
           action: 'debt.update',
           subject: { type: 'debt', id, code: String(d.code ?? '') },
           company_id: String(d.company_id),
+          ip: requestCtx(req).ip,
+        });
+        return ok(reply, { data: { ok: true } });
+      },
+    }),
+  );
+
+  /** Xoá phiếu công nợ (chỉ KTT trở lên — quyền `debt:delete`, thu hồi được per-user). */
+  app.route(
+    defineRoute({
+      method: 'DELETE',
+      url: '/debts/:id',
+      config: { perms: ['debt:delete'] as Permission[], screen: 'DEBT-02', summary: 'Xoá phiếu công nợ' },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const { id } = req.params as { id: string };
+        const d = await Models.DebtVoucher.findById(id).lean<DebtDoc | null>();
+        if (!d) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy phiếu công nợ' });
+        assertCompanyScope(req, String(d.company_id));
+
+        // Xoá chứng từ đính kèm (best-effort) — metadata mirror + file trên storage.
+        for (const raw of (d.attachments ?? []) as Record<string, unknown>[]) {
+          const key = raw.key ? String(raw.key) : '';
+          if (key) await storage().remove(key).catch(() => undefined);
+        }
+        await Models.Attachment.deleteMany({ owner_type: 'debt', owner_id: d._id } as never).exec();
+        await Models.DebtVoucher.deleteOne({ _id: id }).exec();
+
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'debt.delete',
+          subject: { type: 'debt', id, code: String(d.code ?? '') },
+          company_id: String(d.company_id),
+          diff_fields: { party_name: d.party_name, value_minor: asBigInt(d.value_minor).toString(), links: (d.document_links ?? []).length },
           ip: requestCtx(req).ip,
         });
         return ok(reply, { data: { ok: true } });

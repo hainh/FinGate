@@ -298,6 +298,25 @@ export function useCreateDebtVoucher() {
   });
 }
 
+export function useUpdateDebtVoucher(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => apiData(`/debts/${id}`, { method: 'PATCH', body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['debt-voucher'] });
+      qc.invalidateQueries({ queryKey: ['debt-vouchers'] });
+    },
+  });
+}
+
+export function useDeleteDebtVoucher() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiData(`/debts/${id}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['debt-vouchers'] }),
+  });
+}
+
 export function useLinkDebt(id: string) {
   const qc = useQueryClient();
   return useMutation({
