@@ -225,75 +225,102 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
       };
     }
 
-    /* ---------------- 4/5 · Công nợ phải thu / phải trả ---------------- */
+    /* ---------------- 4/5 · Công nợ ghi Nợ / ghi Có ---------------- */
     case 'cong-no-phai-thu':
     case 'cong-no-phai-tra': {
-      const kind = preset === 'cong-no-phai-thu' ? 'receivable' : 'payable';
-      const rows = await scopedAggregate<{ _id: string; value: unknown; settled: unknown; count: number; oldest_due: string }>(
-        Models.DebtItem,
-        input.scope,
-        [
-          { $match: { kind } },
-          { $group: { _id: '$counterparty_name', value: { $sum: '$value_minor' }, settled: { $sum: '$settled_minor' }, count: { $sum: 1 }, oldest_due: { $min: '$due_date' } } },
-          { $sort: { value: -1 } },
-          { $limit: input.limit },
-        ],
+      const side = preset === 'cong-no-phai-thu' ? 'debit' : 'credit';
+      const { fetchLinkedDocs, settledFromLinks, linkDocumentIds } = await import('../debt/index.ts');
+      const vouchers = await Models.DebtVoucher.find(
+        input.scope.companyIds === null
+          ? ({ side } as never)
+          : ({ side, company_id: { $in: input.scope.companyIds as never[] } } as never),
+      )
+        .select({ company_id: 1, party_name: 1, value_minor: 1, currency: 1, document_links: 1, due_date: 1 })
+        .lean();
+      const docMap = await fetchLinkedDocs(
+        vouchers.flatMap((v) => linkDocumentIds((v as Record<string, unknown>).document_links)),
       );
-      const out = rows.map((r) => {
-        const remaining = asBigInt(r.value) - asBigInt(r.settled);
-        const overdue = r.oldest_due && r.oldest_due < today() ? -daysUntil(r.oldest_due) : 0;
-        return {
-          counterparty: r._id,
-          value_compact: formatMoney(money(asBigInt(r.value)), { mode: 'compact' }),
-          settled_compact: formatMoney(money(asBigInt(r.settled)), { mode: 'compact' }),
-          remaining: wire(remaining),
-          remaining_compact: formatMoney(money(remaining), { mode: 'compact' }),
-          count: r.count,
-          days_overdue: overdue,
-          due_date: r.oldest_due,
-        };
-      });
+      const companies = await Models.Company.find({}).select({ name: 1 }).lean();
+      const cmap = new Map(companies.map((c) => [String(c._id), String(c.name)]));
+      const byParty = new Map<string, { company: string; value: bigint; settled: bigint; count: number; oldest: string }>();
+      for (const v of vouchers) {
+        const key = `${String(v.company_id)}|${String(v.party_name)}`;
+        const cur = byParty.get(key) ?? { company: String(v.company_id), value: 0n, settled: 0n, count: 0, oldest: String(v.due_date ?? '') };
+        cur.value += asBigInt((v as { value_minor?: unknown }).value_minor);
+        cur.settled += settledFromLinks((v as Record<string, unknown>).document_links, docMap);
+        cur.count += 1;
+        const due = String(v.due_date ?? '');
+        if (due && (!cur.oldest || due < cur.oldest)) cur.oldest = due;
+        byParty.set(key, cur);
+      }
+      const out = [...byParty.entries()]
+        .map(([key, p]) => ({ counterparty: key.split('|')[1] ?? '', company_name: cmap.get(p.company) ?? '', value: p.value, settled: p.settled, count: p.count, oldest_due: p.oldest }))
+        .sort((a, b) => (b.value - b.settled > a.value - a.settled ? 1 : -1))
+        .slice(0, input.limit)
+        .map((r) => {
+          const remaining = r.value - r.settled;
+          const overdue = r.oldest_due && r.oldest_due < today() ? -daysUntil(r.oldest_due) : 0;
+          return {
+            counterparty: r.counterparty,
+            value_compact: formatMoney(money(r.value), { mode: 'compact' }),
+            settled_compact: formatMoney(money(r.settled), { mode: 'compact' }),
+            remaining: wire(remaining),
+            remaining_compact: formatMoney(money(remaining), { mode: 'compact' }),
+            count: r.count,
+            days_overdue: overdue,
+            due_date: r.oldest_due,
+          };
+        });
       const totalRemaining = out.reduce((a, r) => a + asBigInt(r.remaining.minor), 0n);
       return {
         ...base,
-        columns: [T('counterparty', kind === 'receivable' ? 'Khách hàng' : 'Nhà cung cấp'), C('value_compact', 'Giá trị'), C('settled_compact', 'Đã xử lý'), C('remaining_compact', 'Còn lại'), N('count', 'Số HĐ'), D('due_date', 'Hạn'), N('days_overdue', 'Quá hạn (ngày)')],
+        columns: [T('counterparty', 'Đối tượng'), C('value_compact', 'Giá trị'), C('settled_compact', 'Đã cấn trừ'), C('remaining_compact', 'Còn lại'), N('count', 'Số phiếu'), D('due_date', 'Hạn'), N('days_overdue', 'Quá hạn (ngày)')],
         rows: out,
         totals: { remaining: wire(totalRemaining) },
-        kpi: [{ label: kind === 'receivable' ? 'Tổng còn phải thu' : 'Tổng còn phải trả', value: formatMoney(money(totalRemaining), { mode: 'kpi' }), note: null }],
+        kpi: [{ label: side === 'debit' ? 'Tổng còn ghi Nợ' : 'Tổng còn ghi Có', value: formatMoney(money(totalRemaining), { mode: 'kpi' }), note: null }],
         chart: { type: 'bar', x_key: 'counterparty', series: [{ key: 'remaining', label: 'Còn lại', values: out.slice(0, 8).map((r) => ty(r.remaining.minor)) }], threshold: null },
-        truncated: rows.length >= input.limit,
+        truncated: out.length >= input.limit,
         row_count: out.length,
       };
     }
 
-    /* ---------------- 6 · Vay ngân hàng ---------------- */
+    /* ---------------- 6 · Nợ ngân hàng ---------------- */
     case 'vay-ngan-hang': {
-      const loans = await Models.Loan.find(
+      const { fetchLinkedDocs, settledFromLinks, linkDocumentIds } = await import('../debt/index.ts');
+      const loans = await Models.BankDebt.find(
         input.scope.companyIds === null ? ({} as never) : ({ company_id: { $in: input.scope.companyIds as never[] } } as never),
       )
-        .select({ company_id: 1, bank_name: 1, contract_code: 1, outstanding_minor: 1, limit_minor: 1, maturity_date: 1, interest_rate: 1, status: 1 })
+        .select({ company_id: 1, bank_name: 1, code: 1, principal_minor: 1, repayment_links: 1, maturity_date: 1, interest_rate: 1, status: 1 })
         .lean();
+      const docMap = await fetchLinkedDocs(
+        loans.flatMap((l) => linkDocumentIds((l as Record<string, unknown>).repayment_links)),
+      );
       const companies = await Models.Company.find({}).select({ name: 1 }).lean();
       const cmap = new Map(companies.map((c) => [String(c._id), String(c.name)]));
-      const out = loans.map((l) => ({
-        company_name: cmap.get(String(l.company_id)) ?? '',
-        bank_name: String(l.bank_name),
-        contract_code: String(l.contract_code),
-        limit_compact: formatMoney(money(asBigInt(l.limit_minor)), { mode: 'compact' }),
-        outstanding: wire(asBigInt(l.outstanding_minor)),
-        outstanding_compact: formatMoney(money(asBigInt(l.outstanding_minor)), { mode: 'compact' }),
-        interest_rate: String(l.interest_rate),
-        maturity_date: String(l.maturity_date),
-        days_to_due: daysUntil(String(l.maturity_date)),
-        status: String(l.status),
-      }));
+      const out = loans.map((l) => {
+        const principal = asBigInt((l as { principal_minor?: unknown }).principal_minor);
+        const repaid = settledFromLinks((l as Record<string, unknown>).repayment_links, docMap);
+        const outstanding = principal - repaid > 0n ? principal - repaid : 0n;
+        return {
+          company_name: cmap.get(String(l.company_id)) ?? '',
+          bank_name: String(l.bank_name),
+          contract_code: String((l as { code?: unknown }).code ?? ''),
+          limit_compact: formatMoney(money(principal), { mode: 'compact' }),
+          outstanding: wire(outstanding),
+          outstanding_compact: formatMoney(money(outstanding), { mode: 'compact' }),
+          interest_rate: String(l.interest_rate),
+          maturity_date: String(l.maturity_date),
+          days_to_due: daysUntil(String(l.maturity_date)),
+          status: String(l.status),
+        };
+      });
       const total = out.reduce((a, r) => a + asBigInt(r.outstanding.minor), 0n);
       return {
         ...base,
-        columns: [T('company_name', 'Công ty'), T('bank_name', 'Ngân hàng'), T('contract_code', 'HĐTD'), C('limit_compact', 'Hạn mức'), C('outstanding_compact', 'Dư nợ'), T('interest_rate', 'Lãi suất'), D('maturity_date', 'Đáo hạn'), N('days_to_due', 'Còn lại')],
+        columns: [T('company_name', 'Công ty'), T('bank_name', 'Ngân hàng'), T('contract_code', 'Mã khoản'), C('limit_compact', 'Số tiền vay'), C('outstanding_compact', 'Dư nợ'), T('interest_rate', 'Lãi suất'), D('maturity_date', 'Hạn trả'), N('days_to_due', 'Còn lại')],
         rows: out,
         totals: { outstanding: wire(total) },
-        kpi: [{ label: 'Tổng dư nợ', value: formatMoney(money(total), { mode: 'kpi' }), note: `${out.length} hợp đồng` }],
+        kpi: [{ label: 'Tổng dư nợ', value: formatMoney(money(total), { mode: 'kpi' }), note: `${out.length} khoản` }],
         chart: null,
         truncated: false,
         row_count: out.length,
@@ -302,22 +329,29 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
 
     /* ---------------- 7 · Đáo hạn ---------------- */
     case 'dao-han': {
-      const loans = await Models.Loan.find(
+      const { fetchLinkedDocs, settledFromLinks, linkDocumentIds } = await import('../debt/index.ts');
+      const loans = await Models.BankDebt.find(
         input.scope.companyIds === null ? ({ status: { $in: ['active', 'overdue'] } } as never) : ({ company_id: { $in: input.scope.companyIds as never[] }, status: { $in: ['active', 'overdue'] } } as never),
       )
-        .select({ company_id: 1, bank_name: 1, contract_code: 1, outstanding_minor: 1, maturity_date: 1 })
+        .select({ company_id: 1, bank_name: 1, code: 1, principal_minor: 1, repayment_links: 1, maturity_date: 1 })
         .sort({ maturity_date: 1 })
         .lean();
+      const docMap = await fetchLinkedDocs(
+        loans.flatMap((l) => linkDocumentIds((l as Record<string, unknown>).repayment_links)),
+      );
       const companies = await Models.Company.find({}).select({ name: 1 }).lean();
       const cmap = new Map(companies.map((c) => [String(c._id), String(c.name)]));
       const out = loans.map((l) => {
         const days = daysUntil(String(l.maturity_date));
+        const principal = asBigInt((l as { principal_minor?: unknown }).principal_minor);
+        const repaid = settledFromLinks((l as Record<string, unknown>).repayment_links, docMap);
+        const outstanding = principal - repaid > 0n ? principal - repaid : 0n;
         return {
           company_name: cmap.get(String(l.company_id)) ?? '',
           bank_name: String(l.bank_name),
-          contract_code: String(l.contract_code),
-          outstanding: wire(asBigInt(l.outstanding_minor)),
-          outstanding_compact: formatMoney(money(asBigInt(l.outstanding_minor)), { mode: 'compact' }),
+          contract_code: String((l as { code?: unknown }).code ?? ''),
+          outstanding: wire(outstanding),
+          outstanding_compact: formatMoney(money(outstanding), { mode: 'compact' }),
           maturity_date: String(l.maturity_date),
           days_to_due: days,
           bucket: days <= 0 ? 'Hôm nay' : days <= 3 ? '3 ngày' : days <= 7 ? '4–7 ngày' : days <= 30 ? '8–30 ngày' : '> 30 ngày',

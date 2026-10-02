@@ -11,7 +11,6 @@ import {
   addDays,
   dayEndOf,
   dayStartOf,
-  daysUntil,
   normalizePlannedDate,
   today,
   type Permission,
@@ -22,14 +21,11 @@ import { ok } from '../lib/serialize.ts';
 import {
   bankAccountUpdateBody,
   bankAccountUpsertBody,
-  debtListQuery,
-  debtUpsertBody,
   internalTransferBody,
-  loanUpsertBody,
   rolloverListQuery,
   statementImportBody,
 } from '@fingate/shared';
-import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, debtUpsertBodySchema, internalTransferBodySchema, loanUpsertBodySchema, statementImportBodySchema } from './schemas.ts';
+import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, internalTransferBodySchema, statementImportBodySchema } from './schemas.ts';
 import { accountSnapshots, asBigInt, docHref, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
 import { scopedFind } from '../lib/mongo.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
@@ -559,141 +555,6 @@ export function financeRoutes(app: FastifyInstance): void {
     }),
   );
 
-  /* ------------------------------- LOAN ------------------------------- */
-
-  app.route(
-    defineRoute({
-      method: 'GET',
-      url: '/loans',
-      config: { perms: ['loan:read'] as Permission[], screen: 'LOAN-01', summary: 'Danh sách khoản vay' },
-      handler: async (req, reply) => {
-        const scope = requireScope(req);
-        const rows = await scopedFind<Record<string, unknown>>(Models.Loan, scope, (req.query as { status?: string }).status ? { status: (req.query as { status: string }).status } : {},
-                    { sort: { maturity_date: 1 }, limit: 200 },
-        );
-        const companies = await Models.Company.find({}).select({ name: 1 }).lean();
-        const cmap = new Map(companies.map((c) => [String(c._id), String(c.name)]));
-        const items = rows.map((l) => {
-          const due = String(l.next_due_date || l.maturity_date || today());
-          return {
-            _id: String(l._id),
-            company_id: String(l.company_id),
-            company_name: cmap.get(String(l.company_id)) ?? '',
-            bank_name: String(l.bank_name),
-            contract_code: String(l.contract_code),
-            limit: wire(asBigInt(l.limit_minor), String(l.currency ?? 'VND')),
-            outstanding: wire(asBigInt(l.outstanding_minor), String(l.currency ?? 'VND')),
-            currency: String(l.currency ?? 'VND'),
-            disbursed_at: String(l.disbursed_at),
-            maturity_date: String(l.maturity_date),
-            next_due_date: l.next_due_date ? String(l.next_due_date) : null,
-            days_to_due: daysUntil(due),
-            interest_rate: String(l.interest_rate),
-            interest_period: String(l.interest_period),
-            principal_period: String(l.principal_period),
-            collateral: (l.collateral as string | null) ?? null,
-            manager_name: null as string | null,
-            status: String(l.status),
-            rollover_status: null as string | null,
-            updated_at: l.updated_at ? new Date(String(l.updated_at)).toISOString() : null,
-          };
-        });
-        const total = items.reduce((a, r) => a + asBigInt(r.outstanding.minor), 0n);
-        return ok(reply, { items, totals: { outstanding: wire(total), count: items.length } }, { maxAge: 30 });
-      },
-    }),
-  );
-
-  app.route(
-    defineRoute({
-      method: 'POST',
-      url: '/loans',
-      config: { perms: ['loan:write'] as Permission[], screen: 'LOAN-03', summary: 'Tạo/sửa khoản vay' },
-      schema: { tags: ['loans'], body: loanUpsertBodySchema },
-      handler: async (req, reply) => {
-        const actor = requireActor(req);
-        const body = validate(loanUpsertBody, req.body);
-        if (body.disbursed_at > body.maturity_date) {
-          throw new ApiError({ code: 'FG-VAL-001', errors: { maturity_date: 'Ngày đáo hạn phải sau ngày giải ngân' } });
-        }
-        const companyId = body.company_id ?? actor.company_id;
-        if (!companyId) throw new ApiError({ code: 'FG-RBAC-002' });
-        assertCompanyScope(req, companyId);
-        const dup = await Models.Loan.findOne({ company_id: companyId, contract_code: body.contract_code }).lean();
-        if (dup) throw new ApiError({ code: 'FG-VAL-001', errors: { contract_code: 'Hợp đồng tín dụng này đã có' } });
-        const created = await Models.Loan.create({
-          company_id: companyId,
-          bank_name: body.bank_name,
-          contract_code: body.contract_code,
-          limit_minor: BigInt(body.limit.amount_minor),
-          outstanding_minor: BigInt(body.outstanding.amount_minor),
-          currency: body.currency,
-          disbursed_at: body.disbursed_at,
-          maturity_date: body.maturity_date,
-          next_due_date: body.next_due_date ?? body.maturity_date,
-          interest_rate: body.interest_rate,
-          interest_period: body.interest_period,
-          principal_period: body.principal_period,
-          collateral: body.collateral ?? null,
-          manager_user_id: body.manager_user_id ?? null,
-          status: body.status,
-          note: body.note ?? null,
-        } as never);
-        await mirrorAudit({
-          at: new Date(),
-          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
-          action: 'loan.create',
-          subject: { type: 'loan', id: String(created._id), code: body.contract_code },
-          company_id: companyId,
-          ip: requestCtx(req).ip,
-        });
-        return ok(reply, { data: { _id: String(created._id) } }, { status: 201 });
-      },
-    }),
-  );
-
-  /** LOAN-04 — lịch nghĩa vụ trả nợ (gốc + lãi + phí). */
-  app.route(
-    defineRoute({
-      method: 'GET',
-      url: '/loans/obligations',
-      config: { perms: ['loan:read'] as Permission[], screen: 'LOAN-04', summary: 'Lịch trả gốc + lãi' },
-      handler: async (req, reply) => {
-        const scope = requireScope(req);
-        const loans = await scopedFind<Record<string, unknown>>(Models.Loan, scope, { status: { $in: ['active', 'overdue'] } }, { limit: 300 });
-        const companies = await Models.Company.find({}).select({ name: 1 }).lean();
-        const cmap = new Map(companies.map((c) => [String(c._id), String(c.name)]));
-        const day = today();
-        const items: Record<string, unknown>[] = [];
-        for (const l of loans) {
-          const obligations = (l.obligations as { due_date?: string; kind?: string; amount_minor?: unknown; paid_minor?: unknown }[] | undefined) ?? [];
-          const generated = obligations.length
-            ? obligations
-            : [{ due_date: String(l.next_due_date ?? l.maturity_date ?? day), kind: 'principal', amount_minor: l.outstanding_minor, paid_minor: 0n }];
-          for (const o of generated) {
-            const amount = asBigInt(o.amount_minor);
-            const paid = asBigInt(o.paid_minor ?? 0n);
-            const dueDate = String(o.due_date ?? day);
-            items.push({
-              loan_id: String(l._id),
-              contract_code: String(l.contract_code),
-              bank_name: String(l.bank_name),
-              company_name: cmap.get(String(l.company_id)) ?? '',
-              due_date: dueDate,
-              kind: o.kind ?? 'principal',
-              amount: wire(amount, String(l.currency ?? 'VND')),
-              paid: wire(paid, String(l.currency ?? 'VND')),
-              remaining: wire(amount - paid, String(l.currency ?? 'VND')),
-              status: dueDate < day ? 'overdue' : paid >= amount && amount > 0n ? 'paid' : dueDate <= addDays(day, 30) ? 'due' : 'upcoming',
-            });
-          }
-        }
-        items.sort((a, b) => String(a.due_date).localeCompare(String(b.due_date)));
-        return ok(reply, { items }, { maxAge: 30 });
-      },
-    }),
-  );
-
   /* ------------------------------ RENEW ------------------------------ */
 
   /** RENEW-01 — bảng đảo hạn + KPI 4 ngưỡng. */
@@ -721,145 +582,6 @@ export function financeRoutes(app: FastifyInstance): void {
             prepared_percent: all.length ? Math.round((all.filter((r) => r.rollover?.prepared).length / all.length) * 100) : 100,
           },
           { maxAge: 30 },
-        );
-      },
-    }),
-  );
-
-  /* ------------------------------- DEBT ------------------------------- */
-
-  app.route(
-    defineRoute({
-      method: 'GET',
-      url: '/debts',
-      config: { perms: ['debt:read'] as Permission[], screen: 'DEBT-01', summary: 'Công nợ phải thu / phải trả' },
-      handler: async (req, reply) => {
-        const scope = requireScope(req);
-        const q = validate(debtListQuery, req.query);
-        const filter: Record<string, unknown> = {};
-        if (q.kind) filter.kind = q.kind;
-        if (q.company_id) filter.company_id = q.company_id;
-        if (q.counterparty) filter.counterparty_name = { $regex: q.counterparty.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
-        if (q.overdue_only === 'true') {
-          filter.due_date = { $lt: today() };
-          filter.status = { $ne: 'settled' };
-        }
-        const rows = await scopedFind<Record<string, unknown>>(Models.DebtItem, scope, filter, {
-          sort: q.sort === 'value' ? { value_minor: -1 } : { due_date: 1 },
-          limit: q.limit,
-        });
-        const companies = await Models.Company.find({}).select({ name: 1 }).lean();
-        const cmap = new Map(companies.map((c) => [String(c._id), String(c.name)]));
-        const day = today();
-        const items = rows.map((d) => {
-          const value = asBigInt(d.value_minor);
-          const settled = asBigInt(d.settled_minor);
-          const due = String(d.due_date);
-          const overdueDays = due < day ? -daysUntil(due) : 0;
-          return {
-            _id: String(d._id),
-            kind: String(d.kind),
-            company_id: String(d.company_id),
-            company_name: cmap.get(String(d.company_id)) ?? '',
-            counterparty_name: String(d.counterparty_name),
-            contract_code: (d.contract_code as string | null) ?? null,
-            value: wire(value),
-            settled: wire(settled),
-            remaining: wire(value - settled),
-            due_date: due,
-            days_overdue: overdueDays,
-            aging_bucket: bucketOf(overdueDays),
-            priority: String(d.priority ?? 'normal'),
-            progress_percent: value > 0n ? Number((settled * 10000n) / value) / 100 : 0,
-            open_document_id: Array.isArray(d.document_ids) && d.document_ids.length ? String(d.document_ids.at(-1)) : null,
-            updated_at: d.updated_at ? new Date(String(d.updated_at)).toISOString() : null,
-          };
-        });
-        return ok(reply, { items, total: items.length }, { maxAge: 30 });
-      },
-    }),
-  );
-
-  app.route(
-    defineRoute({
-      method: 'POST',
-      url: '/debts',
-      config: { perms: ['debt:write'] as Permission[], screen: 'DEBT-01', summary: 'Nhập khoản công nợ' },
-      schema: { tags: ['debt'], body: debtUpsertBodySchema },
-      handler: async (req, reply) => {
-        const actor = requireActor(req);
-        const body = validate(debtUpsertBody, req.body);
-        const companyId = body.company_id ?? actor.company_id;
-        if (!companyId) throw new ApiError({ code: 'FG-RBAC-002' });
-        assertCompanyScope(req, companyId);
-        const created = await Models.DebtItem.create({
-          kind: body.kind,
-          company_id: companyId,
-          counterparty_name: body.counterparty_name,
-          counterparty_tax_code: body.counterparty_tax_code ?? null,
-          contract_code: body.contract_code ?? null,
-          value_minor: BigInt(body.contract_value.amount_minor),
-          settled_minor: body.received_or_paid ? BigInt(body.received_or_paid.amount_minor) : 0n,
-          due_date: body.due_date,
-          priority: body.priority,
-          status: body.received_or_paid && BigInt(body.received_or_paid.amount_minor) >= BigInt(body.contract_value.amount_minor) ? 'settled' : 'open',
-          note: body.note ?? null,
-        } as never);
-        await mirrorAudit({
-          at: new Date(),
-          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
-          action: 'debt.create',
-          subject: { type: 'debt', id: String(created._id), code: body.counterparty_name },
-          company_id: companyId,
-          ip: requestCtx(req).ip,
-        });
-        return ok(reply, { data: { _id: String(created._id) } }, { status: 201 });
-      },
-    }),
-  );
-
-  /** DEBT-05 — ma trận tuổi nợ. */
-  app.route(
-    defineRoute({
-      method: 'GET',
-      url: '/debts/aging',
-      config: { perms: ['debt:read'] as Permission[], screen: 'DEBT-05', summary: 'Đối chiếu công nợ / tuổi nợ' },
-      handler: async (req, reply) => {
-        const scope = requireScope(req);
-        const kind = (req.query as { kind?: string }).kind === 'payable' ? 'payable' : 'receivable';
-        const rows = await scopedFind<Record<string, unknown>>(Models.DebtItem, scope, { kind, status: { $ne: 'settled' } }, { limit: 1000 });
-        const day = today();
-        const buckets = ['none', 'lt30', 'd30_60', 'd60_90', 'gt90'] as const;
-        const byParty = new Map<string, { company: string; cells: Record<string, { amount: bigint; count: number }> }>();
-        for (const d of rows) {
-          const overdue = d.due_date && String(d.due_date) < day ? -daysUntil(String(d.due_date)) : 0;
-          const b = bucketOf(overdue);
-          const key = `${String(d.company_id)}|${String(d.counterparty_name)}`;
-          const cur = byParty.get(key) ?? { company: String(d.company_id), cells: Object.fromEntries(buckets.map((x) => [x, { amount: 0n, count: 0 }])) };
-          const remaining = asBigInt(d.value_minor) - asBigInt(d.settled_minor);
-          const cell = cur.cells[b] ?? { amount: 0n, count: 0 };
-          cur.cells[b] = { amount: cell.amount + remaining, count: cell.count + 1 };
-          byParty.set(key, cur);
-        }
-        const companies = await Models.Company.find({}).select({ name: 1 }).lean();
-        const cmap = new Map(companies.map((c) => [String(c._id), String(c.name)]));
-        const totals = Object.fromEntries(buckets.map((b) => [b, [...byParty.values()].reduce((a, p) => a + (p.cells[b]?.amount ?? 0n), 0n)])) as Record<string, bigint>;
-        return ok(
-          reply,
-          {
-            data: {
-              kind,
-              columns: buckets.map((b) => ({ bucket: b, label: bucketLabel(b) })),
-              rows: [...byParty.entries()].map(([key, p]) => ({
-                counterparty: key.split('|')[1] ?? '',
-                company_name: cmap.get(p.company) ?? '',
-                cells: buckets.map((b) => ({ bucket: b, amount: wire(p.cells[b]?.amount ?? 0n), count: p.cells[b]?.count ?? 0 })),
-                total: wire(buckets.reduce((a, b) => a + (p.cells[b]?.amount ?? 0n), 0n)),
-              })),
-              totals: buckets.map((b) => ({ bucket: b, amount: wire(totals[b] ?? 0n) })),
-            },
-          },
-          { maxAge: 60 },
         );
       },
     }),
@@ -977,18 +699,6 @@ export function financeRoutes(app: FastifyInstance): void {
           { maxAge: 30 },
         );
       },
-    }),
+    }    ),
   );
-}
-
-function bucketOf(overdueDays: number): 'none' | 'lt30' | 'd30_60' | 'd60_90' | 'gt90' {
-  if (overdueDays <= 0) return 'none';
-  if (overdueDays < 30) return 'lt30';
-  if (overdueDays <= 60) return 'd30_60';
-  if (overdueDays <= 90) return 'd60_90';
-  return 'gt90';
-}
-
-function bucketLabel(b: string): string {
-  return { none: 'Chưa đến hạn', lt30: 'Quá hạn < 30 ngày', d30_60: '30–60 ngày', d60_90: '60–90 ngày', gt90: '> 90 ngày' }[b] ?? b;
 }

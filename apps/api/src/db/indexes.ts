@@ -32,11 +32,16 @@ const INDEXES: Record<string, IndexDef[]> = {
     { key: { 'actor.user_id': 1, at: -1 } },
     { key: { 'subject.type': 1, 'subject.id': 1, at: -1 } },
   ],
-  loans: [
-    { key: { company_id: 1, next_due_date: 1 } },
-    { key: { company_id: 1, contract_code: 1 }, options: { unique: true } },
+  bank_debts: [
+    { key: { company_id: 1, maturity_date: 1 } },
+    { key: { company_id: 1, code: 1 }, options: { unique: true } },
+    { key: { 'repayment_links.document_id': 1 } },
   ],
-  debt_items: [{ key: { company_id: 1, kind: 1, due_date: 1 } }],
+  debt_vouchers: [
+    { key: { company_id: 1, party_type: 1, side: 1, due_date: 1 } },
+    { key: { company_id: 1, party_code: 1 } },
+    { key: { 'document_links.document_id': 1 } },
+  ],
   jobs: [
     { key: { state: 1, run_at: 1 } },
     { key: { dedupe_key: 1 }, options: { unique: true, partialFilterExpression: { dedupe_key: { $type: 'string' } } } },
@@ -54,6 +59,7 @@ const INDEXES: Record<string, IndexDef[]> = {
   attachments: [
     { key: { document_id: 1, state: 1 } },
     { key: { company_id: 1, state: 1, created_at: 1 } },
+    { key: { owner_type: 1, owner_id: 1, state: 1 } },
   ],
   alerts: [
     { key: { dedupe_key: 1 }, options: { unique: true, partialFilterExpression: { dedupe_key: { $type: 'string' } } } },
@@ -80,8 +86,8 @@ const COLLECTION_MODEL: Record<string, keyof typeof Models> = {
   cash_entries: 'CashEntry',
   bank_transactions: 'BankTransaction',
   audit_log: 'AuditLog',
-  loans: 'Loan',
-  debt_items: 'DebtItem',
+  bank_debts: 'BankDebt',
+  debt_vouchers: 'DebtVoucher',
   jobs: 'Job',
   sessions: 'Session',
   notifications: 'Notification',

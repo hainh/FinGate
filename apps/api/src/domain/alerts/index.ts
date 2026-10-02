@@ -130,14 +130,22 @@ export async function evaluateAlerts(): Promise<Record<string, unknown>> {
     }
   }
 
-  /* 4 · phải thu quá hạn */
+  /* 4 · ghi Nợ (phải thu) quá hạn */
   if (on('receivable_overdue')) {
-    const rows = await Models.DebtItem.find({ kind: 'receivable', status: { $ne: 'settled' }, due_date: { $lt: day } } as never).lean();
+    const rows = await Models.DebtVoucher.find({ side: 'debit', due_date: { $lt: day } } as never)
+      .select({ company_id: 1, value_minor: 1, document_links: 1 })
+      .lean();
+    const { fetchLinkedDocs, settledFromLinks, linkDocumentIds } = await import('../debt/index.ts');
+    const docMap = await fetchLinkedDocs(
+      rows.flatMap((r) => linkDocumentIds((r as Record<string, unknown>).document_links)),
+    );
     const byCompany = new Map<string, { total: bigint; count: number }>();
     for (const r of rows) {
+      const remaining = asBigInt((r as { value_minor?: unknown }).value_minor) - settledFromLinks((r as Record<string, unknown>).document_links, docMap);
+      if (remaining <= 0n) continue;
       const key = String(r.company_id);
       const cur = byCompany.get(key) ?? { total: 0n, count: 0 };
-      cur.total += asBigInt(r.value_minor) - asBigInt(r.settled_minor);
+      cur.total += remaining;
       cur.count += 1;
       byCompany.set(key, cur);
     }

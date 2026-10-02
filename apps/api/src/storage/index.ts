@@ -60,6 +60,21 @@ export function attachmentKey(input: {
   return `uploads/${input.companyCode}/${input.docCode}/${input.attachmentId}_v${input.version}_${input.sha256.slice(0, 8)}.${ext}`;
 }
 
+/** Key cho chứng từ của phiếu công nợ / khoản vay ngân hàng (owner = debt|loan). */
+export function ownerAttachmentKey(input: {
+  companyCode: string;
+  ownerType: 'debt' | 'loan';
+  code: string;
+  attachmentId: string;
+  version: number;
+  sha256: string;
+  filename: string;
+}): string {
+  const ext = (extname(input.filename).replace('.', '').toLowerCase().slice(0, 8) || 'bin').replace(/[^a-z0-9]/g, '');
+  const safeCode = input.code.replace(/[^\w.-]/g, '');
+  return `uploads/${input.companyCode}/${input.ownerType}/${safeCode}/${input.attachmentId}_v${input.version}_${input.sha256.slice(0, 8)}.${ext}`;
+}
+
 /** Magic bytes — chặn file đổi đuôi (PDF/DOCX/XLSX/JPG/PNG — blueprint §V). */
 const MAGIC: { ext: string; mime: string; test: (b: Uint8Array) => boolean }[] = [
   { ext: 'pdf', mime: 'application/pdf', test: (b) => b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46 },

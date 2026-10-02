@@ -22,6 +22,34 @@ export function isPdf(att: AttachmentRef): boolean {
   return att.mime === 'application/pdf' || /\.pdf$/i.test(att.filename);
 }
 
+/** Chấp nhận PDF hoặc ảnh — dùng cho chứng từ phiếu công nợ / khoản vay. */
+export function acceptOwnerFile(file: File): boolean {
+  return acceptForUpload(file);
+}
+
+/**
+ * Upload chứng từ cho "owner" ngoài hồ sơ (phiếu công nợ / khoản vay):
+ * prepare → PUT (presigned R2 hoặc fs) → confirm.
+ */
+export async function uploadOwnerAttachment(opts: {
+  base: string;
+  ownerId: string;
+  file: File;
+  type?: string;
+  onProgress?: (pct: number) => void;
+}): Promise<void> {
+  const { base, ownerId, file } = opts;
+  const sha256 = await sha256OfFile(file);
+  const prep = await apiData<{ upload_url: string; attachment_id: string; required_headers: Record<string, string> }>(
+    `${base}/${ownerId}/attachments/prepare`,
+    { method: 'POST', body: { filename: file.name, size: file.size, mime: mimeOf(file), sha256, type: opts.type ?? 'other' } },
+  );
+  await putFile(prep.upload_url, file, prep.required_headers ?? {}, opts.onProgress ?? (() => undefined));
+  await apiData(`${base}/${ownerId}/attachments/confirm`, { method: 'POST', body: { attachment_id: prep.attachment_id } });
+}
+
+export { problemText };
+
 export function attachmentHref(att: AttachmentRef, download = false): string {
   // `<img>`/`<iframe>`/window.open không gắn được header → truyền phạm vi qua query `scope`
   // (server đọc cả header lẫn query; thiếu sẽ xét nhầm về công ty nhà của phiên → 403).
@@ -33,13 +61,13 @@ export function attachmentHref(att: AttachmentRef, download = false): string {
   return `/api/v1/attachments/${att.id}${qs ? `?${qs}` : ''}`;
 }
 
-function acceptForUpload(file: File): boolean {
+export function acceptForUpload(file: File): boolean {
   if (file.type === 'application/pdf' || IMAGE_MIME.test(file.type)) return true;
   // một số trình duyệt không gắn MIME → dò theo đuôi
   return !file.type && /\.(pdf|png|jpe?g|gif|webp|bmp)$/i.test(file.name);
 }
 
-function mimeOf(file: File): string {
+export function mimeOf(file: File): string {
   if (file.type) return file.type;
   return /\.pdf$/i.test(file.name) ? 'application/pdf' : 'application/octet-stream';
 }
@@ -95,7 +123,7 @@ function sha256HexFromBytes(bytes: Uint8Array): string {
   return [...h].map((v) => v.toString(16).padStart(8, '0')).join('');
 }
 
-async function sha256OfFile(file: File): Promise<string> {
+export async function sha256OfFile(file: File): Promise<string> {
   const buf = await file.arrayBuffer();
   const subtle = globalThis.crypto?.subtle;
   if (subtle) {
@@ -105,7 +133,7 @@ async function sha256OfFile(file: File): Promise<string> {
   return sha256HexFromBytes(new Uint8Array(buf));
 }
 
-function putFile(url: string, file: File, headers: Record<string, string>, onProgress: (pct: number) => void): Promise<void> {
+export function putFile(url: string, file: File, headers: Record<string, string>, onProgress: (pct: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url, true);

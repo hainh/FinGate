@@ -1,0 +1,414 @@
+/**
+ * Công nợ — phiếu công nợ theo chuẩn kế toán VN (KH=131, NCC=331, NV=334; Nợ/Có).
+ * Cấn trừ với phiếu thu/chi — liên kết bất kỳ lúc nào, hiệu lực khi phiếu ở trạng thái "Đã thanh toán".
+ */
+
+import { useState, type ReactNode } from 'react';
+import { Link, useNavigate, useParams } from 'react-router';
+import { DatePicker } from 'antd';
+import dayjs from 'dayjs';
+import { ACCOUNT_CODE_BY_PARTY, DEBT_PARTY_LABEL, DEBT_SIDE_LABEL, moneyFromWire, type DebtPartyType, type Money } from '@fingate/shared';
+import { ApiRequestError, currentScope } from '../app/api.ts';
+import { useCurrentCompanyId } from '../app/store.tsx';
+import { useBankDebtCandidates, useCreateDebtVoucher, useDebtCandidates, useDebtVoucher, useDebtVouchers, useLinkDebt, useUnlinkDebt } from '../app/queries.ts';
+import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTextarea } from '../components/primitives.tsx';
+import { FgCard } from '../components/cards.tsx';
+import { FgEmptyState, FgModal, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
+import { FgPageHeader } from '../components/shell.tsx';
+import { FgQuery, useToast } from '../components/pagekit.tsx';
+import { acceptOwnerFile, problemText, uploadOwnerAttachment } from '../components/attachments.tsx';
+import { STATUS_REGISTRY, type StatusKey } from '@fingate/shared';
+
+const PARTY_OPTIONS = (Object.keys(DEBT_PARTY_LABEL) as DebtPartyType[]).map((v) => ({ value: v, label: `${DEBT_PARTY_LABEL[v]} (TK ${ACCOUNT_CODE_BY_PARTY[v]})` }));
+
+function statusLabelVi(s: string): string {
+  return STATUS_REGISTRY[s as StatusKey]?.labelVi ?? s;
+}
+
+/* ============================== DEBT-01/03 list ============================== */
+
+export function DebtListScreen({ side, title }: { side: 'debit' | 'credit'; title: string }): ReactNode {
+  const [partyType, setPartyType] = useState<string | undefined>();
+  const query = useDebtVouchers({ side, party_type: partyType });
+  return (
+    <>
+      <FgPageHeader
+        title={title}
+        meta="Công nợ ghi Nợ/Có — đã cấn trừ tính từ các phiếu thu/chi đã thực thi"
+        actions={
+          <Link to={`/cong-no/${side === 'debit' ? 'phai-thu' : 'phai-tra'}/moi`}>
+            <FgButton variant="primary">+ Tạo phiếu công nợ</FgButton>
+          </Link>
+        }
+      />
+      <div className="fg-filterbar">
+        <FgSelect
+          ariaLabel="Loại đối tượng"
+          placeholder="Mọi đối tượng"
+          allowClear
+          options={PARTY_OPTIONS}
+          value={partyType}
+          onChange={(v) => setPartyType(v)}
+          style={{ width: 220 }}
+        />
+      </div>
+      <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={7} />}>
+        {(data) =>
+          !data.items.length ? (
+            <div className="fg-card">
+              <FgEmptyState glyph="◇" title="Chưa có phiếu công nợ nào" />
+            </div>
+          ) : (
+            <div className="fg-card" style={{ padding: 0 }}>
+              <FgTable
+                rowKey="_id"
+                dataSource={data.items}
+                columns={[
+                  { title: 'Mã', dataIndex: 'code', key: 'code', render: (v, r) => <Link className="fg-link" to={`/cong-no/phieu/${r._id}`}>{v}</Link> },
+                  { title: 'Đối tượng', key: 'party', render: (_v, r) => `${r.party_code} · ${r.party_name}` },
+                  { title: 'TK', dataIndex: 'account_code', key: 'acct' },
+                  { title: 'Nợ/Có', dataIndex: 'side', key: 'side', render: (v: 'debit' | 'credit') => DEBT_SIDE_LABEL[v] },
+                  { title: 'Giá trị', dataIndex: 'value', key: 'value', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
+                  { title: 'Đã cấn trừ', dataIndex: 'settled', key: 'settled', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
+                  { title: 'Còn lại', dataIndex: 'remaining', key: 'remaining', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
+                  { title: 'Hạn', dataIndex: 'due_date', key: 'due' },
+                  {
+                    title: 'Quá hạn',
+                    key: 'ov',
+                    render: (_v, r) =>
+                      r.days_overdue > 0 ? (
+                        <span className="fg-chip" style={{ borderColor: 'var(--fg-status-danger-border)', color: 'var(--fg-status-danger-text)', background: 'var(--fg-status-danger-bg)' }}>
+                          ⛔ {r.days_overdue} ngày
+                        </span>
+                      ) : (
+                        <FgText style="caption" color="muted">đúng hạn</FgText>
+                      ),
+                  },
+                ]}
+              />
+            </div>
+          )
+        }
+      </FgQuery>
+    </>
+  );
+}
+
+/* ============================== DEBT-01 create ============================== */
+
+export function DebtVoucherFormScreen({ side }: { side: 'debit' | 'credit' }): ReactNode {
+  const navigate = useNavigate();
+  const company = useCurrentCompanyId();
+  const create = useCreateDebtVoucher();
+  const { message } = useToast();
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [f, setF] = useState<{
+    party_type: DebtPartyType;
+    party_code: string;
+    party_name: string;
+    party_tax_code: string;
+    party_bank_account: string;
+    value: Money | null;
+    due_date: string;
+    contract_code: string;
+    priority: string;
+    note: string;
+  }>({ party_type: 'customer', party_code: '', party_name: '', party_tax_code: '', party_bank_account: '', value: null, due_date: dayjs().add(7, 'day').format('YYYY-MM-DD'), contract_code: '', priority: 'normal', note: '' });
+
+  const submit = async (): Promise<void> => {
+    setErrors({});
+    if (!company) {
+      message.error('Chưa chọn công ty');
+      return;
+    }
+    if (!f.party_code.trim() || !f.party_name.trim()) {
+      message.error('Nhập mã và tên đối tượng');
+      return;
+    }
+    if (!f.value || f.value.minor <= 0n) {
+      message.error('Nhập số tiền');
+      return;
+    }
+    try {
+      const r = await create.mutateAsync({
+        company_id: company,
+        party_type: f.party_type,
+        party_code: f.party_code.trim(),
+        party_name: f.party_name.trim(),
+        party_tax_code: f.party_tax_code.trim() || undefined,
+        party_bank_account: f.party_bank_account.trim() || undefined,
+        side,
+        value: { amount_minor: f.value.minor.toString(), currency: f.value.currency },
+        due_date: f.due_date,
+        contract_code: f.contract_code.trim() || undefined,
+        priority: f.priority,
+        note: f.note.trim() || undefined,
+      });
+      message.success('Đã lưu phiếu công nợ');
+      navigate(`/cong-no/phieu/${r._id}`);
+    } catch (e) {
+      if (e instanceof ApiRequestError && e.problem.errors) setErrors(e.problem.errors);
+      message.error(problemText(e, 'Không lưu được phiếu công nợ'));
+    }
+  };
+
+  return (
+    <>
+      <FgPageHeader title={`Tạo phiếu công nợ — ${DEBT_SIDE_LABEL[side]}`} meta={`TK tự suy theo loại đối tượng: KH 131 · NCC 331 · NV 334`} />
+      <FgCard>
+        <FgField label="Loại đối tượng *" error={errors['party_type']}>
+          <FgSelect options={PARTY_OPTIONS} value={f.party_type} onChange={(v) => setF((s) => ({ ...s, party_type: (v as DebtPartyType) ?? 'customer' }))} style={{ width: '100%' }} />
+        </FgField>
+        <FgField label="Mã đối tượng *" error={errors['party_code']}>
+          <FgInput value={f.party_code} onChange={(e) => setF((s) => ({ ...s, party_code: e.target.value }))} placeholder="VD: KH-001 / NCC-010 / NV-001" />
+        </FgField>
+        <FgField label="Tên công ty / đối tượng *" error={errors['party_name']}>
+          <FgInput value={f.party_name} onChange={(e) => setF((s) => ({ ...s, party_name: e.target.value }))} />
+        </FgField>
+        <FgField label="Mã số thuế">
+          <FgInput value={f.party_tax_code} onChange={(e) => setF((s) => ({ ...s, party_tax_code: e.target.value }))} />
+        </FgField>
+        <FgField label="STK của công ty đối tác">
+          <FgInput value={f.party_bank_account} onChange={(e) => setF((s) => ({ ...s, party_bank_account: e.target.value }))} />
+        </FgField>
+        <FgField label="Số tiền *" error={errors['value']}>
+          <FgMoneyInput value={f.value} onChange={(v) => setF((s) => ({ ...s, value: v }))} />
+        </FgField>
+        <FgField label="Hạn thanh toán *" error={errors['due_date']}>
+          <DatePicker value={f.due_date ? dayjs(f.due_date) : null} onChange={(d) => setF((s) => ({ ...s, due_date: d ? d.format('YYYY-MM-DD') : '' }))} format="DD/MM/YYYY" style={{ width: '100%' }} />
+        </FgField>
+        <FgField label="Hợp đồng / chứng từ">
+          <FgInput value={f.contract_code} onChange={(e) => setF((s) => ({ ...s, contract_code: e.target.value }))} />
+        </FgField>
+        <FgField label="Mức ưu tiên">
+          <FgSelect
+            options={[
+              { value: 'low', label: 'Thấp' },
+              { value: 'normal', label: 'Bình thường' },
+              { value: 'high', label: 'Cao' },
+              { value: 'urgent', label: 'Khẩn' },
+            ]}
+            value={f.priority}
+            onChange={(v) => setF((s) => ({ ...s, priority: v ?? 'normal' }))}
+            style={{ width: '100%' }}
+          />
+        </FgField>
+        <FgField label="Ghi chú">
+          <FgTextarea rows={3} value={f.note} onChange={(e) => setF((s) => ({ ...s, note: e.target.value }))} />
+        </FgField>
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <FgButton variant="primary" loading={create.isPending} onClick={() => void submit()}>
+            Lưu phiếu công nợ
+          </FgButton>
+          <FgButton onClick={() => navigate(-1)}>Hủy</FgButton>
+        </div>
+      </FgCard>
+    </>
+  );
+}
+
+/* ============================== DEBT-02 detail ============================== */
+
+export function DebtDetailScreen(): ReactNode {
+  const { id } = useParams<{ id: string }>();
+  const query = useDebtVoucher(id);
+  const link = useLinkDebt(id ?? '');
+  const unlink = useUnlinkDebt(id ?? '');
+  const { message } = useToast();
+  const [linkOpen, setLinkOpen] = useState(false);
+
+  return (
+    <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={3} />}>
+      {(d) => (
+        <>
+          <FgPageHeader
+            title={`${d.code} · ${d.party_name}`}
+            meta={`${DEBT_PARTY_LABEL[d.party_type]} · TK ${d.account_code} · ghi ${DEBT_SIDE_LABEL[d.side]}`}
+            actions={
+              <FgButton variant="primary" onClick={() => setLinkOpen(true)}>
+                + Liên kết phiếu thu/chi
+              </FgButton>
+            }
+          />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 'var(--fg-space-3)', marginBottom: 'var(--fg-space-4)' }}>
+            <FgCard className="fg-kpi">
+              <FgText style="caption" color="muted">Giá trị</FgText>
+              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.value)} mode="compact" /></div>
+            </FgCard>
+            <FgCard className="fg-kpi">
+              <FgText style="caption" color="muted">Đã cấn trừ</FgText>
+              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.settled)} mode="compact" /></div>
+            </FgCard>
+            <FgCard className="fg-kpi">
+              <FgText style="caption" color="muted">Còn lại</FgText>
+              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.remaining)} mode="compact" emphasis /></div>
+            </FgCard>
+          </div>
+
+          <FgCard title="Liên kết cấn trừ" style={{ marginBottom: 'var(--fg-space-4)' }}>
+            {!d.document_links.length ? (
+              <FgEmptyState glyph="◇" title="Chưa liên kết phiếu nào" description="Liên kết phiếu thu/chi — khi phiếu được thực thi, công nợ tự trừ." />
+            ) : (
+              <FgTable
+                rowKey="_id"
+                dataSource={d.document_links}
+                columns={[
+                  { title: 'Phiếu', key: 'doc', render: (_v, r) => `${r.document_code} · ${r.document_title}` },
+                  { title: 'Trạng thái', dataIndex: 'document_status', key: 'st', render: (v: string) => statusLabelVi(v) },
+                  { title: 'Số tiền', dataIndex: 'amount', key: 'amount', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
+                  {
+                    title: '',
+                    key: 'act',
+                    render: (_v, r) => (
+                      <FgButton size="small" variant="danger" onClick={() => unlink.mutate(r._id, { onSuccess: () => message.success('Đã gỡ liên kết') })}>
+                        Gỡ
+                      </FgButton>
+                    ),
+                  },
+                ]}
+              />
+            )}
+          </FgCard>
+
+          <OwnerAttachmentSection base="/debts" ownerId={d._id} attachments={d.attachments} onChanged={() => query.refetch()} />
+
+          {linkOpen && id ? (
+            <LinkPickerModal
+              title="Liên kết phiếu thu/chi"
+              kind="debt"
+              ownerId={id}
+              onClose={() => setLinkOpen(false)}
+              onPick={(document_id, amount_minor) =>
+                link.mutate(
+                  { document_id, amount_minor },
+                  {
+                    onSuccess: () => {
+                      message.success('Đã liên kết');
+                      setLinkOpen(false);
+                    },
+                  },
+                )
+              }
+            />
+          ) : null}
+        </>
+      )}
+    </FgQuery>
+  );
+}
+
+/* ====================== shared: owner attachments + link picker ====================== */
+
+export function OwnerAttachmentSection({
+  base,
+  ownerId,
+  attachments,
+  onChanged,
+}: {
+  base: string;
+  ownerId: string;
+  attachments: { id: string; filename: string; size: number; mime: string; type: string; version: number }[];
+  onChanged: () => void;
+}): ReactNode {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { message } = useToast();
+  const list = attachments ?? [];
+
+  const onPick = async (file: File | null): Promise<void> => {
+    if (!file) return;
+    setError(null);
+    if (!acceptOwnerFile(file)) return setError('Chỉ nhận tệp PDF hoặc ảnh PNG/JPG');
+    setBusy(true);
+    try {
+      await uploadOwnerAttachment({ base, ownerId, file });
+      message.success('Đã tải chứng từ lên');
+      onChanged();
+    } catch (e) {
+      setError(problemText(e, 'Không tải được chứng từ'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <FgCard title="Chứng từ đính kèm">
+      {list.map((a) => (
+        <div key={a.id} className="fg-stat-row">
+          <FgText style="bodyS">{a.filename}</FgText>
+          <a className="fg-link" href={`/api/v1/attachments/${a.id}?scope=${currentScope()}`} target="_blank" rel="noreferrer">
+            Xem
+          </a>
+        </div>
+      ))}
+      <label style={{ display: 'inline-block', marginTop: 12 }}>
+        <input
+          type="file"
+          accept="application/pdf,image/*"
+          style={{ display: 'none' }}
+          disabled={busy}
+          onChange={(e) => {
+            void onPick(e.target.files?.[0] ?? null);
+            e.target.value = '';
+          }}
+        />
+        <span className="fg-btn" style={{ cursor: 'pointer' }}>{busy ? 'Đang tải…' : '+ Thêm chứng từ (PDF/ảnh, tối đa 100MB)'}</span>
+      </label>
+      {error ? <div style={{ marginTop: 8 }}><FgAlert tone="danger" title={error} /></div> : null}
+    </FgCard>
+  );
+}
+
+export function LinkPickerModal({
+  title,
+  kind,
+  ownerId,
+  onClose,
+  onPick,
+}: {
+  title: string;
+  kind: 'debt' | 'bank';
+  ownerId: string;
+  onClose: () => void;
+  onPick: (document_id: string, amount_minor?: string) => void;
+}): ReactNode {
+  const [q, setQ] = useState('');
+  const debtCandidates = useDebtCandidates(kind === 'debt' ? ownerId : undefined, q || undefined);
+  const bankCandidates = useBankDebtCandidates(kind === 'bank' ? ownerId : undefined, q || undefined);
+  const candidates = kind === 'debt' ? debtCandidates : bankCandidates;
+  return (
+    <FgModal open title={title} onCancel={onClose} width={680} footer={<FgButton onClick={onClose}>Đóng</FgButton>}>
+      <FgField label="Tìm theo mã / nội dung">
+        <FgInput value={q} onChange={(e) => setQ(e.target.value)} placeholder="VD: PC-2026 hoặc tên" />
+      </FgField>
+      <div style={{ marginTop: 12 }}>
+        {candidates.isLoading ? (
+          <FgSkeletonTable rows={4} cols={3} />
+        ) : !candidates.data?.items.length ? (
+          <FgEmptyState glyph="◇" title="Không có phiếu phù hợp" />
+        ) : (
+          <FgTable
+            rowKey="_id"
+            size="small"
+            dataSource={candidates.data.items}
+            columns={[
+              { title: 'Mã', dataIndex: 'code', key: 'code' },
+              { title: 'Nội dung', dataIndex: 'title', key: 'title' },
+              { title: 'Trạng thái', dataIndex: 'status', key: 'st', render: (v: string) => statusLabelVi(v) },
+              { title: 'Số tiền', dataIndex: 'amount', key: 'amount', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
+              {
+                title: '',
+                key: 'act',
+                render: (_v, r) => (
+                  <FgButton size="small" disabled={r.already_linked} onClick={() => onPick(r._id)}>
+                    Liên kết
+                  </FgButton>
+                ),
+              },
+            ]}
+          />
+        )}
+      </div>
+    </FgModal>
+  );
+}

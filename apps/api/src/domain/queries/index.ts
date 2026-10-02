@@ -524,13 +524,13 @@ export async function maturityLadder(
   opts: { bucket?: string; bankName?: string; horizonDays?: number } = {},
 ): Promise<MaturityRow[]> {
   const horizon = opts.horizonDays ?? 90;
-  const loans = await Models.Loan.find(
+  const loans = await Models.BankDebt.find(
     withScope(scopeOf(scope), {
       status: { $in: ['active', 'overdue'] },
       maturity_date: { $lte: addDays(today(), horizon) },
     }) as never,
   )
-    .select({ company_id: 1, bank_name: 1, contract_code: 1, outstanding_minor: 1, maturity_date: 1, next_due_date: 1, currency: 1 })
+    .select({ company_id: 1, bank_name: 1, code: 1, principal_minor: 1, repayment_links: 1, maturity_date: 1, next_due_date: 1, currency: 1 })
     .sort({ maturity_date: 1 })
     .lean();
 
@@ -538,6 +538,11 @@ export async function maturityLadder(
     .select({ name: 1 })
     .lean();
   const cname = new Map(companies.map((c) => [String(c._id), String(c.name)]));
+
+  const { fetchLinkedDocs, settledFromLinks, linkDocumentIds } = await import('../debt/index.ts');
+  const docMap = await fetchLinkedDocs(
+    loans.flatMap((l) => linkDocumentIds((l as Record<string, unknown>).repayment_links)),
+  );
 
   const loanIds = loans.map((l) => String(l._id));
   const rollovers = loanIds.length
@@ -551,11 +556,13 @@ export async function maturityLadder(
     const due = String(l.next_due_date || l.maturity_date || today());
     const days = daysUntil(due);
     const band = maturity(days);
-    const outstanding = asBigInt(l.outstanding_minor);
+    const principal = asBigInt((l as { principal_minor?: unknown }).principal_minor);
+    const repaid = settledFromLinks((l as Record<string, unknown>).repayment_links, docMap);
+    const outstanding = principal - repaid > 0n ? principal - repaid : 0n;
     const ro = byLoan.get(String(l._id));
     return {
       loan_id: String(l._id),
-      contract_code: String(l.contract_code),
+      contract_code: String((l as { code?: unknown }).code ?? ''),
       company_id: String(l.company_id),
       company_name: cname.get(String(l.company_id)) ?? '—',
       bank_name: String(l.bank_name),
@@ -578,11 +585,12 @@ export async function maturityLadder(
   });
 
   const byBank = opts.bankName ? rows.filter((r) => r.bank_name.toLowerCase().includes(opts.bankName!.toLowerCase())) : rows;
-  if (!opts.bucket) return byBank;
+  const positive = byBank.filter((r) => asBigInt(r.outstanding.minor) > 0n);
+  if (!opts.bucket) return positive;
   const range: Record<string, [number, number]> = { today: [-99_999, 0], '3d': [1, 3], '7d': [4, 7], '30d': [8, 30], later: [31, 99_999] };
   const bounds = range[opts.bucket];
-  if (!bounds) return byBank;
-  return byBank.filter((r) => r.days_to_due >= bounds[0] && r.days_to_due <= bounds[1]);
+  if (!bounds) return positive;
+  return positive.filter((r) => r.days_to_due >= bounds[0] && r.days_to_due <= bounds[1]);
 }
 
 /* ================================================================== *
@@ -1089,10 +1097,21 @@ async function buildOverview(scope: ScopeLike, userId: string, role?: Role, canP
   });
 
   const byBankAgg = new Map<string, bigint>();
-  const loanRows = await Models.Loan.find(withScope(scopeOf(scope), { status: { $in: ['active', 'overdue'] } }) as never)
-    .select({ bank_name: 1, outstanding_minor: 1 })
+  const loanRows = await Models.BankDebt.find(withScope(scopeOf(scope), { status: { $in: ['active', 'overdue'] } }) as never)
+    .select({ bank_name: 1, principal_minor: 1, repayment_links: 1 })
     .lean();
-  for (const l of loanRows) byBankAgg.set(String(l.bank_name), (byBankAgg.get(String(l.bank_name)) ?? 0n) + asBigInt(l.outstanding_minor));
+  {
+    const { fetchLinkedDocs: fetchDocs, settledFromLinks: settled, linkDocumentIds: linkIds } = await import('../debt/index.ts');
+    const docMap = await fetchDocs(
+      loanRows.flatMap((l) => linkIds((l as Record<string, unknown>).repayment_links)),
+    );
+    for (const l of loanRows) {
+      const principal = asBigInt((l as { principal_minor?: unknown }).principal_minor);
+      const repaid = settled((l as Record<string, unknown>).repayment_links, docMap);
+      const outstanding = principal - repaid > 0n ? principal - repaid : 0n;
+      byBankAgg.set(String(l.bank_name), (byBankAgg.get(String(l.bank_name)) ?? 0n) + outstanding);
+    }
+  }
 
   return {
     scope: {
@@ -1267,33 +1286,61 @@ async function sumByDateAndKind(scope: ScopeLike, kind: DocKind, date: string): 
 }
 
 async function overdueReceivable(scope: ScopeLike): Promise<{ count: number; total: bigint }> {
-  const f = withScope(scopeOf(scope), { kind: 'receivable', status: { $ne: 'settled' }, due_date: { $lt: today() } });
-  const [count, rows] = await Promise.all([
-    Models.DebtItem.countDocuments(f as never),
-    Models.DebtItem.find(f as never).select({ value_minor: 1, settled_minor: 1 }).limit(500).lean(),
-  ]);
-  const total = (rows as { value_minor?: unknown; settled_minor?: unknown }[]).reduce(
-    (a, r) => a + asBigInt(r.value_minor ?? 0n) - asBigInt(r.settled_minor ?? 0n),
-    0n,
+  const rows = await Models.DebtVoucher.find(withScope(scopeOf(scope), { side: 'debit', due_date: { $lt: today() } }) as never)
+    .select({ value_minor: 1, document_links: 1 })
+    .limit(500)
+    .lean();
+  const { fetchLinkedDocs, settledFromLinks, linkDocumentIds } = await import('../debt/index.ts');
+  const docMap = await fetchLinkedDocs(
+    rows.flatMap((r) => linkDocumentIds((r as Record<string, unknown>).document_links)),
   );
+  let count = 0;
+  let total = 0n;
+  for (const r of rows) {
+    const remaining = asBigInt((r as { value_minor?: unknown }).value_minor) - settledFromLinks((r as Record<string, unknown>).document_links, docMap);
+    if (remaining > 0n) {
+      count += 1;
+      total += remaining;
+    }
+  }
   return { count, total };
 }
 
 async function sumOutstanding(scope: ScopeLike): Promise<bigint> {
-  const rows = await scopedAggregate<{ total: unknown }>(Models.Loan, scopeOf(scope), [
-    { $match: { status: { $in: ['active', 'overdue'] } } },
-    { $group: { _id: null, total: { $sum: '$outstanding_minor' } } },
-  ]);
-  return asBigInt(rows[0]?.total ?? 0n);
+  const debts = await Models.BankDebt.find(withScope(scopeOf(scope), { status: { $in: ['active', 'overdue'] } }) as never)
+    .select({ principal_minor: 1, repayment_links: 1 })
+    .lean();
+  const { fetchLinkedDocs, settledFromLinks, linkDocumentIds } = await import('../debt/index.ts');
+  const docMap = await fetchLinkedDocs(
+    debts.flatMap((d) => linkDocumentIds((d as Record<string, unknown>).repayment_links)),
+  );
+  let total = 0n;
+  for (const d of debts) {
+    const principal = asBigInt((d as { principal_minor?: unknown }).principal_minor);
+    const repaid = settledFromLinks((d as Record<string, unknown>).repayment_links, docMap);
+    total += principal - repaid > 0n ? principal - repaid : 0n;
+  }
+  return total;
 }
 
 async function sumPayableDue(scope: ScopeLike): Promise<bigint> {
-  const rows = await scopedAggregate<{ total: unknown }>(Models.DebtItem, scopeOf(scope), [
-    { $match: { kind: 'payable', status: { $ne: 'settled' }, due_date: { $lte: addDays(today(), 7) } } },
-    { $project: { remaining: { $subtract: ['$value_minor', '$settled_minor'] } } },
-    { $group: { _id: null, total: { $sum: '$remaining' } } },
-  ]);
-  return asBigInt(rows[0]?.total ?? 0n);
+  const rows = await Models.DebtVoucher.find(
+    withScope(scopeOf(scope), { side: 'credit', due_date: { $lte: addDays(today(), 7) } }) as never,
+  )
+    .select({ value_minor: 1, document_links: 1 })
+    .lean();
+  const { fetchLinkedDocs, settledFromLinks, linkDocumentIds } = await import('../debt/index.ts');
+  const docMap = await fetchLinkedDocs(
+    rows.flatMap((d) => linkDocumentIds((d as Record<string, unknown>).document_links)),
+  );
+  let total = 0n;
+  for (const d of rows) {
+    const value = asBigInt((d as { value_minor?: unknown }).value_minor);
+    const settled = settledFromLinks((d as Record<string, unknown>).document_links, docMap);
+    const remaining = value - settled;
+    if (remaining > 0n) total += remaining;
+  }
+  return total;
 }
 
 async function namesForScope(scope: ScopeLike): Promise<string[]> {

@@ -7,11 +7,11 @@
  */
 
 import { hashPassword } from '../lib/password.ts';
-import { DEFAULT_AMOUNT_LIMIT_MINOR } from '@fingate/shared';
+import { ACCOUNT_CODE_BY_PARTY, DEFAULT_AMOUNT_LIMIT_MINOR } from '@fingate/shared';
 import type { FastifyBaseLogger } from 'fastify';
 import { Models } from './models.ts';
 import { resolveMatrix } from '../domain/workflow/matrix.ts';
-import { nextDocumentCode } from '../domain/numbering/index.ts';
+import { nextDocumentCode, nextSequentialCode } from '../domain/numbering/index.ts';
 import { rebuildLedgerAndBalances } from '../domain/rebuild/balances.ts';
 
 const DAY = 86_400_000;
@@ -24,8 +24,8 @@ interface SeedPlan {
   accounts: { company: string | null; bank: string; number: string; name: string; balance: number; blocked?: number; is_group?: boolean }[];
   users: { email: string; name: string; role: string; company: string | null; limitTy: number }[];
   categories: { name: string; group: string; kind: string; required: string[]; order: number }[];
-  loans: { company: string; bank: string; contract: string; limit: number; outstanding: number; dueInDays: number; rate: string }[];
-  debts: { company: string; kind: string; party: string; value: number; settled: number; dueInDays: number }[];
+  bank_debts: { company: string; bank: string; branch: string; amount: number; dueInDays: number; rate: string }[];
+  debts: { company: string; party_type: 'customer' | 'supplier' | 'employee'; code: string; party: string; side: 'debit' | 'credit'; value: number; dueInDays: number; bank?: string }[];
   recurring: { company: string; title: string; amount: number; cadence: string; day: number }[];
   /** hồ sơ mẫu phủ các trạng thái để UI có đủ 8 trạng thái (DoD §23) */
   docs: { company: string; kind: string; title: string; purpose: string; payee: string; amountTy: number; status: string; plannedOffset: number; category: string }[];
@@ -82,19 +82,20 @@ const PLAN: SeedPlan = {
     { name: 'Thu dịch vụ', group: 'hoat_dong', kind: 'income', required: [], order: 30 },
     { name: 'Thu bán hàng', group: 'hoat_dong', kind: 'income', required: [], order: 31 },
   ],
-  loans: [
-    { company: 'MP', bank: 'BIDV', contract: 'HĐTD/2024/MP-01', limit: 30, outstanding: 20, dueInDays: 0, rate: '9,50' },
-    { company: 'MP', bank: 'Vietcombank', contract: 'HĐTD/2025/MP-02', limit: 20, outstanding: 15, dueInDays: 6, rate: '8,70' },
-    { company: 'AP', bank: 'MB Bank', contract: 'HĐTD/2025/AP-03', limit: 40, outstanding: 30, dueInDays: 21, rate: '10,20' },
-    { company: 'AP', bank: 'VietinBank', contract: 'HĐTD/2024/AP-01', limit: 25, outstanding: 8, dueInDays: 55, rate: '9,10' },
+  bank_debts: [
+    { company: 'MP', bank: 'BIDV', branch: 'Chi nhánh TP.HCM', amount: 20, dueInDays: 0, rate: '9,50' },
+    { company: 'MP', bank: 'Vietcombank', branch: 'Chi nhánh Sài Gòn', amount: 15, dueInDays: 6, rate: '8,70' },
+    { company: 'AP', bank: 'MB Bank', branch: 'Chi nhánh Đông Sài Gòn', amount: 30, dueInDays: 21, rate: '10,20' },
+    { company: 'AP', bank: 'VietinBank', branch: 'Chi nhánh 1', amount: 8, dueInDays: 55, rate: '9,10' },
   ],
   debts: [
-    { company: 'MP', kind: 'receivable', party: 'Công ty CP Đầu tư Nhà Xanh', value: 12, settled: 4.5, dueInDays: -18 },
-    { company: 'MP', kind: 'receivable', party: 'Ban QLDA Quận 7', value: 8, settled: 8, dueInDays: 12 },
-    { company: 'MP', kind: 'payable', party: 'Công ty VLXD Thành Trung', value: 9.5, settled: 3, dueInDays: 4 },
-    { company: 'AP', kind: 'receivable', party: 'Siêu thị Miền Đông', value: 5.5, settled: 0.5, dueInDays: -6 },
-    { company: 'AP', kind: 'payable', party: 'Nhà cung cấp Bao bì Hưng Thịnh', value: 3.2, settled: 0, dueInDays: 9 },
-    { company: 'HH', kind: 'payable', party: 'Công ty Vệ sinh Công nghiệp', value: 0.45, settled: 0, dueInDays: -41 },
+    { company: 'MP', party_type: 'customer', code: 'KH-001', party: 'Công ty CP Đầu tư Nhà Xanh', side: 'debit', value: 12, dueInDays: -18, bank: '0071000452100' },
+    { company: 'MP', party_type: 'customer', code: 'KH-002', party: 'Ban QLDA Quận 7', side: 'debit', value: 8, dueInDays: 12 },
+    { company: 'MP', party_type: 'supplier', code: 'NCC-001', party: 'Công ty VLXD Thành Trung', side: 'credit', value: 9.5, dueInDays: 4, bank: '12710000889901' },
+    { company: 'MP', party_type: 'employee', code: 'NV-001', party: 'Hoàng Văn Tuấn', side: 'credit', value: 1.2, dueInDays: 3 },
+    { company: 'AP', party_type: 'customer', code: 'KH-010', party: 'Siêu thị Miền Đông', side: 'debit', value: 5.5, dueInDays: -6 },
+    { company: 'AP', party_type: 'supplier', code: 'NCC-010', party: 'Nhà cung cấp Bao bì Hưng Thịnh', side: 'credit', value: 3.2, dueInDays: 9 },
+    { company: 'HH', party_type: 'supplier', code: 'NCC-020', party: 'Công ty Vệ sinh Công nghiệp', side: 'credit', value: 0.45, dueInDays: -41 },
   ],
   recurring: [
     { company: 'MP', title: 'Lương bộ phận thi công', amount: 1.4, cadence: 'monthly', day: 5 },
@@ -307,48 +308,53 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
   }
   stats.settings = settings.length;
 
-  /* loans */
-  const loanIds = new Map<string, string>();
-  for (const l of PLAN.loans) {
+  /* nợ ngân hàng */
+  const bankDebtIds = new Map<string, string>();
+  for (const l of PLAN.bank_debts) {
     const company = companyIds.get(l.company);
     if (!company) continue;
     const due = iso(l.dueInDays);
-    const doc = await Models.Loan.create({
+    const code = await nextSequentialCode('NHD');
+    const doc = await Models.BankDebt.create({
+      code,
       company_id: company,
       bank_name: l.bank,
-      contract_code: l.contract,
-      limit_minor: moneyMinor(l.limit),
-      outstanding_minor: moneyMinor(l.outstanding),
+      branch: l.branch,
+      principal_minor: moneyMinor(l.amount),
+      outstanding_minor: moneyMinor(l.amount),
+      amount: { minor: moneyMinor(l.amount), currency: 'VND', decimals: 0 },
       currency: 'VND',
-      disbursed_at: iso(l.dueInDays - 365),
+      interest_rate: l.rate,
       maturity_date: due,
       next_due_date: due,
-      interest_rate: l.rate,
-      interest_period: 'quarterly',
-      principal_period: 'bullet',
-      collateral: 'Dự án đang thi công + bảo lãnh giám đốc',
       status: 'active',
     } as never);
-    loanIds.set(l.contract, String(doc._id));
+    bankDebtIds.set(`${l.company}|${l.bank}`, String(doc._id));
   }
-  stats.loans = loanIds.size;
+  stats.bank_debts = bankDebtIds.size;
 
-  /* debt items */
+  /* phiếu công nợ */
   for (const d of PLAN.debts) {
     const company = companyIds.get(d.company);
     if (!company) continue;
-    await Models.DebtItem.create({
-      kind: d.kind,
+    const code = await nextSequentialCode('CN');
+    await Models.DebtVoucher.create({
+      code,
       company_id: company,
-      counterparty_name: d.party,
+      party_type: d.party_type,
+      party_code: d.code,
+      party_name: d.party,
+      party_bank_account: d.bank ?? null,
+      account_code: ACCOUNT_CODE_BY_PARTY[d.party_type],
+      side: d.side,
       value_minor: moneyMinor(d.value),
-      settled_minor: moneyMinor(d.settled),
+      value: { minor: moneyMinor(d.value), currency: 'VND', decimals: 0 },
+      currency: 'VND',
       due_date: iso(d.dueInDays),
       priority: d.dueInDays < 0 ? 'high' : 'normal',
-      status: d.settled >= d.value ? 'settled' : d.settled > 0 ? 'partial' : 'open',
     } as never);
   }
-  stats.debt_items = PLAN.debts.length;
+  stats.debt_vouchers = PLAN.debts.length;
 
   /* recurring rules */
   for (const r of PLAN.recurring) {
@@ -430,7 +436,7 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
       business_date: iso(d.plannedOffset),
       priority: d.amountTy >= 5 ? 'high' : 'normal',
       contract: { code: `HĐ/2026/${d.company}-${String(docCount + 7).padStart(2, '0')}` },
-      loan_id: kind === 'rollover' ? loanIds.get('HĐTD/2024/MP-01') ?? null : null,
+      loan_id: kind === 'rollover' ? bankDebtIds.get('MP|BIDV') ?? null : null,
       rollover: kind === 'rollover' ? { need_amount: { minor: moneyMinor(d.amountTy), currency: 'VND', decimals: 0 }, plan: 'Vay ngắn hạn kỳ mới, giữ nguyên tài sản bảo đảm', new_rate: '9,20' } : null,
       target: kind === 'internal' ? { company_id: companyIds.get('MP') ?? null, account_id: accountIds.get('0071000452100') ?? null } : null,
       approval: { matrix_id: null, matrix_version: matrix.matrix_version, matrix_label: matrix.label, steps },

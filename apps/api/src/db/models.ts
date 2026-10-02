@@ -90,6 +90,23 @@ const attachmentEmbed = new Schema(
   { _id: false },
 );
 
+/**
+ * Liên kết cấn trừ (công nợ) / trả nợ (khoản vay) — nguồn sự thật nằm trên phiếu
+ * công nợ / khoản vay. Số đã cấn trừ KHÔNG lưu; tính khi đọc từ `document.status`
+ * của các phiếu được liên kết (`paid`). Gỡ liên kết ⇒ tính lại ngay.
+ */
+const offsetLink = new Schema(
+  {
+    document_id: { type: Schema.Types.ObjectId, required: true },
+    /** phần số tiền của phiếu được phân bổ cấn trừ vào khoản này. */
+    amount_minor: { type: BigInt, required: true },
+    linked_at: { type: Date, default: () => new Date() },
+    linked_by: { type: Schema.Types.ObjectId, default: null },
+    note: { type: String, default: null },
+  },
+  { _id: true },
+);
+
 /* ------------------------------------------------------------------ *
  * Tổ chức & người dùng
  * ------------------------------------------------------------------ */
@@ -426,7 +443,11 @@ export const DocumentSchema = new Schema(
 
 export const AttachmentSchema = new Schema(
   {
-    document_id: { type: Schema.Types.ObjectId, required: true },
+    /** hồ sơ thu/chi — null khi chủ sở hữu là phiếu công nợ / khoản vay. */
+    document_id: { type: Schema.Types.ObjectId, default: null },
+    /** chủ sở hữu file: hồ sơ · phiếu công nợ · khoản vay ngân hàng. */
+    owner_type: { type: String, enum: ['document', 'debt', 'loan'], default: 'document' },
+    owner_id: { type: Schema.Types.ObjectId, default: null },
     company_id: { type: Schema.Types.ObjectId, required: true },
     attachment_id: { type: Schema.Types.ObjectId, required: true },
     type: String,
@@ -446,6 +467,7 @@ export const AttachmentSchema = new Schema(
 );
 AttachmentSchema.index({ document_id: 1, state: 1 });
 AttachmentSchema.index({ company_id: 1, state: 1, created_at: 1 });
+AttachmentSchema.index({ owner_type: 1, owner_id: 1, state: 1 });
 
 /* ------------------------------------------------------------------ *
  * Ngân hàng
@@ -554,71 +576,87 @@ CashEntrySchema.index({ dedupe_key: 1 }, { unique: true });
 CashEntrySchema.index({ account_id: 1, date: 1 });
 CashEntrySchema.index({ company_id: 1, date: 1 });
 
-export const LoanSchema = new Schema(
+/**
+ * Nợ Ngân hàng (thay `loans` cũ) — vẫn cấp dữ liệu cho bảng Đáo hạn (maturityLadder).
+ * Dư nợ = `principal_minor` − Σ(phiếu chi đã trả được gán) (tính khi đọc).
+ */
+export const BankDebtSchema = new Schema(
   {
+    code: { type: String, required: true, unique: true },
     company_id: { type: Schema.Types.ObjectId, required: true },
     bank_name: { type: String, required: true },
-    contract_code: { type: String, required: true },
-    limit_minor: { type: BigInt, default: 0n },
+    branch: { type: String, default: null },
+    /** Số tiền vay (gốc). */
+    principal_minor: { type: BigInt, required: true },
+    /** Dư nợ — cache để aggregate nhanh; giá trị chuẩn suy ra ở tầng đọc. */
     outstanding_minor: { type: BigInt, default: 0n },
+    amount: { minor: { type: BigInt, required: true }, currency: { type: String, default: 'VND' }, decimals: { type: Number, default: 0 } },
     currency: { type: String, default: 'VND' },
-    disbursed_at: { type: String, required: true },
+    interest_rate: { type: String, default: '0' },
+    /** Hạn thanh toán. */
     maturity_date: { type: String, required: true },
     next_due_date: { type: String, default: null },
-    interest_rate: { type: String, default: '0' },
-    interest_period: { type: String, default: 'end_of_term' },
-    principal_period: { type: String, default: 'bullet' },
-    collateral: { type: String, default: null },
-    manager_user_id: { type: Schema.Types.ObjectId, default: null },
-    status: { type: String, enum: ['active', 'renewed', 'settled', 'overdue', 'archived'], default: 'active' },
-    obligations: {
-      type: [
-        new Schema(
-          {
-            due_date: String,
-            kind: { type: String, enum: ['principal', 'interest', 'fee'], default: 'principal' },
-            amount_minor: BigInt,
-            paid_minor: { type: BigInt, default: 0n },
-            document_id: { type: Schema.Types.ObjectId, default: null },
-          },
-        ),
-      ],
-      default: [],
-    },
+    status: { type: String, enum: ['active', 'overdue', 'settled', 'archived'], default: 'active' },
+    attachments: { type: [attachmentEmbed], default: [] },
+    /** Phiếu chi được gán để đánh dấu đã trả nợ. */
+    repayment_links: { type: [offsetLink], default: [] },
+    history: { type: [historyEntry], default: [] },
     note: { type: String, default: null },
+    created_by: { type: Schema.Types.ObjectId, default: null },
     created_at: { type: Date, default: () => new Date() },
     updated_at: { type: Date, default: () => new Date() },
   },
-  { collection: 'loans', versionKey: false },
+  { collection: 'bank_debts', versionKey: false },
 );
-LoanSchema.index({ company_id: 1, next_due_date: 1 });
-LoanSchema.index({ company_id: 1, contract_code: 1 }, { unique: true });
+BankDebtSchema.index({ company_id: 1, maturity_date: 1 });
+BankDebtSchema.index({ company_id: 1, code: 1 }, { unique: true });
+BankDebtSchema.index({ 'repayment_links.document_id': 1 });
 
 /* ------------------------------------------------------------------ *
  * Công nợ · ngân sách · danh mục
  * ------------------------------------------------------------------ */
 
-export const DebtItemSchema = new Schema(
+/**
+ * Phiếu công nợ (thay `debt_items` cũ) — theo chuẩn kế toán VN:
+ *   KH = 131, NCC = 331, NV = 334; bút toán Nợ/Có chọn tự do (2 chiều).
+ * Số đã cấn trừ KHÔNG lưu: suy ra từ `document_links` khi phiếu thu/chi ở trạng thái `paid`.
+ */
+export const DebtVoucherSchema = new Schema(
   {
-    kind: { type: String, enum: ['receivable', 'payable'], required: true },
+    code: { type: String, required: true, unique: true },
     company_id: { type: Schema.Types.ObjectId, required: true },
-    counterparty_name: { type: String, required: true },
-    counterparty_tax_code: { type: String, default: null },
-    contract_code: { type: String, default: null },
-    value_minor: { type: BigInt, default: 0n },
-    settled_minor: { type: BigInt, default: 0n },
+    party_type: { type: String, enum: ['customer', 'supplier', 'employee'], required: true },
+    /** mã khách hàng / nhà cung cấp / nhân viên. */
+    party_code: { type: String, required: true },
+    /** tên công ty / đối tượng. */
+    party_name: { type: String, required: true },
+    party_tax_code: { type: String, default: null },
+    /** STK của công ty đối tác. */
+    party_bank_account: { type: String, default: null },
+    /** mã tài khoản kế toán — suy ra từ `party_type`. */
+    account_code: { type: String, enum: ['131', '331', '334'], required: true },
+    /** Nợ (debit) / Có (credit). */
+    side: { type: String, enum: ['debit', 'credit'], required: true },
+    value_minor: { type: BigInt, required: true },
+    value: { minor: { type: BigInt, required: true }, currency: { type: String, default: 'VND' }, decimals: { type: Number, default: 0 } },
     currency: { type: String, default: 'VND' },
+    contract_code: { type: String, default: null },
     due_date: { type: String, required: true },
     priority: { type: String, enum: ['low', 'normal', 'high', 'urgent'], default: 'normal' },
-    document_ids: { type: [Schema.Types.ObjectId], default: [] },
-    status: { type: String, enum: ['open', 'partial', 'settled'], default: 'open' },
     note: { type: String, default: null },
+    attachments: { type: [attachmentEmbed], default: [] },
+    /** Phiếu thu/chi liên kết để cấn trừ khoản công nợ này. */
+    document_links: { type: [offsetLink], default: [] },
+    history: { type: [historyEntry], default: [] },
+    created_by: { type: Schema.Types.ObjectId, default: null },
     created_at: { type: Date, default: () => new Date() },
     updated_at: { type: Date, default: () => new Date() },
   },
-  { collection: 'debt_items', versionKey: false },
+  { collection: 'debt_vouchers', versionKey: false },
 );
-DebtItemSchema.index({ company_id: 1, kind: 1, due_date: 1 });
+DebtVoucherSchema.index({ company_id: 1, party_type: 1, side: 1, due_date: 1 });
+DebtVoucherSchema.index({ company_id: 1, party_code: 1 });
+DebtVoucherSchema.index({ 'document_links.document_id': 1 });
 
 export const BudgetSchema = new Schema(
   {
@@ -862,8 +900,8 @@ export const Models = {
   BalanceDaily: model('BalanceDaily', BalanceDailySchema),
   CashEntry: model('CashEntry', CashEntrySchema),
   BankTransaction: model('BankTransaction', BankTransactionSchema),
-  Loan: model('Loan', LoanSchema),
-  DebtItem: model('DebtItem', DebtItemSchema),
+  BankDebt: model('BankDebt', BankDebtSchema),
+  DebtVoucher: model('DebtVoucher', DebtVoucherSchema),
   Budget: model('Budget', BudgetSchema),
   BudgetLine: model('BudgetLine', BudgetLineSchema),
   Category: model('Category', CategorySchema),

@@ -95,64 +95,51 @@ export const statementImportBody = z.object({
  * Vay ngân hàng (§IX) + đảo hạn (§X, §XI)
  * ------------------------------------------------------------------ */
 
-export const loanStatus = z.enum(['active', 'renewed', 'settled', 'overdue', 'archived']);
-export const interestPeriod = z.enum(['end_of_term', 'monthly', 'quarterly', 'semi_annual', 'annual']);
-export const principalPeriod = z.enum(['bullet', 'monthly', 'quarterly', 'semi_annual', 'annual', 'custom']);
+/* ------------------------------------------------------------------ *
+ * Nợ Ngân hàng (§IX) — thay module "Khoản vay" cũ nhưng vẫn cấp dữ liệu Đáo hạn.
+ * ------------------------------------------------------------------ */
 
-export const loanUpsertBody = z.object({
-  company_id: objectId,
+export const bankDebtStatus = z.enum(['active', 'overdue', 'settled', 'archived']);
+
+export const bankDebtUpsertBody = z.object({
+  company_id: objectId.optional().describe('Mặc định theo phiên làm việc'),
   bank_name: z.string().min(2).max(120),
-  contract_code: z.string().min(2).max(80),
-  limit: moneyField,
-  outstanding: moneyField,
+  branch: z.string().max(160).optional(),
+  /** Số tiền vay. */
+  amount: moneyField,
+  interest_rate: z.string().regex(/^\d+([.,]\d{1,2})?$/, 'Lãi suất tối đa 2 chữ số thập phân').default('0'),
+  maturity_date: businessDate.describe('Hạn thanh toán'),
   currency: z.string().length(3).default('VND'),
-  disbursed_at: businessDate,
-  maturity_date: businessDate,
-  next_due_date: businessDate.optional(),
-  interest_rate: z.string().regex(/^\d+(\.\d{1,2})?$/, 'Lãi suất tối đa 2 chữ số thập phân'),
-  interest_period: interestPeriod.default('end_of_term'),
-  principal_period: principalPeriod.default('bullet'),
-  collateral: z.string().max(1000).optional(),
-  manager_user_id: objectId.nullable().optional(),
-  status: loanStatus.default('active'),
   note: z.string().max(1000).optional(),
 });
 
-export const loanRow = z.object({
+export const bankDebtRow = z.object({
   _id: objectId,
   company_id: objectId,
   company_name: z.string(),
+  code: z.string(),
   bank_name: z.string(),
-  contract_code: z.string(),
-  limit: moneyWire,
+  branch: z.string().nullable(),
+  principal: moneyWire,
   outstanding: moneyWire,
+  repaid: moneyWire,
   currency: z.string(),
-  disbursed_at: businessDate,
+  interest_rate: z.string(),
   maturity_date: businessDate,
   next_due_date: businessDate.nullable(),
   days_to_due: z.number().int(),
-  interest_rate: z.string(),
-  interest_period: interestPeriod,
-  principal_period: principalPeriod,
-  collateral: z.string().nullable(),
-  manager_name: z.string().nullable(),
-  status: loanStatus,
-  /** phương án đảo hạn đang mở cho khoản vay này. */
-  rollover_status: z.string().nullable(),
+  status: bankDebtStatus,
+  attachment_count: z.number().int(),
+  repayment_count: z.number().int(),
   updated_at: z.string(),
 });
 
-export const obligationRow = z.object({
-  loan_id: objectId,
-  contract_code: z.string(),
-  bank_name: z.string(),
-  company_name: z.string(),
-  due_date: businessDate,
-  kind: z.enum(['principal', 'interest', 'fee']),
-  amount: moneyWire,
-  paid: moneyWire,
-  remaining: moneyWire,
-  status: z.enum(['due', 'paid', 'overdue', 'upcoming']),
+/** Gán một phiếu chi vào khoản nợ ngân hàng để đánh dấu đã trả nợ. */
+export const bankDebtRepayBody = z.object({
+  document_id: objectId,
+  /** phần số tiền phân bổ; bỏ trống = lấy số thực chi của phiếu. */
+  amount_minor: z.string().regex(/^\d+$/).optional(),
+  note: z.string().max(500).optional(),
 });
 
 export const rolloverListQuery = z.object({
@@ -199,45 +186,86 @@ export const rolloverResultBody = z.object({
 });
 
 /* ------------------------------------------------------------------ *
- * Công nợ (§XVI)
+ * Công nợ (§XVI) — phiếu công nợ theo chuẩn kế toán VN
  * ------------------------------------------------------------------ */
 
-export const debtKind = z.enum(['receivable', 'payable']);
+export type DebtPartyType = 'customer' | 'supplier' | 'employee';
+export type DebtSide = 'debit' | 'credit';
+export type DebtAccountCode = '131' | '331' | '334';
 
-export const debtUpsertBody = z.object({
-  kind: debtKind,
-  company_id: objectId,
-  counterparty_name: z.string().min(2).max(200),
-  counterparty_tax_code: z.string().max(20).optional(),
-  contract_code: z.string().max(80).optional(),
-  contract_value: moneyField,
-  received_or_paid: moneyField.optional(),
+export const DEBT_PARTY_TYPES = ['customer', 'supplier', 'employee'] as const;
+export const DEBT_SIDES = ['debit', 'credit'] as const;
+export const DEBT_ACCOUNT_CODES = ['131', '331', '334'] as const;
+
+export const debtPartyType = z.enum(lit(DEBT_PARTY_TYPES));
+export const debtSide = z.enum(lit(DEBT_SIDES));
+export const debtAccountCode = z.enum(lit(DEBT_ACCOUNT_CODES));
+
+export const DEBT_PARTY_LABEL: Record<DebtPartyType, string> = {
+  customer: 'Khách hàng',
+  supplier: 'Nhà cung cấp',
+  employee: 'Nhân viên',
+};
+
+/** Mã tài khoản kế toán theo loại đối tượng: KH=131, NCC=331, NV=334. */
+export const ACCOUNT_CODE_BY_PARTY: Record<DebtPartyType, DebtAccountCode> = {
+  customer: '131',
+  supplier: '331',
+  employee: '334',
+};
+
+/** Nhãn bút toán: Nợ / Có (chuẩn VAS). */
+export const DEBT_SIDE_LABEL: Record<DebtSide, string> = { debit: 'Nợ', credit: 'Có' };
+
+export const debtVoucherUpsertBody = z.object({
+  company_id: objectId.optional().describe('Mặc định theo phiên làm việc'),
+  party_type: debtPartyType,
+  /** Mã khách hàng / nhà cung cấp / nhân viên. */
+  party_code: z.string().min(1).max(60),
+  /** Tên công ty / đối tượng. */
+  party_name: z.string().min(2).max(200),
+  party_tax_code: z.string().max(20).optional(),
+  /** STK của công ty đối tác. */
+  party_bank_account: z.string().max(40).optional(),
+  /** Nợ / Có. */
+  side: debtSide,
+  value: moneyField,
   due_date: businessDate,
+  contract_code: z.string().max(80).optional(),
   priority: priority.default('normal'),
   note: z.string().max(1000).optional(),
 });
 
-export const debtRow = z.object({
+export const debtVoucherRow = z.object({
   _id: objectId,
-  kind: debtKind,
   company_id: objectId,
   company_name: z.string(),
-  counterparty_name: z.string(),
-  contract_code: z.string().nullable(),
+  code: z.string(),
+  party_type: debtPartyType,
+  party_code: z.string(),
+  party_name: z.string(),
+  party_tax_code: z.string().nullable(),
+  party_bank_account: z.string().nullable(),
+  account_code: debtAccountCode,
+  side: debtSide,
   value: moneyWire,
-  settled: moneyWire,
+  settled: moneyWire.describe('Đã cấn trừ (từ phiếu thu/chi đã thực thi)'),
   remaining: moneyWire,
+  currency: z.string(),
+  contract_code: z.string().nullable(),
   due_date: businessDate,
   days_overdue: z.number().int(),
   aging_bucket: z.enum(['none', 'lt30', 'd30_60', 'd60_90', 'gt90']),
   priority,
-  progress_percent: z.number().min(0).max(100),
-  open_document_id: objectId.nullable(),
+  status: z.enum(['open', 'partial', 'settled']),
+  attachment_count: z.number().int(),
+  link_count: z.number().int(),
   updated_at: z.string(),
 });
 
 export const debtListQuery = z.object({
-  kind: debtKind.optional(),
+  party_type: debtPartyType.optional(),
+  side: debtSide.optional(),
   company_id: objectId.optional(),
   scope: z.string().max(64).optional(),
   bucket: z.enum(['none', 'lt30', 'd30_60', 'd60_90', 'gt90']).optional(),
@@ -249,8 +277,16 @@ export const debtListQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
 });
 
+/** Liên kết một phiếu thu/chi để cấn trừ khoản công nợ. */
+export const debtLinkBody = z.object({
+  document_id: objectId,
+  /** phần số tiền phân bổ; bỏ trống = lấy số tiền của phiếu. */
+  amount_minor: z.string().regex(/^\d+$/).optional(),
+  note: z.string().max(500).optional(),
+});
+
 export const agingMatrix = z.object({
-  kind: debtKind,
+  party_type: debtPartyType,
   columns: z.array(z.object({ bucket: z.string(), label: z.string() })),
   rows: z
     .array(

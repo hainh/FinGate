@@ -137,16 +137,24 @@ async function awaitingSum(scope: ScopeLike, userId: string) {
 }
 
 async function overdueReceivable(scope: ScopeLike): Promise<bigint> {
-  const items = await Models.DebtItem.find({
-    kind: 'receivable',
-    status: { $ne: 'settled' },
+  const items = await Models.DebtVoucher.find({
+    side: 'debit',
     due_date: { $lt: today() },
     ...(scope.companyIds === null ? {} : { company_id: { $in: scope.companyIds as never } }),
   })
-    .select({ value_minor: 1, settled_minor: 1 })
+    .select({ value_minor: 1, document_links: 1 })
     .limit(500)
     .lean();
-  return items.reduce((a, d) => a + asBigInt(d.value_minor) - asBigInt(d.settled_minor), 0n);
+  const { fetchLinkedDocs, settledFromLinks, linkDocumentIds } = await import('../debt/index.ts');
+  const docMap = await fetchLinkedDocs(
+    items.flatMap((d) => linkDocumentIds((d as Record<string, unknown>).document_links)),
+  );
+  let total = 0n;
+  for (const d of items) {
+    const remaining = asBigInt((d as { value_minor?: unknown }).value_minor) - settledFromLinks((d as Record<string, unknown>).document_links, docMap);
+    if (remaining > 0n) total += remaining;
+  }
+  return total;
 }
 
 async function countMissingEvidence(scope: ScopeLike): Promise<number> {

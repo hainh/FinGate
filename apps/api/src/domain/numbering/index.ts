@@ -8,6 +8,11 @@ import { Models } from '../../db/models.ts';
 
 export async function nextDocumentCode(kind: DocKind, at: Date = new Date()): Promise<string> {
   const prefix = DOC_CODE_PREFIX[kind] ?? 'FG';
+  return nextSequentialCode(prefix, at);
+}
+
+/** Mã tuần tự dùng chung cho phiếu công nợ (`CN`), khoản vay ngân hàng (`NHD`)… */
+export async function nextSequentialCode(prefix: string, at: Date = new Date()): Promise<string> {
   const year = at.getUTCFullYear();
   const key = `${prefix}-${year}`;
   const doc = await Models.Counter.findOneAndUpdate(

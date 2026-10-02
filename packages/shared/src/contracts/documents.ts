@@ -480,6 +480,24 @@ export const attachmentConfirmBody = z.object({
   request_id: uuid,
 });
 
+/** Chứng từ của phiếu công nợ / khoản vay ngân hàng (không có version/CAS theo hồ sơ). */
+export const ownerAttachmentPrepareBody = z.object({
+  filename: z.string().min(1).max(255),
+  /** R2 cho phép tới 100 MB; driver fs bị chặn 25 MB ở tầng server. */
+  size: z.number().int().min(1).max(100 * 1024 * 1024),
+  mime: z.string().max(120),
+  sha256: z.string().length(64),
+  type: z.string().max(40).default('other'),
+});
+
+export const ownerAttachmentConfirmBody = z.object({
+  attachment_id: objectId,
+});
+
+export const ownerAttachmentRemoveBody = z.object({
+  reason: z.string().trim().max(500).optional(),
+});
+
 /** POST /documents/{id}/attachments/{attachmentId}/remove — chỉ khi chưa bị tham chiếu (§7.9). */
 export const attachmentRemoveBody = z.object({
   if_match: docVersion,

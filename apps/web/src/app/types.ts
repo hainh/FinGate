@@ -505,46 +505,111 @@ export interface BankAccountTransactions {
   items: BankTransactionRow[];
 }
 
-export interface LoanRow {
+export interface BankDebtRow {
   _id: string;
   company_id: string;
   company_name: string;
+  code: string;
   bank_name: string;
-  contract_code: string;
-  limit: MoneyWire;
+  branch: string | null;
+  principal: MoneyWire;
   outstanding: MoneyWire;
+  repaid: MoneyWire;
   currency: string;
-  disbursed_at: string;
+  interest_rate: string;
   maturity_date: string;
   next_due_date: string | null;
   days_to_due: number;
-  interest_rate: string;
-  interest_period: string;
-  principal_period: string;
-  collateral: string | null;
-  manager_name: string | null;
   status: string;
-  rollover_status: string | null;
-  updated_at: string;
+  attachment_count: number;
+  repayment_count: number;
+  updated_at: string | null;
 }
 
-export interface DebtRowWire {
+export interface BankDebtDetail extends BankDebtRow {
+  note: string | null;
+  attachments: OwnerAttachment[];
+  repayment_links: {
+    _id: string;
+    document_id: string;
+    document_code: string;
+    document_title: string;
+    document_status: string;
+    amount: MoneyWire;
+    linked_at: string | null;
+    note: string | null;
+  }[];
+  history: Record<string, unknown>[];
+}
+
+export type DebtPartyType = 'customer' | 'supplier' | 'employee';
+export type DebtSide = 'debit' | 'credit';
+
+export interface DebtVoucherRow {
   _id: string;
-  kind: 'receivable' | 'payable';
   company_id: string;
   company_name: string;
-  counterparty_name: string;
-  contract_code: string | null;
+  code: string;
+  party_type: DebtPartyType;
+  party_code: string;
+  party_name: string;
+  party_tax_code: string | null;
+  party_bank_account: string | null;
+  account_code: string;
+  side: DebtSide;
   value: MoneyWire;
   settled: MoneyWire;
   remaining: MoneyWire;
+  currency: string;
+  contract_code: string | null;
   due_date: string;
   days_overdue: number;
   aging_bucket: string;
   priority: string;
-  progress_percent: number;
-  open_document_id: string | null;
-  updated_at: string;
+  status: 'open' | 'partial' | 'settled';
+  attachment_count: number;
+  link_count: number;
+  updated_at: string | null;
+}
+
+export interface DebtVoucherDetail extends DebtVoucherRow {
+  note: string | null;
+  attachments: OwnerAttachment[];
+  document_links: {
+    _id: string;
+    document_id: string;
+    document_code: string;
+    document_title: string;
+    document_kind: string;
+    document_status: string;
+    amount: MoneyWire;
+    linked_at: string | null;
+    note: string | null;
+  }[];
+  history: Record<string, unknown>[];
+}
+
+export interface LinkCandidate {
+  _id: string;
+  code: string;
+  title: string;
+  kind?: string;
+  status: string;
+  amount: MoneyWire;
+  already_linked: boolean;
+}
+
+export interface OwnerAttachment {
+  id: string;
+  type: string;
+  version: number;
+  filename: string;
+  size: number;
+  mime: string;
+  added_at: string | null;
+  added_by: string | null;
+  download_href: string;
+  referenced: boolean;
 }
 
 export interface MatrixEntry {

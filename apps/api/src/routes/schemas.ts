@@ -13,6 +13,9 @@ import {
   attachmentConfirmBody,
   attachmentPrepareBody,
   attachmentRemoveBody,
+  ownerAttachmentConfirmBody,
+  ownerAttachmentPrepareBody,
+  ownerAttachmentRemoveBody,
   bankAccountUpdateBody,
   bankAccountUpsertBody,
   budgetUpsertBody,
@@ -21,7 +24,10 @@ import {
   cashflowHistoryQuery,
   companyUpsertBody,
   debtListQuery,
-  debtUpsertBody,
+  debtLinkBody,
+  debtVoucherUpsertBody,
+  bankDebtRepayBody,
+  bankDebtUpsertBody,
   delegationBody,
   documentCreateBody,
   documentDeleteBody,
@@ -30,7 +36,6 @@ import {
   exportRequestBody,
   forgotPasswordBody,
   internalTransferBody,
-  loanUpsertBody,
   loginBody,
   matrixUpsertBody,
   notificationListQuery,
@@ -80,6 +85,9 @@ export const opinionBodySchema = j(opinionBody);
 export const attachmentPrepareBodySchema = j(attachmentPrepareBody);
 export const attachmentConfirmBodySchema = j(attachmentConfirmBody);
 export const attachmentRemoveBodySchema = j(attachmentRemoveBody);
+export const ownerAttachmentPrepareBodySchema = j(ownerAttachmentPrepareBody);
+export const ownerAttachmentConfirmBodySchema = j(ownerAttachmentConfirmBody);
+export const ownerAttachmentRemoveBodySchema = j(ownerAttachmentRemoveBody);
 
 // matrix & admin
 export const matrixUpsertBodySchema = j(matrixUpsertBody);
@@ -103,10 +111,12 @@ export const delegationBodySchema = j(delegationBody);
 export const bankAccountUpsertBodySchema = j(bankAccountUpsertBody);
 export const bankAccountUpdateBodySchema = j(bankAccountUpdateBody);
 export const statementImportBodySchema = j(statementImportBody);
-export const loanUpsertBodySchema = j(loanUpsertBody);
+export const bankDebtUpsertBodySchema = j(bankDebtUpsertBody);
+export const bankDebtRepayBodySchema = j(bankDebtRepayBody);
 export const rolloverListQuerySchema = j(rolloverListQuery);
 export const rolloverResultBodySchema = j(rolloverResultBody);
-export const debtUpsertBodySchema = j(debtUpsertBody);
+export const debtVoucherUpsertBodySchema = j(debtVoucherUpsertBody);
+export const debtLinkBodySchema = j(debtLinkBody);
 export const debtListQuerySchema = j(debtListQuery);
 export const internalTransferBodySchema = j(internalTransferBody);
 export const budgetUpsertBodySchema = j(budgetUpsertBody);

@@ -302,8 +302,8 @@ export function dashboardRoutes(app: FastifyInstance): void {
         const rx = { $regex: q.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
         const [docs, loans, debts] = await Promise.all([
           scopedFind<Record<string, unknown>>(Models.Document, scope, { $or: [{ code: rx }, { title: rx }, { 'payee.name': rx }] }, { limit: q.limit, sort: { updated_at: -1 } } as never).catch(() => []),
-          scopedFind<Record<string, unknown>>(Models.Loan, scope, { $or: [{ contract_code: rx }, { bank_name: rx }] }, { limit: 10 } as never).catch(() => []),
-          scopedFind<Record<string, unknown>>(Models.DebtItem, scope, { counterparty_name: rx }, { limit: 10 } as never).catch(() => []),
+          scopedFind<Record<string, unknown>>(Models.BankDebt, scope, { $or: [{ code: rx }, { bank_name: rx }] }, { limit: 10 } as never).catch(() => []),
+          scopedFind<Record<string, unknown>>(Models.DebtVoucher, scope, { $or: [{ party_name: rx }, { party_code: rx }] }, { limit: 10 } as never).catch(() => []),
         ]);
         const hits = [
           ...docs.map((d) => ({
@@ -318,20 +318,20 @@ export function dashboardRoutes(app: FastifyInstance): void {
           ...loans.map((l) => ({
             type: 'loan' as const,
             id: String(l._id),
-            code: String(l.contract_code ?? ''),
-            title: `${l.bank_name} · ${l.contract_code}`,
-            subtitle: 'Khoản vay',
-            amount: wire(asBigInt(l.outstanding_minor)),
+            code: String(l.code ?? ''),
+            title: `${l.bank_name} · ${l.code}`,
+            subtitle: 'Nợ ngân hàng',
+            amount: wire(asBigInt(l.principal_minor)),
             href: `/ngan-hang/khoan-vay/${String(l._id)}`,
           })),
           ...debts.map((d) => ({
             type: 'counterparty' as const,
             id: String(d._id),
             code: null,
-            title: String(d.counterparty_name ?? ''),
-            subtitle: d.kind === 'receivable' ? 'Phải thu' : 'Phải trả',
-            amount: wire(asBigInt(d.value_minor) - asBigInt(d.settled_minor)),
-            href: d.kind === 'receivable' ? '/cong-no/phai-thu' : '/cong-no/phai-tra',
+            title: String(d.party_name ?? ''),
+            subtitle: d.side === 'debit' ? 'Ghi Nợ' : 'Ghi Có',
+            amount: wire(asBigInt(d.value_minor)),
+            href: d.side === 'debit' ? '/cong-no/phai-thu' : '/cong-no/phai-tra',
           })),
         ];
         return ok(reply, { data: { query: q.q, hits, hidden_by_permission: 0 } }, { maxAge: 0 });

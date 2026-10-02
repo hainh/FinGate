@@ -818,21 +818,27 @@ export function documentRoutes(app: FastifyInstance): void {
     defineRoute({
       method: 'GET',
       url: '/attachments/:id',
-      config: { perms: ['doc:read'] as Permission[], screen: 'DOC-01', summary: 'Tải chứng từ' },
+      config: { perms: [], permsAny: ['doc:read', 'debt:read', 'loan:read'] as Permission[], screen: 'DOC-01', summary: 'Tải chứng từ' },
       handler: async (req, reply: FastifyReply) => {
         const actor = requireActor(req);
         const params = req.params as { id: string };
-        const att = await Models.Attachment.findOne({ attachment_id: params.id, state: 'confirmed' }).lean();
+        const att = await Models.Attachment.findOne({ attachment_id: params.id, state: 'confirmed' } as never).lean<
+          { _id: unknown; owner_type?: string; owner_id?: unknown; document_id?: unknown; attachment_id: unknown; company_id: unknown; key: unknown; filename?: unknown; mime?: unknown } | null
+        >();
         if (!att) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy chứng từ' });
         await assertVisible(req, String(att.company_id));
         // Chỉ TẢI VỀ đích danh mới tính là "tham chiếu" và khoá xoá (DS §7.9);
         // xem trước inline (thumbnail/lightbox) không khoá file.
         const isDownload = String((req.query as { download?: unknown }).download ?? '') === '1';
         if (isDownload) {
-          void Models.Document.updateOne(
-            { _id: att.document_id, 'attachments.id': att.attachment_id },
-            { $addToSet: { 'attachments.$.referenced_by': actor.user_id } },
-          ).exec();
+          const ownerType = String(att.owner_type ?? 'document');
+          const model = ownerType === 'debt' ? Models.DebtVoucher : ownerType === 'loan' ? Models.BankDebt : Models.Document;
+          void (model as unknown as { updateOne: (f: unknown, u: unknown) => { exec: () => Promise<unknown> } })
+            .updateOne(
+              { _id: att.owner_id ?? att.document_id, 'attachments.id': att.attachment_id },
+              { $addToSet: { 'attachments.$.referenced_by': actor.user_id } },
+            )
+            .exec();
         }
         const adapter = storage();
         const disposition = isDownload ? `attachment; filename="${encodeURIComponent(String(att.filename ?? 'file'))}"` : 'inline';

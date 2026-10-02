@@ -13,17 +13,21 @@ import type {
   ApprovalThresholdResult,
   BankAccountDetail,
   BankAccountRow,
+  BankDebtDetail,
+  BankDebtRow,
   CashflowHistoryResult,
   DashboardOverview,
   DecisionPack,
-  DebtRowWire,
+  DebtVoucherDetail,
+  DebtVoucherRow,
   DocumentDetail,
+  LinkCandidate,
   ListResult,
-  LoanRow,
   MatrixEntry,
   NeedsAttentionGroup,
   Newsletter,
   NotificationRow,
+  OwnerAttachment,
   PersonnelRow,
   QueueRow,
   ReportPresetMeta,
@@ -186,14 +190,6 @@ export function useBankAccountTransactions(id: string | undefined) {
   });
 }
 
-export function useLoans() {
-  const { scope } = useAuth();
-  return useQuery({
-    queryKey: ['loans', scope],
-    queryFn: () => apiCall<{ items: LoanRow[] }>('/loans', { query: { scope } }),
-  });
-}
-
 export function useRollovers(bucket?: string) {
   const { scope } = useAuth();
   return useQuery({
@@ -209,13 +205,124 @@ export function useRollovers(bucket?: string) {
   });
 }
 
-export function useDebts(kind: 'receivable' | 'payable', extra?: Record<string, string | undefined>) {
+export function useBankDebts(status?: string) {
   const { scope } = useAuth();
   return useQuery({
-    queryKey: ['debts', scope, kind, extra],
-    queryFn: () => apiCall<ListResult<DebtRowWire>>('/debts', { query: { scope, kind, ...extra } }),
+    queryKey: ['bank-debts', scope, status],
+    queryFn: () => apiCall<{ items: BankDebtRow[] }>('/bank-debts', { query: { scope, status } }),
   });
 }
+
+export function useBankDebt(id: string | undefined) {
+  const { scope } = useAuth();
+  return useQuery({
+    queryKey: ['bank-debt', scope, id],
+    enabled: !!id,
+    queryFn: () => apiData<BankDebtDetail>(`/bank-debts/${id}`),
+  });
+}
+
+export function useBankDebtCandidates(id: string | undefined, q?: string) {
+  return useQuery({
+    queryKey: ['bank-debt-candidates', id, q],
+    enabled: !!id,
+    queryFn: () => apiCall<{ items: LinkCandidate[] }>(`/bank-debts/${id}/repayment-candidates`, { query: { q } }),
+  });
+}
+
+export function useCreateBankDebt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => apiData<{ _id: string; code: string }>('/bank-debts', { method: 'POST', body }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['bank-debts'] }),
+  });
+}
+
+export function useRepayBankDebt(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { document_id: string; amount_minor?: string; note?: string }) =>
+      apiData(`/bank-debts/${id}/repayments`, { method: 'POST', body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bank-debt', id] });
+      qc.invalidateQueries({ queryKey: ['bank-debts'] });
+      qc.invalidateQueries({ queryKey: ['bank-debt-candidates', id] });
+      qc.invalidateQueries({ queryKey: ['rollovers'] });
+      qc.invalidateQueries({ queryKey: ['overview'] });
+    },
+  });
+}
+
+export function useUnrepayBankDebt(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (linkId: string) => apiData(`/bank-debts/${id}/repayments/${linkId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bank-debt', id] });
+      qc.invalidateQueries({ queryKey: ['bank-debts'] });
+      qc.invalidateQueries({ queryKey: ['rollovers'] });
+    },
+  });
+}
+
+export function useDebtVouchers(filter?: Record<string, string | undefined>) {
+  const { scope } = useAuth();
+  return useQuery({
+    queryKey: ['debt-vouchers', scope, filter],
+    queryFn: () => apiCall<ListResult<DebtVoucherRow>>('/debts', { query: { scope, ...filter } }),
+  });
+}
+
+export function useDebtVoucher(id: string | undefined) {
+  const { scope } = useAuth();
+  return useQuery({
+    queryKey: ['debt-voucher', scope, id],
+    enabled: !!id,
+    queryFn: () => apiData<DebtVoucherDetail>(`/debts/${id}`),
+  });
+}
+
+export function useDebtCandidates(id: string | undefined, q?: string) {
+  return useQuery({
+    queryKey: ['debt-candidates', id, q],
+    enabled: !!id,
+    queryFn: () => apiCall<{ items: LinkCandidate[] }>(`/debts/${id}/link-candidates`, { query: { q } }),
+  });
+}
+
+export function useCreateDebtVoucher() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => apiData<{ _id: string; code: string }>('/debts', { method: 'POST', body }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['debt-vouchers'] }),
+  });
+}
+
+export function useLinkDebt(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { document_id: string; amount_minor?: string; note?: string }) => apiData(`/debts/${id}/links`, { method: 'POST', body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['debt-voucher', id] });
+      qc.invalidateQueries({ queryKey: ['debt-vouchers'] });
+      qc.invalidateQueries({ queryKey: ['debt-candidates', id] });
+    },
+  });
+}
+
+export function useUnlinkDebt(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (linkId: string) => apiData(`/debts/${id}/links/${linkId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['debt-voucher', id] });
+      qc.invalidateQueries({ queryKey: ['debt-vouchers'] });
+      qc.invalidateQueries({ queryKey: ['debt-candidates', id] });
+    },
+  });
+}
+
+export type { OwnerAttachment };
 
 export function useCashflowHistory(period: string, group: string) {
   const { scope } = useAuth();

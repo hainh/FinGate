@@ -24,7 +24,9 @@ import { DocumentDetailScreen } from './screens/document-detail.tsx';
 import { BankAccountsScreen } from './screens/bank.tsx';
 import { BankAccountHistoryScreen } from './screens/bank-history.tsx';
 import { BankAccountFormScreen } from './screens/bank-account-form.tsx';
-import { DebtsScreen, LoansScreen, RolloversScreen } from './screens/loans.tsx';
+import { RolloversScreen } from './screens/loans.tsx';
+import { DebtListScreen, DebtVoucherFormScreen, DebtDetailScreen } from './screens/debt.tsx';
+import { BankDebtListScreen, BankDebtFormScreen, BankDebtDetailScreen } from './screens/bank-debt.tsx';
 import { CashflowHistoryScreen } from './screens/cashflow.tsx';
 import { ReportLibraryScreen, ReportRunnerScreen } from './screens/reports.tsx';
 import { PersonnelScreen, MatrixScreen, ApprovalThresholdScreen, AuditLogScreen, SettingsScreen, CompaniesScreen } from './screens/admin.tsx';
@@ -149,15 +151,20 @@ export function AppRoutes(): ReactNode {
       <Route path="/ngan-hang/taikhoan/moi" element={<Shell><BankAccountFormScreen /></Shell>} /> {/* BANK-02 */}
       <Route path="/ngan-hang/taikhoan/:id" element={<Shell><BankAccountHistoryScreen /></Shell>} /> {/* BANK-05 — lịch sử giao dịch */}
       <Route path="/ngan-hang/taikhoan/:id/sua" element={<Shell><BankAccountFormScreen /></Shell>} />
-      <Route path="/ngan-hang/khoan-vay" element={<Shell><LoansScreen /></Shell>} /> {/* LOAN-01 */}
+      <Route path="/ngan-hang/khoan-vay" element={<Shell><BankDebtListScreen /></Shell>} /> {/* LOAN-01 */}
+      <Route path="/ngan-hang/khoan-vay/moi" element={<Shell><BankDebtFormScreen /></Shell>} /> {/* LOAN-03 */}
+      <Route path="/ngan-hang/khoan-vay/:id" element={<Shell><BankDebtDetailScreen /></Shell>} /> {/* LOAN-02 */}
       <Route path="/ngan-hang/dao-han" element={<Shell><RolloversScreen /></Shell>} /> {/* RENEW-01 */}
       <Route path="/ngan-hang/dao-han/phuong-an/moi" element={<Shell><DocumentFormScreen kind="rollover" /></Shell>} /> {/* RENEW-02 */}
       <Route path="/ngan-hang/dao-han/phuong-an/:id/sua" element={<Shell><DocumentFormScreen kind="rollover" /></Shell>} />
       <Route path="/ngan-hang/chuyen-noi-bo" element={<Shell><InternalListScreen /></Shell>} /> {/* BANK-07 */}
       <Route path="/ngan-hang/chuyen-noi-bo/moi" element={<Shell><DocumentFormScreen kind="internal" /></Shell>} /> {/* BANK-08 */}
       <Route path="/ngan-hang/chuyen-noi-bo/:id/sua" element={<Shell><DocumentFormScreen kind="internal" /></Shell>} />
-      <Route path="/cong-no/phai-thu" element={<Shell><DebtsScreen kind="receivable" title="Công nợ phải thu" /></Shell>} /> {/* DEBT-01 */}
-      <Route path="/cong-no/phai-tra" element={<Shell><DebtsScreen kind="payable" title="Công nợ phải trả" /></Shell>} /> {/* DEBT-03 */}
+      <Route path="/cong-no/phai-thu" element={<Shell><DebtListScreen side="debit" title="Công nợ ghi Nợ (phải thu)" /></Shell>} /> {/* DEBT-01 */}
+      <Route path="/cong-no/phai-thu/moi" element={<Shell><DebtVoucherFormScreen side="debit" /></Shell>} />
+      <Route path="/cong-no/phai-tra" element={<Shell><DebtListScreen side="credit" title="Công nợ ghi Có (phải trả)" /></Shell>} /> {/* DEBT-03 */}
+      <Route path="/cong-no/phai-tra/moi" element={<Shell><DebtVoucherFormScreen side="credit" /></Shell>} />
+      <Route path="/cong-no/phieu/:id" element={<Shell><DebtDetailScreen /></Shell>} /> {/* DEBT-02/04 */}
       <Route path="/dong-tien" element={<Shell><CashflowHistoryScreen /></Shell>} /> {/* CASH-01 */}
       <Route path="/baocao" element={<Shell><ReportLibraryScreen /></Shell>} /> {/* RPT-00 */}
       <Route path="/baocao/:preset" element={<Shell><ReportRunnerScreen /></Shell>} /> {/* RPT-01→13 */}

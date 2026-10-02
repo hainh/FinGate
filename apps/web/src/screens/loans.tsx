@@ -1,13 +1,14 @@
 /**
- * RENEW-01 Bảng đáo hạn (FgMaturityTable) · LOAN-01 Danh sách khoản vay · DEBT-01/03 công nợ.
+ * RENEW-01 Bảng đáo hạn (FgMaturityTable).
  *
  * Maturity ladder DS §3.3: 4 mức, LUÔN hiện số ngày cụ thể (không chỉ màu).
+ * Nguồn dữ liệu: `bank_debts` (thay `loans` cũ).
  */
 
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { moneyFromWire } from '@fingate/shared';
-import { useDebts, useLoans, useRollovers } from '../app/queries.ts';
+import { useRollovers } from '../app/queries.ts';
 import { FgButton, FgMoney, FgSelect, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
@@ -30,7 +31,7 @@ export function RolloversScreen(): ReactNode {
     <>
       <FgPageHeader
         title="Bảng đáo hạn"
-        meta="Khoản vay sắp tới hạn trả nợ gốc — 4 mức rủi ro, luôn kèm số ngày cụ thể"
+        meta="Khoản nợ ngân hàng sắp tới hạn trả nợ gốc — 4 mức rủi ro, luôn kèm số ngày cụ thể"
         actions={
           <Link to="/ngan-hang/dao-han/phuong-an/moi">
             <FgButton variant="primary">+ Lập phương án đảo hạn</FgButton>
@@ -70,7 +71,7 @@ export function RolloversScreen(): ReactNode {
                   rowKey="loan_id"
                   dataSource={data.items}
                   columns={[
-                    { title: 'Hợp đồng', dataIndex: 'contract_code', key: 'cc' },
+                    { title: 'Mã khoản', dataIndex: 'contract_code', key: 'cc' },
                     { title: 'Công ty', dataIndex: 'company_name', key: 'co' },
                     { title: 'Ngân hàng', dataIndex: 'bank_name', key: 'bn' },
                     { title: 'Dư nợ', dataIndex: 'outstanding', key: 'od', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
@@ -102,101 +103,6 @@ export function RolloversScreen(): ReactNode {
             )}
           </>
         )}
-      </FgQuery>
-    </>
-  );
-}
-
-export function LoansScreen(): ReactNode {
-  const query = useLoans();
-  return (
-    <>
-      <FgPageHeader title="Vay ngân hàng" />
-      <FgQuery query={query} skeleton={<FgSkeletonTable rows={5} cols={7} />}>
-        {(data) =>
-          !data.items.length ? (
-            <div className="fg-card">
-              <FgEmptyState glyph="◇" title="Chưa có khoản vay nào trong phạm vi" />
-            </div>
-          ) : (
-            <div className="fg-card" style={{ padding: 0 }}>
-              <FgTable
-                rowKey="_id"
-                dataSource={data.items}
-                columns={[
-                  { title: 'HĐTD', dataIndex: 'contract_code', key: 'cc' },
-                  { title: 'Ngân hàng', dataIndex: 'bank_name', key: 'bn' },
-                  { title: 'Công ty', dataIndex: 'company_name', key: 'co' },
-                  { title: 'Hạn mức', dataIndex: 'limit', key: 'lm', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-                  { title: 'Dư nợ', dataIndex: 'outstanding', key: 'os', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
-                  { title: 'Lãi suất', dataIndex: 'interest_rate', key: 'ir', render: (v: string) => `${v} %/năm` },
-                  {
-                    title: 'Đáo hạn',
-                    key: 'md',
-                    render: (_v, r) => <FgMaturityCell days={r.days_to_due} />,
-                  },
-                  {
-                    title: 'Phương án',
-                    key: 'rs',
-                    render: (_v, r) => (r.rollover_status ? <FgText style="bodyS">{r.rollover_status}</FgText> : <FgText style="caption" color="muted">—</FgText>),
-                  },
-                ]}
-              />
-            </div>
-          )
-        }
-      </FgQuery>
-    </>
-  );
-}
-
-export function DebtsScreen({ kind, title }: { kind: 'receivable' | 'payable'; title: string }): ReactNode {
-  const [overdueOnly, setOverdueOnly] = useState(false);
-  const query = useDebts(kind, overdueOnly ? { overdue_only: 'true' } : undefined);
-  return (
-    <>
-      <FgPageHeader title={title} />
-      <div className="fg-filterbar">
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
-          <input type="checkbox" checked={overdueOnly} onChange={(e) => setOverdueOnly(e.target.checked)} style={{ width: 18, height: 18 }} />
-          Chỉ quá hạn
-        </label>
-      </div>
-      <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={6} />}>
-        {(data) =>
-          !data.items.length ? (
-            <div className="fg-card">
-              <FgEmptyState glyph={overdueOnly ? '✓' : '◇'} tone={overdueOnly ? 'success' : 'neutral'} title={overdueOnly ? 'Không có khoản quá hạn nào' : 'Chưa có công nợ nào'} />
-            </div>
-          ) : (
-            <div className="fg-card" style={{ padding: 0 }}>
-              <FgTable
-                rowKey="_id"
-                dataSource={data.items}
-                columns={[
-                  { title: 'Đối tượng', dataIndex: 'counterparty_name', key: 'cp' },
-                  { title: 'Công ty', dataIndex: 'company_name', key: 'co' },
-                  { title: 'Hợp đồng', dataIndex: 'contract_code', key: 'cc', render: (v: string | null) => v ?? '—' },
-                  { title: 'Giá trị', dataIndex: 'value', key: 'vl', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-                  { title: 'Còn lại', dataIndex: 'remaining', key: 'rm', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
-                  { title: 'Đến hạn', dataIndex: 'due_date', key: 'dd' },
-                  {
-                    title: 'Quá hạn',
-                    key: 'ov',
-                    render: (_v, r) =>
-                      r.days_overdue > 0 ? (
-                        <span className="fg-chip" style={{ borderColor: 'var(--fg-status-danger-border)', color: 'var(--fg-status-danger-text)', background: 'var(--fg-status-danger-bg)' }}>
-                          ⛔ qua hạn {r.days_overdue} ngày
-                        </span>
-                      ) : (
-                        <FgText style="caption" color="muted">đúng hạn</FgText>
-                      ),
-                  },
-                ]}
-              />
-            </div>
-          )
-        }
       </FgQuery>
     </>
   );
