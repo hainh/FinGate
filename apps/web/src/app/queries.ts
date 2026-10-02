@@ -244,7 +244,7 @@ export function useRepayBankDebt(id: string) {
     mutationFn: (body: { document_id: string; amount_minor?: string; note?: string }) =>
       apiData(`/bank-debts/${id}/repayments`, { method: 'POST', body }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['bank-debt', id] });
+      qc.invalidateQueries({ queryKey: ['bank-debt'] });
       qc.invalidateQueries({ queryKey: ['bank-debts'] });
       qc.invalidateQueries({ queryKey: ['bank-debt-candidates', id] });
       qc.invalidateQueries({ queryKey: ['rollovers'] });
@@ -258,7 +258,7 @@ export function useUnrepayBankDebt(id: string) {
   return useMutation({
     mutationFn: (linkId: string) => apiData(`/bank-debts/${id}/repayments/${linkId}`, { method: 'DELETE' }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['bank-debt', id] });
+      qc.invalidateQueries({ queryKey: ['bank-debt'] });
       qc.invalidateQueries({ queryKey: ['bank-debts'] });
       qc.invalidateQueries({ queryKey: ['rollovers'] });
     },
@@ -303,7 +303,7 @@ export function useLinkDebt(id: string) {
   return useMutation({
     mutationFn: (body: { document_id: string; amount_minor?: string; note?: string }) => apiData(`/debts/${id}/links`, { method: 'POST', body }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['debt-voucher', id] });
+      qc.invalidateQueries({ queryKey: ['debt-voucher'] });
       qc.invalidateQueries({ queryKey: ['debt-vouchers'] });
       qc.invalidateQueries({ queryKey: ['debt-candidates', id] });
     },
@@ -315,7 +315,7 @@ export function useUnlinkDebt(id: string) {
   return useMutation({
     mutationFn: (linkId: string) => apiData(`/debts/${id}/links/${linkId}`, { method: 'DELETE' }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['debt-voucher', id] });
+      qc.invalidateQueries({ queryKey: ['debt-voucher'] });
       qc.invalidateQueries({ queryKey: ['debt-vouchers'] });
       qc.invalidateQueries({ queryKey: ['debt-candidates', id] });
     },
