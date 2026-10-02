@@ -24,9 +24,9 @@ import { DocumentDetailScreen } from './screens/document-detail.tsx';
 import { BankAccountsScreen } from './screens/bank.tsx';
 import { BankAccountHistoryScreen } from './screens/bank-history.tsx';
 import { BankAccountFormScreen } from './screens/bank-account-form.tsx';
-import { RolloversScreen } from './screens/loans.tsx';
+import { RolloverPreparationScreen, RolloversScreen } from './screens/loans.tsx';
 import { DebtListScreen, DebtVoucherFormScreen, DebtDetailScreen } from './screens/debt.tsx';
-import { BankDebtListScreen, BankDebtFormScreen, BankDebtDetailScreen } from './screens/bank-debt.tsx';
+import { BankDebtListScreen, BankDebtFormScreen, BankDebtDetailScreen, LoanScheduleScreen } from './screens/bank-debt.tsx';
 import { CashflowHistoryScreen } from './screens/cashflow.tsx';
 import { ReportLibraryScreen, ReportRunnerScreen } from './screens/reports.tsx';
 import { PersonnelScreen, MatrixScreen, ApprovalThresholdScreen, AuditLogScreen, SettingsScreen, CompaniesScreen } from './screens/admin.tsx';
@@ -154,7 +154,9 @@ export function AppRoutes(): ReactNode {
       <Route path="/ngan-hang/khoan-vay" element={<Shell><BankDebtListScreen /></Shell>} /> {/* LOAN-01 */}
       <Route path="/ngan-hang/khoan-vay/moi" element={<Shell><BankDebtFormScreen /></Shell>} /> {/* LOAN-03 */}
       <Route path="/ngan-hang/khoan-vay/:id" element={<Shell><BankDebtDetailScreen /></Shell>} /> {/* LOAN-02 */}
+      <Route path="/ngan-hang/khoan-vay/:id/lich-tra" element={<Shell><LoanScheduleScreen /></Shell>} /> {/* LOAN-04 */}
       <Route path="/ngan-hang/dao-han" element={<Shell><RolloversScreen /></Shell>} /> {/* RENEW-01 */}
+      <Route path="/ngan-hang/dao-han/chuan-bi" element={<Shell><RolloverPreparationScreen /></Shell>} /> {/* RENEW-05 */}
       <Route path="/ngan-hang/dao-han/phuong-an/moi" element={<Shell><DocumentFormScreen kind="rollover" /></Shell>} /> {/* RENEW-02 */}
       <Route path="/ngan-hang/dao-han/phuong-an/:id/sua" element={<Shell><DocumentFormScreen kind="rollover" /></Shell>} />
       <Route path="/ngan-hang/chuyen-noi-bo" element={<Shell><InternalListScreen /></Shell>} /> {/* BANK-07 */}

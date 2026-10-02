@@ -7,7 +7,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { Types } from 'mongoose';
-import { ApiError, daysUntil, today, type Permission } from '@fingate/shared';
+import { ApiError, daysBetween, daysUntil, today, vnDate, type Permission, type RepaymentFrequency, type RepaymentMethod } from '@fingate/shared';
 import { Models } from '../db/models.ts';
 import { assertCompanyScope, defineRoute, requestCtx, requireActor, requireScope, validate } from '../lib/http.ts';
 import { ok } from '../lib/serialize.ts';
@@ -20,6 +20,7 @@ import { nextSequentialCode } from '../domain/numbering/index.ts';
 import { registerOwnerAttachmentRoutes } from './attachment-owner.ts';
 import { mapOwnerAttachments } from './debt.ts';
 import { fetchLinkedDocs, settledFromLinks, type LinkedDocInfo, type OffsetLink } from '../domain/debt/index.ts';
+import { addMonths, buildSchedule, parseRate, simpleInterest } from '../domain/loan-schedule/index.ts';
 
 interface BankDebtDoc {
   _id: unknown;
@@ -31,6 +32,9 @@ interface BankDebtDoc {
   outstanding_minor?: unknown;
   currency?: string;
   interest_rate?: string;
+  term_months?: number | null;
+  payment_frequency?: string;
+  repayment_method?: string;
   maturity_date?: string;
   next_due_date?: string | null;
   status?: string;
@@ -38,6 +42,7 @@ interface BankDebtDoc {
   attachments?: unknown[];
   history?: unknown[];
   note?: string | null;
+  created_at?: Date | string;
   updated_at?: Date | string;
 }
 
@@ -62,6 +67,7 @@ function serializeBankDebt(
   const { principal, repaid, outstanding } = derivedOutstanding(d, opts.docs);
   const due = String(d.maturity_date ?? today());
   const nextDue = d.next_due_date ? String(d.next_due_date) : null;
+  const interest = simpleInterest(outstanding, parseRate(d.interest_rate), Math.max(0, daysUntil(nextDue || due)));
   return {
     _id: String(d._id),
     company_id: String(d.company_id),
@@ -74,6 +80,10 @@ function serializeBankDebt(
     repaid: wire(repaid, String(d.currency ?? 'VND')),
     currency: String(d.currency ?? 'VND'),
     interest_rate: String(d.interest_rate ?? '0'),
+    term_months: d.term_months ?? null,
+    payment_frequency: String(d.payment_frequency ?? 'maturity'),
+    repayment_method: String(d.repayment_method ?? 'interest_only'),
+    interest_to_maturity: wire(interest, String(d.currency ?? 'VND')),
     maturity_date: due,
     next_due_date: nextDue,
     days_to_due: daysUntil(nextDue || due),
@@ -148,6 +158,9 @@ export function bankDebtRoutes(app: FastifyInstance): void {
           amount: { minor, currency: body.currency, decimals: 0 },
           currency: body.currency,
           interest_rate: body.interest_rate,
+          term_months: body.term_months ?? null,
+          payment_frequency: body.payment_frequency,
+          repayment_method: body.repayment_method,
           maturity_date: body.maturity_date,
           next_due_date: body.maturity_date,
           status: 'active',
@@ -225,6 +238,9 @@ export function bankDebtRoutes(app: FastifyInstance): void {
           set.currency = body.amount.currency;
         }
         if (body.interest_rate !== undefined) set.interest_rate = body.interest_rate;
+        if (body.term_months !== undefined) set.term_months = body.term_months ?? null;
+        if (body.payment_frequency !== undefined) set.payment_frequency = body.payment_frequency;
+        if (body.repayment_method !== undefined) set.repayment_method = body.repayment_method;
         if (body.maturity_date !== undefined) set.maturity_date = body.maturity_date;
         if (body.note !== undefined) set.note = body.note || null;
         const history = buildHistoryEntry({
@@ -244,6 +260,75 @@ export function bankDebtRoutes(app: FastifyInstance): void {
           ip: requestCtx(req).ip,
         });
         return ok(reply, { data: { ok: true } });
+      },
+    }),
+  );
+
+  /* ------------------------ LOAN-04 · lịch nghĩa vụ trả nợ ------------------------ */
+
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/bank-debts/:id/schedule',
+      config: { perms: ['loan:read'] as Permission[], screen: 'LOAN-04', summary: 'Lịch nghĩa vụ trả nợ (gốc + lãi + phí)' },
+      handler: async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const d = await Models.BankDebt.findById(id).lean<BankDebtDoc | null>();
+        if (!d) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy khoản nợ' });
+        assertCompanyScope(req, String(d.company_id));
+        const currency = String(d.currency ?? 'VND');
+        const maturity = String(d.maturity_date ?? today());
+        const start = d.term_months
+          ? addMonths(maturity, -d.term_months)
+          : d.created_at
+            ? vnDate(d.created_at)
+            : maturity;
+        const termMonths = d.term_months ?? Math.max(1, Math.round(daysBetween(start, maturity) / 30));
+        const frequency = (d.payment_frequency ?? 'maturity') as RepaymentFrequency;
+        const method = (d.repayment_method ?? 'interest_only') as RepaymentMethod;
+        const sched = buildSchedule({
+          principalMinor: asBigInt(d.principal_minor),
+          rate: d.interest_rate,
+          maturityDate: maturity,
+          startDate: start,
+          frequency,
+          method,
+        });
+        const rows = sched.rows.map((r) => ({
+          period: r.period,
+          due_date: r.due_date,
+          days: r.days,
+          principal: wire(r.principal, currency),
+          interest: wire(r.interest, currency),
+          fee: wire(r.fee, currency),
+          total: wire(r.total, currency),
+          status: r.due_date < today() ? 'overdue' : r.due_date === today() ? 'due' : 'upcoming',
+        }));
+        return ok(
+          reply,
+          {
+            data: {
+              loan_id: String(d._id),
+              contract_code: String(d.code ?? ''),
+              bank_name: String(d.bank_name),
+              currency,
+              interest_rate: String(d.interest_rate ?? '0'),
+              term_months: termMonths,
+              payment_frequency: frequency,
+              repayment_method: method,
+              start_date: start,
+              maturity_date: maturity,
+              rows,
+              totals: {
+                principal: wire(sched.totals.principal, currency),
+                interest: wire(sched.totals.interest, currency),
+                fee: wire(sched.totals.fee, currency),
+                total: wire(sched.totals.total, currency),
+              },
+            },
+          },
+          { maxAge: 30 },
+        );
       },
     }),
   );

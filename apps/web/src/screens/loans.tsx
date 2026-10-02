@@ -8,7 +8,7 @@
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { moneyFromWire } from '@fingate/shared';
-import { useRollovers } from '../app/queries.ts';
+import { useRolloverPreparation, useRollovers } from '../app/queries.ts';
 import { FgButton, FgMoney, FgSelect, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
@@ -33,9 +33,14 @@ export function RolloversScreen(): ReactNode {
         title="Bảng đáo hạn"
         meta="Khoản nợ ngân hàng sắp tới hạn trả nợ gốc — 4 mức rủi ro, luôn kèm số ngày cụ thể"
         actions={
-          <Link to="/ngan-hang/dao-han/phuong-an/moi">
-            <FgButton variant="primary">+ Lập phương án đảo hạn</FgButton>
-          </Link>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Link to="/ngan-hang/dao-han/chuan-bi">
+              <FgButton>Tiền cần chuẩn bị 30 ngày</FgButton>
+            </Link>
+            <Link to="/ngan-hang/dao-han/phuong-an/moi">
+              <FgButton variant="primary">+ Lập phương án đảo hạn</FgButton>
+            </Link>
+          </div>
         }
       />
       <div className="fg-filterbar">
@@ -75,6 +80,7 @@ export function RolloversScreen(): ReactNode {
                     { title: 'Công ty', dataIndex: 'company_name', key: 'co' },
                     { title: 'Ngân hàng', dataIndex: 'bank_name', key: 'bn' },
                     { title: 'Dư nợ', dataIndex: 'outstanding', key: 'od', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
+                    { title: 'Lãi dự kiến', dataIndex: 'interest_to_due', key: 'int', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
                     { title: 'Cần chuẩn bị', dataIndex: 'need_prepare', key: 'np', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
                     {
                       title: 'Đáo hạn',
@@ -97,6 +103,66 @@ export function RolloversScreen(): ReactNode {
                           <FgText style="caption" color="muted">—</FgText>
                         ),
                     },
+                  ]}
+                />
+              </div>
+            )}
+          </>
+        )}
+      </FgQuery>
+    </>
+  );
+}
+
+/* ====================== RENEW-05 · tiền cần chuẩn bị 30 ngày ====================== */
+
+export function RolloverPreparationScreen(): ReactNode {
+  const query = useRolloverPreparation();
+  return (
+    <>
+      <FgPageHeader
+        title="Tiền cần chuẩn bị cho 30 ngày tới"
+        meta="Đáo hạn (gốc + lãi) cộng chi định kỳ, so với số dư khả dụng — chỉ ra chỗ thiếu"
+      />
+      <FgQuery query={query} skeleton={<FgSkeletonTable rows={5} cols={4} />}>
+        {(d) => (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 'var(--fg-space-3)', marginBottom: 'var(--fg-space-4)' }}>
+              {[
+                ['Khả dụng', d.available],
+                ['Cần chuẩn bị', d.need],
+                ['Trong đó · đáo hạn', d.maturity],
+                ['Trong đó · chi định kỳ', d.planned_spend],
+              ].map(([label, m]) => (
+                <FgCard key={String(label)} className="fg-kpi">
+                  <FgText style="caption" color="muted">{String(label)}</FgText>
+                  <div className="fg-kpi-value" style={{ fontSize: 'var(--fg-font-number-m-size)' }}>
+                    <FgMoney value={moneyFromWire(m as never)} mode="compact" />
+                  </div>
+                </FgCard>
+              ))}
+            </div>
+            <FgCard className="fg-kpi" style={{ marginBottom: 'var(--fg-space-4)' }}>
+              <FgText style="caption" color="muted">{d.breach ? 'Thiếu tiền' : 'Đủ tiền'}</FgText>
+              <div className="fg-kpi-value" style={{ fontSize: 'var(--fg-font-number-m-size)', color: d.breach ? 'var(--fg-tone-danger-text)' : undefined }}>
+                <FgMoney value={moneyFromWire(d.gap)} mode="compact" emphasis />
+              </div>
+            </FgCard>
+            {!d.rows.length ? (
+              <div className="fg-card">
+                <FgEmptyState glyph="✓" tone="success" title="Không có nghĩa vụ đáo hạn nào trong 30 ngày tới" />
+              </div>
+            ) : (
+              <div className="fg-card" style={{ padding: 0 }}>
+                <FgTable
+                  rowKey={(r) => `${r.date}-${r.label}`}
+                  dataSource={d.rows}
+                  columns={[
+                    { title: 'Ngày', dataIndex: 'date', key: 'date' },
+                    { title: 'Khoản', dataIndex: 'label', key: 'label' },
+                    { title: 'Gốc', dataIndex: 'principal', key: 'p', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
+                    { title: 'Lãi', dataIndex: 'interest', key: 'i', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
+                    { title: 'Cần chuẩn bị', dataIndex: 'amount', key: 'a', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
                   ]}
                 />
               </div>

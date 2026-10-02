@@ -38,6 +38,7 @@ import {
   documentListQuerySchema,
   documentUpdateBodySchema,
   opinionBodySchema,
+  rolloverResultBodySchema,
   transitionBodySchema,
 } from './schemas.ts';
 import {
@@ -46,6 +47,7 @@ import {
   documentListQuery,
   documentUpdateBody,
   opinionBody,
+  rolloverResultBody,
   transitionBody,
   attachmentPrepareBody,
   attachmentConfirmBody,
@@ -379,7 +381,8 @@ export function documentRoutes(app: FastifyInstance): void {
         if (body.contract) set.contract = { ...doc.contract, ...body.contract };
         if (body.budget) set.budget = { ...doc.budget, ...body.budget };
         if (body.target) set.target = body.target;
-        if (body.rollover) set.rollover = body.rollover;
+        // merge (không ghi đè) để giữ `rollover.result` (RENEW-04) khi sửa lại phương án.
+        if (body.rollover) set.rollover = { ...((doc.rollover ?? {}) as Record<string, unknown>), ...body.rollover };
         if (body.amount) {
           set.amount = { minor: BigInt(body.amount.amount_minor), currency: body.amount.currency, decimals: 0 };
         }
@@ -910,6 +913,89 @@ export function documentRoutes(app: FastifyInstance): void {
         }
         const url = await adapter.presignGet(key, 60);
         return reply.code(302).header('location', url).header('cache-control', 'private, no-store').send();
+      },
+    }),
+  );
+
+  /* -------------------- RENEW-04 · kết quả thực hiện đảo hạn -------------------- */
+
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/documents/:id/rollover-result',
+      config: { perms: ['rollover:act'] as Permission[], screen: 'RENEW-04', summary: 'Cập nhật kết quả thực hiện đảo hạn' },
+      schema: { tags: ['documents'], body: rolloverResultBodySchema },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const { id } = req.params as { id: string };
+        const body = validate(rolloverResultBody, req.body);
+        const doc = await loadDoc(id);
+        if (String(doc.kind) !== 'rollover') {
+          throw new ApiError({ code: 'FG-VAL-001', errors: { kind: 'Hồ sơ không phải phương án đảo hạn' } });
+        }
+        await assertVisible(req, String(doc.company_id));
+        if (!['approved', 'paid'].includes(String(doc.status))) {
+          throw new ApiError({ code: 'FG-WF-005', detail: 'Chỉ cập nhật kết quả sau khi phương án được duyệt' });
+        }
+        if (doc.processed_requests?.includes(body.request_id)) {
+          return ok(reply, { data: await detailOf(id, actor.user_id), idempotent: true });
+        }
+
+        const result = {
+          done_at: body.done_at,
+          new_contract_code: body.new_contract_code,
+          new_limit: { minor: BigInt(body.new_limit.amount_minor), currency: body.new_limit.currency, decimals: 0 },
+          new_rate: body.new_rate,
+          actual_fee: { minor: BigInt(body.actual_fee.amount_minor), currency: body.actual_fee.currency, decimals: 0 },
+          note: body.note ?? null,
+        };
+        const entry = buildHistoryEntry({
+          action: 'rollover_result',
+          actor: { user_id: actor.user_id, role: actor.role, name: actor.name },
+          from: String(doc.status),
+          to: String(doc.status),
+          request_id: body.request_id,
+          ip: requestCtx(req).ip,
+          fields: { new_contract_code: body.new_contract_code, new_rate: body.new_rate },
+        });
+        const saved = await cas<Record<string, unknown>>({
+          model: 'Document',
+          id,
+          ifMatch: body.if_match,
+          extraFilter: { status: { $in: ['approved', 'paid'] } },
+          set: { 'rollover.result': result, updated_at: new Date() },
+          push: { history: entry },
+          addToSet: { processed_requests: body.request_id },
+        });
+        if (!saved) throw new ApiError({ code: 'FG-WF-011', detail: 'Hồ sơ vừa được cập nhật bởi người khác' });
+
+        // Cập nhật khoản vay gốc (lãi suất mới) — KHÔNG tự tất toán/tạo khoản mới.
+        if (doc.loan_id) {
+          const hist = buildHistoryEntry({
+            action: 'rollover_result',
+            actor: { user_id: actor.user_id, role: actor.role, name: actor.name },
+            to: null,
+            ip: requestCtx(req).ip,
+            fields: { document_id: id, document_code: doc.code, new_contract_code: body.new_contract_code, new_rate: body.new_rate },
+          });
+          await Models.BankDebt.updateOne(
+            { _id: String(doc.loan_id) },
+            { $set: { interest_rate: body.new_rate, updated_at: new Date() }, $push: { history: hist } },
+          ).exec();
+        }
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'rollover.result',
+          subject: { type: doc.kind, id, code: doc.code },
+          company_id: String(doc.company_id),
+          document_id: id,
+          diff_fields: { new_contract_code: body.new_contract_code, new_rate: body.new_rate },
+          request_id: body.request_id,
+          ip: requestCtx(req).ip,
+        });
+        invalidateFor(String(doc.company_id), actor.user_id);
+        return ok(reply, { data: await detailOf(id, actor.user_id), version: saved.version });
       },
     }),
   );

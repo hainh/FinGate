@@ -23,6 +23,7 @@ import type {
   DocumentDetail,
   LinkCandidate,
   ListResult,
+  LoanScheduleResult,
   MatrixEntry,
   NeedsAttentionGroup,
   Newsletter,
@@ -32,6 +33,7 @@ import type {
   QueueRow,
   ReportPresetMeta,
   ReportResult,
+  RolloverPreparation,
   RolloverResult,
   SearchHit,
   TransitionResult,
@@ -210,6 +212,37 @@ export function useBankDebts(status?: string) {
   return useQuery({
     queryKey: ['bank-debts', scope, status],
     queryFn: () => apiCall<{ items: BankDebtRow[] }>('/bank-debts', { query: { scope, status } }),
+  });
+}
+
+/** LOAN-04 — lịch nghĩa vụ trả nợ (gốc + lãi + phí). */
+export function useLoanSchedule(id: string | undefined) {
+  return useQuery({
+    queryKey: ['bank-debt-schedule', id],
+    enabled: !!id,
+    queryFn: () => apiData<LoanScheduleResult>(`/bank-debts/${id}/schedule`),
+  });
+}
+
+/** RENEW-05 — tiền cần chuẩn bị cho 30 ngày tới. */
+export function useRolloverPreparation() {
+  const { scope } = useAuth();
+  return useQuery({
+    queryKey: ['rollover-preparation', scope],
+    queryFn: () => apiData<RolloverPreparation>('/rollovers/preparation', { query: { scope } }),
+  });
+}
+
+/** RENEW-04 — cập nhật kết quả thực hiện đảo hạn. */
+export function useRolloverResult(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => apiData(`/documents/${id}/rollover-result`, { method: 'POST', body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['document'] });
+      qc.invalidateQueries({ queryKey: ['rollovers'] });
+      qc.invalidateQueries({ queryKey: ['bank-debt'] });
+    },
   });
 }
 

@@ -101,6 +101,14 @@ export const statementImportBody = z.object({
 
 export const bankDebtStatus = z.enum(['active', 'overdue', 'settled', 'archived']);
 
+/** Kỳ trả lãi/gốc — dùng sinh lịch nghĩa vụ trả nợ (LOAN-04). */
+export const repaymentFrequency = z.enum(['monthly', 'quarterly', 'semiannual', 'maturity']);
+export type RepaymentFrequency = z.infer<typeof repaymentFrequency>;
+
+/** Cách trả gốc: chỉ trả lãi định kỳ + gốc cuối kỳ, hoặc chia đều gốc mỗi kỳ. */
+export const repaymentMethod = z.enum(['interest_only', 'equal_principal']);
+export type RepaymentMethod = z.infer<typeof repaymentMethod>;
+
 export const bankDebtUpsertBody = z.object({
   company_id: objectId.optional().describe('Mặc định theo phiên làm việc'),
   bank_name: z.string().min(2).max(120),
@@ -110,6 +118,10 @@ export const bankDebtUpsertBody = z.object({
   interest_rate: z.string().regex(/^\d+([.,]\d{1,2})?$/, 'Lãi suất tối đa 2 chữ số thập phân').default('0'),
   maturity_date: businessDate.describe('Hạn thanh toán'),
   currency: z.string().length(3).default('VND'),
+  /** Kỳ hạn (tháng) — để sinh lịch; bỏ trống = suy từ ngày tạo → đáo hạn. */
+  term_months: z.coerce.number().int().min(1).max(600).optional(),
+  payment_frequency: repaymentFrequency.default('maturity'),
+  repayment_method: repaymentMethod.default('interest_only'),
   note: z.string().max(1000).optional(),
 });
 
@@ -125,6 +137,11 @@ export const bankDebtRow = z.object({
   repaid: moneyWire,
   currency: z.string(),
   interest_rate: z.string(),
+  term_months: z.number().int().nullable(),
+  payment_frequency: repaymentFrequency,
+  repayment_method: repaymentMethod,
+  /** Lãi dự kiến còn phải trả tới kỳ đáo hạn kế tiếp (§IX). */
+  interest_to_maturity: moneyWire,
   maturity_date: businessDate,
   next_due_date: businessDate.nullable(),
   days_to_due: z.number().int(),
@@ -132,6 +149,39 @@ export const bankDebtRow = z.object({
   attachment_count: z.number().int(),
   repayment_count: z.number().int(),
   updated_at: z.string(),
+});
+
+/** LOAN-04 — một kỳ nghĩa vụ trả nợ (gốc + lãi + phí). */
+export const loanScheduleRow = z.object({
+  period: z.number().int().min(1),
+  due_date: businessDate,
+  days: z.number().int(),
+  principal: moneyWire,
+  interest: moneyWire,
+  fee: moneyWire,
+  total: moneyWire,
+  /** `upcoming` chưa tới hạn · `due` hôm nay · `overdue` đã qua. */
+  status: z.enum(['upcoming', 'due', 'overdue']),
+});
+
+export const loanScheduleResult = z.object({
+  loan_id: objectId,
+  contract_code: z.string(),
+  bank_name: z.string(),
+  currency: z.string(),
+  interest_rate: z.string(),
+  term_months: z.number().int(),
+  payment_frequency: repaymentFrequency,
+  repayment_method: repaymentMethod,
+  start_date: businessDate,
+  maturity_date: businessDate,
+  rows: z.array(loanScheduleRow),
+  totals: z.object({
+    principal: moneyWire,
+    interest: moneyWire,
+    fee: moneyWire,
+    total: moneyWire,
+  }),
 });
 
 /** Gán một phiếu chi vào khoản nợ ngân hàng để đánh dấu đã trả nợ. */
@@ -157,8 +207,13 @@ export const maturityRow = z.object({
   company_name: z.string(),
   bank_name: z.string(),
   outstanding: moneyWire,
+  /** Lãi dự kiến tới kỳ đáo hạn kế tiếp (0 nếu chỉ trả lãi định kỳ). */
+  interest_to_due: moneyWire,
+  /** Phí dự kiến tới kỳ đáo hạn kế tiếp. */
+  fee_to_due: moneyWire,
   maturity_date: businessDate,
   days_to_due: z.number().int(),
+  /** Gốc + lãi + phí cần chuẩn bị cho kỳ kế tiếp. */
   need_prepare: moneyWire,
   level: z.number().int().min(0).max(3),
   tone: z.string(),

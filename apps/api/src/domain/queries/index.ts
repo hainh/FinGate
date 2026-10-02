@@ -30,6 +30,7 @@ import { Models } from '../../db/models.ts';
 import { cacheThrough } from '../../lib/cache.ts';
 import { oid, scopedAggregate, scopedCount, withScope, type Scope } from '../../lib/mongo.ts';
 import { waitingDays } from '../calendar/index.ts';
+import { parseRate, simpleInterest } from '../loan-schedule/index.ts';
 import type { ScopeLike } from '../types.ts';
 
 /** Tiền trên wire: minor là STRING (arch §6). */
@@ -510,6 +511,8 @@ export interface MaturityRow {
   company_name: string;
   bank_name: string;
   outstanding: WireAmount;
+  interest_to_due: WireAmount;
+  fee_to_due: WireAmount;
   maturity_date: string;
   days_to_due: number;
   need_prepare: WireAmount;
@@ -530,7 +533,7 @@ export async function maturityLadder(
       maturity_date: { $lte: addDays(today(), horizon) },
     }) as never,
   )
-    .select({ company_id: 1, bank_name: 1, code: 1, principal_minor: 1, repayment_links: 1, maturity_date: 1, next_due_date: 1, currency: 1 })
+    .select({ company_id: 1, bank_name: 1, code: 1, principal_minor: 1, repayment_links: 1, maturity_date: 1, next_due_date: 1, currency: 1, interest_rate: 1 })
     .sort({ maturity_date: 1 })
     .lean();
 
@@ -559,6 +562,11 @@ export async function maturityLadder(
     const principal = asBigInt((l as { principal_minor?: unknown }).principal_minor);
     const repaid = settledFromLinks((l as Record<string, unknown>).repayment_links, docMap);
     const outstanding = principal - repaid > 0n ? principal - repaid : 0n;
+    const rate = parseRate((l as { interest_rate?: string }).interest_rate);
+    // Lãi dự kiến còn phải trả từ hôm nay tới kỳ đáo hạn kế tiếp (lãi đơn 365 ngày).
+    const interest = simpleInterest(outstanding, rate, Math.max(0, days));
+    const fee = 0n;
+    const needPrepare = outstanding + interest + fee;
     const ro = byLoan.get(String(l._id));
     return {
       loan_id: String(l._id),
@@ -567,9 +575,11 @@ export async function maturityLadder(
       company_name: cname.get(String(l.company_id)) ?? '—',
       bank_name: String(l.bank_name),
       outstanding: wire(outstanding, String(l.currency ?? 'VND')),
+      interest_to_due: wire(interest, String(l.currency ?? 'VND')),
+      fee_to_due: wire(fee, String(l.currency ?? 'VND')),
       maturity_date: due,
       days_to_due: days,
-      need_prepare: wire(outstanding, String(l.currency ?? 'VND')),
+      need_prepare: wire(needPrepare, String(l.currency ?? 'VND')),
       level: band.level,
       tone: band.tone,
       label: maturityLabel(days),

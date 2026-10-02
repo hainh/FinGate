@@ -349,7 +349,9 @@ export const documentDetail = z.object({
       result: z
         .object({
           done_at: businessDate.nullable(),
-          new_contract: z.string().nullable(),
+          new_contract_code: z.string().nullable(),
+          new_limit: moneyWire.nullable(),
+          new_rate: z.string().nullable(),
           actual_fee: moneyWire.nullable(),
           note: z.string().nullable(),
         })

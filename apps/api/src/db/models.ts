@@ -370,8 +370,9 @@ export const DocumentSchema = new Schema(
         type: new Schema(
           {
             done_at: { type: String, default: null },
-            new_contract: { type: String, default: null },
+            new_contract_code: { type: String, default: null },
             new_limit: { type: moneySchema, default: null },
+            new_rate: { type: String, default: null },
             actual_fee: { type: moneySchema, default: null },
             note: { type: String, default: null },
           },
@@ -593,6 +594,11 @@ export const BankDebtSchema = new Schema(
     amount: { minor: { type: BigInt, required: true }, currency: { type: String, default: 'VND' }, decimals: { type: Number, default: 0 } },
     currency: { type: String, default: 'VND' },
     interest_rate: { type: String, default: '0' },
+    /** Kỳ hạn (tháng) — null = suy từ ngày tạo → đáo hạn. */
+    term_months: { type: Number, default: null },
+    /** Kỳ trả lãi/gốc (LOAN-04). */
+    payment_frequency: { type: String, enum: ['monthly', 'quarterly', 'semiannual', 'maturity'], default: 'maturity' },
+    repayment_method: { type: String, enum: ['interest_only', 'equal_principal'], default: 'interest_only' },
     /** Hạn thanh toán. */
     maturity_date: { type: String, required: true },
     next_due_date: { type: String, default: null },

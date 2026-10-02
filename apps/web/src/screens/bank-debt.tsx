@@ -10,8 +10,8 @@ import dayjs from 'dayjs';
 import { moneyFromWire, type Money } from '@fingate/shared';
 import { ApiRequestError } from '../app/api.ts';
 import { useCurrentCompanyId } from '../app/store.tsx';
-import { useBankDebt, useBankDebts, useCreateBankDebt, useRepayBankDebt, useUnrepayBankDebt } from '../app/queries.ts';
-import { FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgText } from '../components/primitives.tsx';
+import { useBankDebt, useBankDebts, useCreateBankDebt, useLoanSchedule, useRepayBankDebt, useUnrepayBankDebt } from '../app/queries.ts';
+import { FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
@@ -79,12 +79,25 @@ export function BankDebtFormScreen(): ReactNode {
   const create = useCreateBankDebt();
   const { message } = useToast();
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [f, setF] = useState<{ bank_name: string; branch: string; amount: Money | null; interest_rate: string; maturity_date: string; note: string }>({
+  const [f, setF] = useState<{
+    bank_name: string;
+    branch: string;
+    amount: Money | null;
+    interest_rate: string;
+    maturity_date: string;
+    term_months: string;
+    payment_frequency: string;
+    repayment_method: string;
+    note: string;
+  }>({
     bank_name: '',
     branch: '',
     amount: null,
     interest_rate: '0',
     maturity_date: dayjs().add(30, 'day').format('YYYY-MM-DD'),
+    term_months: '12',
+    payment_frequency: 'maturity',
+    repayment_method: 'interest_only',
     note: '',
   });
 
@@ -110,6 +123,9 @@ export function BankDebtFormScreen(): ReactNode {
         amount: { amount_minor: f.amount.minor.toString(), currency: f.amount.currency },
         interest_rate: f.interest_rate.trim() || '0',
         maturity_date: f.maturity_date,
+        term_months: f.term_months ? Number(f.term_months) : undefined,
+        payment_frequency: f.payment_frequency as 'monthly' | 'quarterly' | 'semiannual' | 'maturity',
+        repayment_method: f.repayment_method as 'interest_only' | 'equal_principal',
         note: f.note.trim() || undefined,
       });
       message.success('Đã lưu phiếu nợ ngân hàng');
@@ -138,6 +154,33 @@ export function BankDebtFormScreen(): ReactNode {
         </FgField>
         <FgField label="Hạn thanh toán *" error={errors['maturity_date']}>
           <DatePicker value={f.maturity_date ? dayjs(f.maturity_date) : null} onChange={(d) => setF((s) => ({ ...s, maturity_date: d ? d.format('YYYY-MM-DD') : '' }))} format="DD/MM/YYYY" style={{ width: '100%' }} />
+        </FgField>
+        <FgField label="Kỳ hạn (tháng)">
+          <FgInput value={f.term_months} onChange={(e) => setF((s) => ({ ...s, term_months: e.target.value.replace(/\D/g, '') }))} placeholder="VD: 12" />
+        </FgField>
+        <FgField label="Kỳ trả lãi/gốc">
+          <FgSelect
+            options={[
+              { value: 'maturity', label: 'Một lần khi đáo hạn' },
+              { value: 'monthly', label: 'Hàng tháng' },
+              { value: 'quarterly', label: 'Hàng quý' },
+              { value: 'semiannual', label: 'Nửa năm' },
+            ]}
+            value={f.payment_frequency}
+            onChange={(v) => setF((s) => ({ ...s, payment_frequency: v ?? 'maturity' }))}
+            style={{ width: '100%' }}
+          />
+        </FgField>
+        <FgField label="Cách trả gốc">
+          <FgSelect
+            options={[
+              { value: 'interest_only', label: 'Trả lãi định kỳ, gốc cuối kỳ' },
+              { value: 'equal_principal', label: 'Chia đều gốc mỗi kỳ' },
+            ]}
+            value={f.repayment_method}
+            onChange={(v) => setF((s) => ({ ...s, repayment_method: v ?? 'interest_only' }))}
+            style={{ width: '100%' }}
+          />
         </FgField>
         <FgField label="Ghi chú">
           <FgInput value={f.note} onChange={(e) => setF((s) => ({ ...s, note: e.target.value }))} />
@@ -172,9 +215,14 @@ export function BankDebtDetailScreen(): ReactNode {
             title={`${d.code} · ${d.bank_name}${d.branch ? ` — ${d.branch}` : ''}`}
             meta={`Hạn thanh toán ${d.maturity_date} · lãi suất ${d.interest_rate}%/năm`}
             actions={
-              <FgButton variant="primary" onClick={() => setLinkOpen(true)}>
-                + Gán phiếu chi trả nợ
-              </FgButton>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Link to={`/ngan-hang/khoan-vay/${d._id}/lich-tra`}>
+                  <FgButton>Lịch trả nợ</FgButton>
+                </Link>
+                <FgButton variant="primary" onClick={() => setLinkOpen(true)}>
+                  + Gán phiếu chi trả nợ
+                </FgButton>
+              </div>
             }
           />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 'var(--fg-space-3)', marginBottom: 'var(--fg-space-4)' }}>
@@ -238,6 +286,70 @@ export function BankDebtDetailScreen(): ReactNode {
               }
             />
           ) : null}
+        </>
+      )}
+    </FgQuery>
+  );
+}
+
+/* ============================== LOAN-04 · lịch trả nợ ============================== */
+
+const SCHEDULE_STATUS_LABEL: Record<string, string> = { upcoming: 'Sắp tới', due: 'Hôm nay', overdue: 'Quá hạn' };
+
+export function LoanScheduleScreen(): ReactNode {
+  const { id } = useParams<{ id: string }>();
+  const query = useLoanSchedule(id);
+  return (
+    <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={5} />}>
+      {(d) => (
+        <>
+          <FgPageHeader
+            title={`Lịch trả nợ · ${d.contract_code} — ${d.bank_name}`}
+            meta={`Kỳ hạn ${d.term_months} tháng · lãi suất ${d.interest_rate}%/năm · ${
+              d.payment_frequency === 'monthly'
+                ? 'trả hàng tháng'
+                : d.payment_frequency === 'quarterly'
+                  ? 'trả hàng quý'
+                  : d.payment_frequency === 'semiannual'
+                    ? 'trả nửa năm'
+                    : 'trả khi đáo hạn'
+            } · ${d.repayment_method === 'equal_principal' ? 'gốc chia đều' : 'gốc cuối kỳ'}`}
+            actions={
+              <Link to={`/ngan-hang/khoan-vay/${d.loan_id}`}>
+                <FgButton>← Chi tiết khoản vay</FgButton>
+              </Link>
+            }
+          />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 'var(--fg-space-3)', marginBottom: 'var(--fg-space-4)' }}>
+            <FgCard className="fg-kpi">
+              <FgText style="caption" color="muted">Tổng gốc</FgText>
+              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.totals.principal)} mode="compact" /></div>
+            </FgCard>
+            <FgCard className="fg-kpi">
+              <FgText style="caption" color="muted">Tổng lãi</FgText>
+              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.totals.interest)} mode="compact" /></div>
+            </FgCard>
+            <FgCard className="fg-kpi">
+              <FgText style="caption" color="muted">Tổng phải trả</FgText>
+              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.totals.total)} mode="compact" emphasis /></div>
+            </FgCard>
+          </div>
+          <div className="fg-card" style={{ padding: 0 }}>
+            <FgTable
+              rowKey="period"
+              dataSource={d.rows}
+              columns={[
+                { title: 'Kỳ', dataIndex: 'period', key: 'p' },
+                { title: 'Ngày đến hạn', dataIndex: 'due_date', key: 'd' },
+                { title: 'Số ngày', dataIndex: 'days', key: 'days', align: 'right' },
+                { title: 'Gốc', dataIndex: 'principal', key: 'pr', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
+                { title: 'Lãi', dataIndex: 'interest', key: 'in', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
+                { title: 'Phí', dataIndex: 'fee', key: 'fe', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
+                { title: 'Cộng', dataIndex: 'total', key: 'to', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
+                { title: 'Trạng thái', dataIndex: 'status', key: 'st', render: (v: string) => SCHEDULE_STATUS_LABEL[v] ?? v },
+              ]}
+            />
+          </div>
         </>
       )}
     </FgQuery>

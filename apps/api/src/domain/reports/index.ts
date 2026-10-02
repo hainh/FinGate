@@ -22,6 +22,7 @@ import { Models } from '../../db/models.ts';
 import { scopedAggregate } from '../../lib/mongo.ts';
 import { ROLE_LABEL } from '@fingate/shared';
 import { DECISION_STATUSES, asBigInt, wire, type WireAmount } from '../queries/index.ts';
+import { parseRate, simpleInterest } from '../loan-schedule/index.ts';
 import type { ScopeLike } from '../types.ts';
 
 export interface ReportColumn {
@@ -333,7 +334,7 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
       const loans = await Models.BankDebt.find(
         input.scope.companyIds === null ? ({ status: { $in: ['active', 'overdue'] } } as never) : ({ company_id: { $in: input.scope.companyIds as never[] }, status: { $in: ['active', 'overdue'] } } as never),
       )
-        .select({ company_id: 1, bank_name: 1, code: 1, principal_minor: 1, repayment_links: 1, maturity_date: 1 })
+        .select({ company_id: 1, bank_name: 1, code: 1, principal_minor: 1, repayment_links: 1, maturity_date: 1, interest_rate: 1 })
         .sort({ maturity_date: 1 })
         .lean();
       const docMap = await fetchLinkedDocs(
@@ -346,12 +347,18 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
         const principal = asBigInt((l as { principal_minor?: unknown }).principal_minor);
         const repaid = settledFromLinks((l as Record<string, unknown>).repayment_links, docMap);
         const outstanding = principal - repaid > 0n ? principal - repaid : 0n;
+        const interest = simpleInterest(outstanding, parseRate((l as { interest_rate?: string }).interest_rate), Math.max(0, days));
+        const need = outstanding + interest;
         return {
           company_name: cmap.get(String(l.company_id)) ?? '',
           bank_name: String(l.bank_name),
           contract_code: String((l as { code?: unknown }).code ?? ''),
           outstanding: wire(outstanding),
           outstanding_compact: formatMoney(money(outstanding), { mode: 'compact' }),
+          interest: wire(interest),
+          interest_compact: formatMoney(money(interest), { mode: 'compact' }),
+          need: wire(need),
+          need_compact: formatMoney(money(need), { mode: 'compact' }),
           maturity_date: String(l.maturity_date),
           days_to_due: days,
           bucket: days <= 0 ? 'Hôm nay' : days <= 3 ? '3 ngày' : days <= 7 ? '4–7 ngày' : days <= 30 ? '8–30 ngày' : '> 30 ngày',
@@ -361,7 +368,7 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
       const bucketSum = (b: string) => out.filter((r) => r.bucket === b).reduce((a, r) => a + asBigInt(r.outstanding.minor), 0n);
       return {
         ...base,
-        columns: [T('company_name', 'Công ty'), T('bank_name', 'Ngân hàng'), T('contract_code', 'Khoản vay'), C('outstanding_compact', 'Dư nợ'), D('maturity_date', 'Đáo hạn'), N('days_to_due', 'Còn lại'), T('bucket', 'Nhóm')],
+        columns: [T('company_name', 'Công ty'), T('bank_name', 'Ngân hàng'), T('contract_code', 'Khoản vay'), C('outstanding_compact', 'Dư nợ'), C('interest_compact', 'Lãi dự kiến'), C('need_compact', 'Cần chuẩn bị'), D('maturity_date', 'Đáo hạn'), N('days_to_due', 'Còn lại'), T('bucket', 'Nhóm')],
         rows: out,
         totals: { today: wire(bucketSum('Hôm nay')), d7: wire(bucketSum('4–7 ngày') + bucketSum('3 ngày') + bucketSum('Hôm nay')) },
         kpi: [

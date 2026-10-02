@@ -679,7 +679,7 @@ export function financeRoutes(app: FastifyInstance): void {
           ),
         ]);
         const available = accounts.reduce((a, r) => a + r.available, 0n);
-        const maturityTotal = mat.reduce((a, m) => a + asBigInt(m.outstanding.minor), 0n);
+        const maturityTotal = mat.reduce((a, m) => a + asBigInt(m.need_prepare.minor), 0n);
         const spendTotal = spend.reduce((a, d) => a + asBigInt((d.amount as { minor?: unknown } | undefined)?.minor ?? 0n), 0n);
         const need = maturityTotal + spendTotal;
         return ok(
@@ -693,7 +693,7 @@ export function financeRoutes(app: FastifyInstance): void {
               planned_spend: wire(spendTotal),
               gap: wire(available - need),
               breach: available - need < 0n,
-              rows: mat.map((m) => ({ date: m.maturity_date, label: `${m.bank_name} ${m.contract_code}`, amount: m.outstanding, tone: m.tone })),
+              rows: mat.map((m) => ({ date: m.maturity_date, label: `${m.bank_name} ${m.contract_code}`, amount: m.need_prepare, principal: m.outstanding, interest: m.interest_to_due, tone: m.tone })),
             },
           },
           { maxAge: 30 },

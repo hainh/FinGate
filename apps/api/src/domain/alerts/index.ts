@@ -89,12 +89,17 @@ export async function evaluateAlerts(): Promise<Record<string, unknown>> {
   if (on('loan_maturity')) {
     for (const m of await maturityLadder({ companyIds: null }, { horizonDays: 30 })) {
       if (m.level < 1) continue;
+      const need = asBigInt(m.need_prepare.minor);
+      const interest = asBigInt(m.interest_to_due.minor);
+      const unplanned = !m.rollover?.prepared;
       hits.push({
         alert_type: 'loan_maturity',
         company_id: m.company_id,
         severity: m.level,
-        text: `${m.bank_name} ${m.contract_code} ${m.label} · ${compact(asBigInt(m.outstanding.minor))}`,
-        amount_minor: asBigInt(m.outstanding.minor),
+        text: `${m.bank_name} ${m.contract_code} ${m.label} · cần chuẩn bị ${compact(need)}${interest > 0n ? ` (gồm lãi ${compact(interest)})` : ''}${
+          unplanned ? ' · chưa có phương án đảo hạn' : ''
+        }`,
+        amount_minor: need,
         href: '/ngan-hang/dao-han',
         dedupe_key: `loan_maturity:${m.loan_id}:${day}`,
       });

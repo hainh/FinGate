@@ -264,7 +264,14 @@ export interface DocumentDetail {
     new_rate: string | null;
     collateral: string | null;
     proposal: string | null;
-    result?: { done_at: string | null; new_contract: string | null; actual_fee: MoneyWire | null; note: string | null } | null;
+    result?: {
+      done_at: string | null;
+      new_contract_code: string | null;
+      new_limit: MoneyWire | null;
+      new_rate: string | null;
+      actual_fee: MoneyWire | null;
+      note: string | null;
+    } | null;
   } | null;
   debt_code: string | null;
   note: string | null;
@@ -352,6 +359,8 @@ export interface MaturityRowWire {
   company_name: string;
   bank_name: string;
   outstanding: MoneyWire;
+  interest_to_due: MoneyWire;
+  fee_to_due: MoneyWire;
   maturity_date: string;
   days_to_due: number;
   need_prepare: MoneyWire;
@@ -517,6 +526,10 @@ export interface BankDebtRow {
   repaid: MoneyWire;
   currency: string;
   interest_rate: string;
+  term_months: number | null;
+  payment_frequency: 'monthly' | 'quarterly' | 'semiannual' | 'maturity';
+  repayment_method: 'interest_only' | 'equal_principal';
+  interest_to_maturity: MoneyWire;
   maturity_date: string;
   next_due_date: string | null;
   days_to_due: number;
@@ -524,6 +537,43 @@ export interface BankDebtRow {
   attachment_count: number;
   repayment_count: number;
   updated_at: string | null;
+}
+
+export interface LoanScheduleRow {
+  period: number;
+  due_date: string;
+  days: number;
+  principal: MoneyWire;
+  interest: MoneyWire;
+  fee: MoneyWire;
+  total: MoneyWire;
+  status: 'upcoming' | 'due' | 'overdue';
+}
+
+export interface LoanScheduleResult {
+  loan_id: string;
+  contract_code: string;
+  bank_name: string;
+  currency: string;
+  interest_rate: string;
+  term_months: number;
+  payment_frequency: 'monthly' | 'quarterly' | 'semiannual' | 'maturity';
+  repayment_method: 'interest_only' | 'equal_principal';
+  start_date: string;
+  maturity_date: string;
+  rows: LoanScheduleRow[];
+  totals: { principal: MoneyWire; interest: MoneyWire; fee: MoneyWire; total: MoneyWire };
+}
+
+export interface RolloverPreparation {
+  horizon_days: number;
+  available: MoneyWire;
+  need: MoneyWire;
+  maturity: MoneyWire;
+  planned_spend: MoneyWire;
+  gap: MoneyWire;
+  breach: boolean;
+  rows: { date: string; label: string; amount: MoneyWire; principal: MoneyWire; interest: MoneyWire; tone: string }[];
 }
 
 export interface BankDebtDetail extends BankDebtRow {

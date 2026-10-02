@@ -20,16 +20,17 @@ import {
   isDeadlinePast,
   moneyFromWire,
   type EvidenceType,
+  type Money,
 } from '@fingate/shared';
-import { useBankAccounts, useDecisionPack, useDocument } from '../app/queries.ts';
+import { useBankAccounts, useDecisionPack, useDocument, useRolloverResult } from '../app/queries.ts';
 import type { DocumentDetail, AttachmentRef } from '../app/types.ts';
-import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgPassword, FgStatusChip, FgText, FgTooltip } from '../components/primitives.tsx';
+import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgPassword, FgStatusChip, FgText, FgTextarea, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonParagraphs, FgSkeletonTable, FgTable, FgTabs } from '../components/uitk.tsx';
-import { AttachmentDeleteModal, AttachmentPreviewModal, AttachmentRow, AttachmentUploadModal } from '../components/attachments.tsx';
+import { AttachmentDeleteModal, AttachmentPreviewModal, AttachmentRow, AttachmentUploadModal, problemText } from '../components/attachments.tsx';
 import { FgApprovalTimeline, FgDecisionPack, OwnerLine, directionOf } from '../components/finance.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
-import { FgQuery } from '../components/pagekit.tsx';
+import { FgQuery, useToast } from '../components/pagekit.tsx';
 import { ApprovalConfirmModal, useTransitionRunner } from './approve-modal.tsx';
 import { AUDIT_ACTION_LABEL, ROLES_LABEL } from '../components/labels.ts';
 import { ApiRequestError, apiCall } from '../app/api.ts';
@@ -148,6 +149,8 @@ export function DocumentDetailScreen(): ReactNode {
                 </FgText>
               </div>
             </FgCard>
+
+            {d.kind === 'rollover' ? <RolloverResultCard doc={d} onChanged={() => void query.refetch()} /> : null}
 
             <FgTabs
               items={[
@@ -509,5 +512,106 @@ function DeleteDocumentModal({ doc, onClose, onDone }: { doc: DocumentDetail; on
         </div>
       ) : null}
     </FgModal>
+  );
+}
+
+/* ======================= RENEW-04 · kết quả thực hiện đảo hạn ======================= */
+
+function RolloverResultCard({ doc, onChanged }: { doc: DocumentDetail; onChanged: () => void }): ReactNode {
+  const mutation = useRolloverResult(doc._id);
+  const { message } = useToast();
+  const existing = doc.rollover?.result ?? null;
+  const [doneAt, setDoneAt] = useState(existing?.done_at ?? '');
+  const [contract, setContract] = useState(existing?.new_contract_code ?? '');
+  const [limit, setLimit] = useState<Money | null>(existing?.new_limit ? moneyFromWire(existing.new_limit) : null);
+  const [rate, setRate] = useState(existing?.new_rate ?? '');
+  const [fee, setFee] = useState<Money | null>(existing?.actual_fee ? moneyFromWire(existing.actual_fee) : null);
+  const [note, setNote] = useState(existing?.note ?? '');
+  const canSubmit = (doc.status === 'approved' || doc.status === 'paid') && doc.can.pay;
+
+  const submit = async (): Promise<void> => {
+    if (!doneAt) {
+      message.error('Nhập ngày thực hiện');
+      return;
+    }
+    if (!contract.trim()) {
+      message.error('Nhập số hợp đồng mới');
+      return;
+    }
+    if (!limit || limit.minor <= 0n) {
+      message.error('Nhập hạn mức mới');
+      return;
+    }
+    if (!/^\d+(\.\d{1,2})?$/.test(rate.replace(',', '.'))) {
+      message.error('Lãi suất mới không hợp lệ');
+      return;
+    }
+    try {
+      await mutation.mutateAsync({
+        done_at: doneAt,
+        new_contract_code: contract.trim(),
+        new_limit: { amount_minor: limit.minor.toString(), currency: limit.currency },
+        new_rate: rate.replace(',', '.'),
+        actual_fee: { amount_minor: (fee?.minor ?? 0n).toString(), currency: fee?.currency ?? limit.currency },
+        note: note.trim() || undefined,
+        if_match: doc.version,
+        request_id: crypto.randomUUID(),
+      });
+      message.success('Đã cập nhật kết quả đảo hạn');
+      onChanged();
+    } catch (e) {
+      message.error(problemText(e, 'Không cập nhật được kết quả'));
+    }
+  };
+
+  return (
+    <FgCard title="Phương án đảo hạn" style={{ marginBottom: 'var(--fg-space-4)' }}>
+      <div style={{ display: 'grid', gap: 6, marginBottom: 12 }}>
+        <FgText style="bodyS" color="muted">Phương án: {doc.rollover?.plan ?? '—'}</FgText>
+        {doc.rollover?.fee_estimate ? (
+          <FgText style="bodyS" color="muted">Phí dự kiến: {formatMoney(moneyFromWire(doc.rollover.fee_estimate) ?? 0n, { mode: 'full' })}</FgText>
+        ) : null}
+        {existing && !canSubmit ? (
+          <>
+            <FgText style="bodyS">
+              ✓ Đã thực hiện {existing.done_at ?? '—'} · HĐ {existing.new_contract_code ?? '—'} · LS {existing.new_rate ?? '—'}%/năm
+            </FgText>
+            {existing.new_limit ? (
+              <FgText style="bodyS" color="muted">Hạn mức mới: {formatMoney(moneyFromWire(existing.new_limit) ?? 0n, { mode: 'full' })}</FgText>
+            ) : null}
+            {existing.note ? <FgText style="caption" color="muted">{existing.note}</FgText> : null}
+          </>
+        ) : null}
+      </div>
+      {canSubmit ? (
+        <div style={{ display: 'grid', gap: 'var(--fg-space-3)', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}>
+          <FgField label="Ngày thực hiện *">
+            <FgInput value={doneAt} onChange={(e) => setDoneAt(e.target.value)} placeholder="YYYY-MM-DD" />
+          </FgField>
+          <FgField label="Số hợp đồng mới *">
+            <FgInput value={contract} onChange={(e) => setContract(e.target.value)} placeholder="HĐTD/2026/..." />
+          </FgField>
+          <FgField label="Hạn mức mới *">
+            <FgMoneyInput value={limit} onChange={setLimit} />
+          </FgField>
+          <FgField label="Lãi suất mới (%/năm) *">
+            <FgInput value={rate} onChange={(e) => setRate(e.target.value)} placeholder="9,5" />
+          </FgField>
+          <FgField label="Phí thực tế">
+            <FgMoneyInput value={fee} onChange={setFee} />
+          </FgField>
+          <div style={{ gridColumn: '1/-1' }}>
+            <FgField label="Ghi chú">
+              <FgTextarea value={note} onChange={(e) => setNote(e.target.value)} />
+            </FgField>
+          </div>
+          <div style={{ gridColumn: '1/-1' }}>
+            <FgButton variant="primary" loading={mutation.isPending} onClick={() => void submit()}>
+              Lưu kết quả thực hiện
+            </FgButton>
+          </div>
+        </div>
+      ) : null}
+    </FgCard>
   );
 }

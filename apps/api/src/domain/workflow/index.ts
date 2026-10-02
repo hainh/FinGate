@@ -441,6 +441,12 @@ export async function transition(input: {
   const { doc, actor, body } = input;
   const action = body.action;
 
+  // Phương án đảo hạn KHÔNG phải dòng tiền (vay mới trả nợ cũ ≈ ròng 0) — không đi qua
+  // bước `pay` để tránh ghi sổ cái như một khoản chi. Kết quả ghi ở RENEW-04.
+  if ((action === 'pay' || action === 'queue_payment') && doc.kind === 'rollover') {
+    throw new ApiError({ code: 'FG-WF-005', detail: 'Phương án đảo hạn không ghi nhận thanh toán — cập nhật kết quả thực hiện (RENEW-04)' });
+  }
+
   // 1. submit đi đường riêng
   if (action === 'submit') {
     return submitDocument({ doc, actor, ifMatch: body.if_match, requestId: body.request_id, ip: input.ip, opinion: body.opinion });
