@@ -27,6 +27,7 @@ import {
 } from '@fingate/shared';
 import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, internalTransferBodySchema, statementImportBodySchema } from './schemas.ts';
 import { accountSnapshots, asBigInt, docHref, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
+import { bookedBalance } from '../domain/ledger/index.ts';
 import { scopedFind } from '../lib/mongo.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
 import { nextDocumentCode } from '../domain/numbering/index.ts';
@@ -414,13 +415,24 @@ export function financeRoutes(app: FastifyInstance): void {
 
         const limitRaw = Number((req.query as { limit?: string }).limit ?? 500);
         const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 2000) : 500;
-        const entries = await Models.CashEntry.find({ account_id: id } as never)
-          .sort({ date: 1, created_at: 1 })
+        // Lấy `limit` bút toán MỚI NHẤT (sort giảm dần rồi mới limit) — tránh cắt nhầm
+        // các giao dịch gần đây khi tài khoản có > limit dòng, khiến "Số dư cuối" sai.
+        const recent = await Models.CashEntry.find({ account_id: id, date: { $lte: today() } } as never)
+          .sort({ date: -1, created_at: -1 })
           .limit(limit)
           .lean<Record<string, unknown>[]>();
+        const entries = recent.reverse(); // sắp tăng dần để chạy số dư dồn
+
+        // số dư đầu cửa sổ = Σ toàn bộ sổ cái (≤ hôm nay) − Σ các bút toán trong cửa sổ.
+        const totalNet = await bookedBalance(id, today());
+        let windowNet = 0n;
+        for (const e of entries) {
+          const amount = asBigInt(e.amount_minor);
+          windowNet += String(e.direction ?? 'in') === 'in' ? amount : -amount;
+        }
+        let running = totalNet - windowNet;
 
         // số dư đầu/cuối chạy dồn theo thời gian (in = +, out = −)
-        let running = 0n;
         const withBalance = entries.map((e) => {
           const amount = asBigInt(e.amount_minor);
           const direction = String(e.direction ?? 'in');

@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        name: [newsletter, sla-scan, alerts, recurring, maintenance]
+        name: [newsletter, sla-scan, alerts, recurring, maintenance, reconcile]
     steps:
       - name: POST /api/v1/tasks/${{ matrix.name }}
         run: |

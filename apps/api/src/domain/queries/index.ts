@@ -429,9 +429,13 @@ export interface AccountSnapshot {
 }
 
 /**
- * Số dư = bản `balances_daily` mới nhất mỗi tài khoản (không read model — §8.3).
+ * Số dư = **tính khi đọc từ sổ cái** (`cash_entries`) cho mọi tài khoản trong phạm vi.
+ * Cố ý KHÔNG đọc `balances_daily`: đó là bản materialize best-effort, có thể trễ so với
+ * sổ cái → màn Ngân hàng lệch với Lịch sử giao dịch. Σ theo `account_id` (không lọc
+ * company) để tài khoản Tập đoàn (company_id null, nhận bút toán từ nhiều công ty con)
+ * ra đúng số dư ở mọi phạm vi — danh sách account đã được scope trước đó.
  * `includeGroup`: công ty con vẫn thấy tài khoản Tập đoàn (company_id null, is_group)
- * bên cạnh tài khoản của chính mình — dùng cho danh sách/chọn nguồn tiền.
+ * bên cạnh tài khoản của chính mình — dùng cho danh sách/chọn nguồn tiền (§VIII).
  */
 export async function accountSnapshots(
   scope: ScopeLike,
@@ -452,15 +456,38 @@ export async function accountSnapshots(
   const ids = accounts.map((a) => String(a._id));
   // mongoose 9 aggregate $match KHÔNG cast string → ObjectId: phải tự cast (oid)
   const oidIds = ids.map((i) => oid(i));
-  // Số dư hiện có = bản ghi cuối kỳ **tính đến hôm nay** — dòng planned ngày tương lai
-  // (seed/jobs tạo trước) không được định nghĩa số dư hiện tại.
-  const latest = await scopedAggregate<{ _id: string; date: string; closing: unknown; blocked: unknown }>(
-    Models.BalanceDaily,
-    scopeOf(scope),
-    [{ $match: { account_id: { $in: oidIds as never }, date: { $lte: today() } } }, { $sort: { date: -1 } }, { $group: { _id: '$account_id', date: { $first: '$date' }, closing: { $first: '$closing_minor' }, blocked: { $first: '$blocked_minor' } } }],
-    'company_id',
-  );
-  const byAccount = new Map(latest.map((l) => [String(l._id), l]));
+  // Số dư hiện có = Σ bút toán thực tế **tính đến hôm nay** (bút toán ngày tương lai không
+  // định nghĩa số dư hiện tại). Không lọc company: account_ids đã nằm trong scope rồi.
+  const [ledger, blockedRows] = await Promise.all([
+    scopedAggregate<{ _id: string; in_minor: unknown; out_minor: unknown; last_date: unknown }>(
+      Models.CashEntry,
+      { companyIds: null },
+      [
+        { $match: { account_id: { $in: oidIds as never }, date: { $lte: today() } } },
+        {
+          $group: {
+            _id: '$account_id',
+            in_minor: { $sum: { $cond: [{ $eq: ['$direction', 'in'] }, '$amount_minor', 0] } },
+            out_minor: { $sum: { $cond: [{ $eq: ['$direction', 'out'] }, '$amount_minor', 0] } },
+            last_date: { $max: '$date' },
+          },
+        },
+      ],
+    ),
+    // `blocked_minor` vẫn lấy từ bản materialize (không thuộc sổ cái); không lọc company
+    // vì account_ids đã trong scope.
+    scopedAggregate<{ _id: string; blocked: unknown }>(
+      Models.BalanceDaily,
+      { companyIds: null },
+      [
+        { $match: { account_id: { $in: oidIds as never } } },
+        { $sort: { date: -1 } },
+        { $group: { _id: '$account_id', blocked: { $first: '$blocked_minor' } } },
+      ],
+    ),
+  ]);
+  const ledgerBy = new Map(ledger.map((l) => [String(l._id), l]));
+  const blockedBy = new Map(blockedRows.map((l) => [String(l._id), l]));
 
   // TK tập đoàn có company_id = null → lọc rỗng để tránh CastError khi tra tên công ty
   const companyIds = [...new Set(accounts.map((a) => (a.company_id ? String(a.company_id) : '')))].filter(Boolean);
@@ -471,9 +498,9 @@ export async function accountSnapshots(
   const groupCode = String(groupCompany?.code ?? 'GROUP');
 
   return accounts.map((a) => {
-    const rec = byAccount.get(String(a._id));
-    const closing = asBigInt(rec?.closing ?? 0n);
-    const blocked = asBigInt(rec?.blocked ?? 0n);
+    const lrec = ledgerBy.get(String(a._id));
+    const closing = asBigInt(lrec?.in_minor) - asBigInt(lrec?.out_minor);
+    const blocked = asBigInt(blockedBy.get(String(a._id))?.blocked ?? 0n);
     const min = asBigInt(a.min_balance_minor ?? 0n);
     const companyId = String(a.company_id ?? '');
     return {
@@ -492,9 +519,9 @@ export async function accountSnapshots(
       available: closing - blocked,
       min_balance: min,
       breach: closing - blocked < min,
-      // số dư liên tục theo sổ cái — không cần nhập tay hằng ngày nên không bao giờ "stale"
+      // số dư tính trực tiếp từ sổ cái — luôn đồng bộ, không bao giờ "stale"
       stale: false,
-      balance_date: rec ? String(rec.date) : null,
+      balance_date: lrec?.last_date ? String(lrec.last_date) : null,
       open_docs: 0,
     };
   });
