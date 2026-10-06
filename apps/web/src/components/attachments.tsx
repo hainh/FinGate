@@ -288,17 +288,17 @@ export function AttachmentPreviewModal({ att, onClose }: { att: AttachmentPrevie
     <FgModal
       open
       title={att.filename}
-      width={1040}
+      width="92vw"
       onCancel={onClose}
       footer={
         <FgButton onClick={() => window.open(attachmentHref(att, true), '_blank')}>⤓ Tải về</FgButton>
       }
     >
-      <div style={{ minHeight: 320, display: 'grid', placeItems: 'center' }}>
+      <div style={{ minHeight: 360, display: 'grid', placeItems: 'center' }}>
         {isImage(att) ? (
-          <img src={href} alt={att.filename} style={{ maxWidth: '100%', maxHeight: '82vh', objectFit: 'contain', borderRadius: 'var(--fg-radius-sm)' }} />
+          <img src={href} alt={att.filename} style={{ maxWidth: '100%', maxHeight: '86vh', objectFit: 'contain', borderRadius: 'var(--fg-radius-sm)' }} />
         ) : isPdf(att) ? (
-          <iframe src={href} title={att.filename} style={{ width: '100%', height: '82vh', border: 'none', borderRadius: 'var(--fg-radius-sm)' }} />
+          <iframe src={href} title={att.filename} style={{ width: '100%', height: '86vh', border: 'none', borderRadius: 'var(--fg-radius-sm)' }} />
         ) : (
           <FgEmptyState glyph="◇" title="Không xem trước được" description="Định dạng này chỉ tải về để mở bằng ứng dụng phù hợp." />
         )}
