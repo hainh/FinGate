@@ -3,7 +3,7 @@
  * chưa bị cấp duyệt tham chiếu. Luồng: prepare (presigned PUT) → PUT byte → confirm.
  */
 
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { message } from 'antd';
 import { EVIDENCE_LABEL, EVIDENCE_TYPES, type EvidenceType } from '@fingate/shared';
 import type { AttachmentRef, DocumentDetail } from '../app/types.ts';
@@ -282,6 +282,123 @@ export function AttachmentUploadModal({ doc, onClose, onDone }: { doc: DocumentD
   );
 }
 
+/** Xem ảnh có zoom: lăn chuột / chụm 2 ngón để phóng, kéo để di chuyển, nháy đúp để bật-tắt. */
+function ZoomableImage({ src, alt, maxHeight }: { src: string; alt: string; maxHeight: string }): ReactNode {
+  const MIN = 1;
+  const MAX = 6;
+  const [scale, setScale] = useState(1);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const pointers = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const panStart = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const pinchStart = useRef<{ dist: number; scale: number } | null>(null);
+
+  const clamp = (s: number): number => Math.min(MAX, Math.max(MIN, s));
+  const applyScale = (s: number): void => {
+    const next = clamp(s);
+    setScale(next);
+    if (next === MIN) setPos({ x: 0, y: 0 });
+  };
+  const reset = (): void => {
+    setScale(1);
+    setPos({ x: 0, y: 0 });
+  };
+
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
+
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent): void => {
+      e.preventDefault();
+      const next = clamp(scaleRef.current * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
+      setScale(next);
+      if (next === MIN) setPos({ x: 0, y: 0 });
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const onPointerDown = (e: React.PointerEvent): void => {
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size === 1) {
+      panStart.current = { x: e.clientX, y: e.clientY, px: pos.x, py: pos.y };
+      if (scale > MIN) setDragging(true);
+    } else if (pointers.current.size === 2) {
+      const [a, b] = [...pointers.current.values()];
+      pinchStart.current = { dist: Math.hypot(a.x - b.x, a.y - b.y), scale };
+      setDragging(false);
+    }
+  };
+  const onPointerMove = (e: React.PointerEvent): void => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size >= 2 && pinchStart.current) {
+      const [a, b] = [...pointers.current.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      applyScale(pinchStart.current.scale * (dist / pinchStart.current.dist));
+      return;
+    }
+    if (pointers.current.size === 1 && panStart.current && scale > MIN) {
+      setPos({ x: panStart.current.px + (e.clientX - panStart.current.x), y: panStart.current.py + (e.clientY - panStart.current.y) });
+    }
+  };
+  const onPointerUp = (e: React.PointerEvent): void => {
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size < 2) pinchStart.current = null;
+    if (pointers.current.size === 0) {
+      panStart.current = null;
+      setDragging(false);
+    }
+  };
+
+  return (
+    <div style={{ position: 'relative', width: '100%' }}>
+      <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 2, display: 'flex', gap: 6 }}>
+        <FgTooltip title="Thu nhỏ">
+          <FgButton size="small" aria-label="Thu nhỏ" disabled={scale <= MIN} onClick={() => applyScale(scale / 1.25)}>
+            −
+          </FgButton>
+        </FgTooltip>
+        <FgTooltip title="Phóng to">
+          <FgButton size="small" aria-label="Phóng to" disabled={scale >= MAX} onClick={() => applyScale(scale * 1.25)}>
+            +
+          </FgButton>
+        </FgTooltip>
+        <FgButton size="small" aria-label="Đặt lại" disabled={scale === MIN && pos.x === 0 && pos.y === 0} onClick={reset}>
+          1:1
+        </FgButton>
+      </div>
+      <div
+        ref={boxRef}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onDoubleClick={() => (scale > MIN ? reset() : applyScale(2.5))}
+        style={{ maxHeight, overflow: 'hidden', display: 'grid', placeItems: 'center', touchAction: 'none', cursor: scale > MIN ? 'grab' : 'zoom-in', userSelect: 'none' }}
+      >
+        <img
+          src={src}
+          alt={alt}
+          draggable={false}
+          style={{
+            maxWidth: '100%',
+            maxHeight,
+            objectFit: 'contain',
+            borderRadius: 'var(--fg-radius-sm)',
+            transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`,
+            transition: dragging ? 'none' : 'transform 0.15s ease-out',
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function AttachmentPreviewModal({ att, onClose }: { att: AttachmentPreviewable; onClose: () => void }): ReactNode {
   const href = attachmentHref(att);
   const isMobile = useIsMobile();
@@ -298,7 +415,7 @@ export function AttachmentPreviewModal({ att, onClose }: { att: AttachmentPrevie
     >
       <div style={{ minHeight: isMobile ? 220 : 360, display: 'grid', placeItems: 'center' }}>
         {isImage(att) ? (
-          <img src={href} alt={att.filename} style={{ maxWidth: '100%', maxHeight: bodyHeight, objectFit: 'contain', borderRadius: 'var(--fg-radius-sm)' }} />
+          <ZoomableImage src={href} alt={att.filename} maxHeight={bodyHeight} />
         ) : isPdf(att) ? (
           <iframe src={href} title={att.filename} style={{ width: '100%', height: bodyHeight, border: 'none', borderRadius: 'var(--fg-radius-sm)' }} />
         ) : (
