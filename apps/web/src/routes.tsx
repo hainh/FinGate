@@ -154,6 +154,7 @@ export function AppRoutes(): ReactNode {
       <Route path="/ngan-hang/khoan-vay" element={<Shell><BankDebtListScreen /></Shell>} /> {/* LOAN-01 */}
       <Route path="/ngan-hang/khoan-vay/moi" element={<Shell><BankDebtFormScreen /></Shell>} /> {/* LOAN-03 */}
       <Route path="/ngan-hang/khoan-vay/:id" element={<Shell><BankDebtDetailScreen /></Shell>} /> {/* LOAN-02 */}
+      <Route path="/ngan-hang/khoan-vay/:id/sua" element={<Shell><BankDebtFormScreen /></Shell>} /> {/* LOAN-02 sửa */}
       <Route path="/ngan-hang/khoan-vay/:id/lich-tra" element={<Shell><LoanScheduleScreen /></Shell>} /> {/* LOAN-04 */}
       <Route path="/ngan-hang/dao-han" element={<Shell><RolloversScreen /></Shell>} /> {/* RENEW-01 */}
       <Route path="/ngan-hang/dao-han/chuan-bi" element={<Shell><RolloverPreparationScreen /></Shell>} /> {/* RENEW-05 */}

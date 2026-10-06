@@ -17,6 +17,7 @@ import { scopedFind } from '../lib/mongo.ts';
 import { asBigInt, wire } from '../domain/queries/index.ts';
 import { buildHistoryEntry, mirrorAudit } from '../domain/audit/index.ts';
 import { nextSequentialCode } from '../domain/numbering/index.ts';
+import { storage } from '../storage/index.ts';
 import { registerOwnerAttachmentRoutes } from './attachment-owner.ts';
 import { mapOwnerAttachments } from './debt.ts';
 import { fetchLinkedDocs, settledFromLinks, type LinkedDocInfo, type OffsetLink } from '../domain/debt/index.ts';
@@ -265,6 +266,41 @@ export function bankDebtRoutes(app: FastifyInstance): void {
   );
 
   /* ------------------------ LOAN-04 · lịch nghĩa vụ trả nợ ------------------------ */
+
+  /** Xoá khoản nợ ngân hàng (KTT trở lên — quyền `loan:write`). */
+  app.route(
+    defineRoute({
+      method: 'DELETE',
+      url: '/bank-debts/:id',
+      config: { perms: ['loan:write'] as Permission[], screen: 'LOAN-02', summary: 'Xoá khoản nợ ngân hàng' },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const { id } = req.params as { id: string };
+        const d = await Models.BankDebt.findById(id).lean<BankDebtDoc | null>();
+        if (!d) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy khoản nợ' });
+        assertCompanyScope(req, String(d.company_id));
+
+        // Xoá chứng từ đính kèm (best-effort) — file trên storage + metadata mirror.
+        for (const raw of (d.attachments ?? []) as Record<string, unknown>[]) {
+          const key = raw.key ? String(raw.key) : '';
+          if (key) await storage().remove(key).catch(() => undefined);
+        }
+        await Models.Attachment.deleteMany({ owner_type: 'loan', owner_id: d._id } as never).exec();
+        await Models.BankDebt.deleteOne({ _id: id }).exec();
+
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'bank_debt.delete',
+          subject: { type: 'bank_debt', id, code: String(d.code ?? '') },
+          company_id: String(d.company_id),
+          diff_fields: { bank_name: d.bank_name, principal_minor: asBigInt(d.principal_minor).toString(), repayments: (d.repayment_links ?? []).length },
+          ip: requestCtx(req).ip,
+        });
+        return ok(reply, { data: { ok: true } });
+      },
+    }),
+  );
 
   app.route(
     defineRoute({

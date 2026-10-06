@@ -271,6 +271,30 @@ export function useCreateBankDebt() {
   });
 }
 
+export function useUpdateBankDebt(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => apiData(`/bank-debts/${id}`, { method: 'PATCH', body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bank-debt'] });
+      qc.invalidateQueries({ queryKey: ['bank-debts'] });
+      qc.invalidateQueries({ queryKey: ['rollovers'] });
+    },
+  });
+}
+
+export function useDeleteBankDebt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiData(`/bank-debts/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bank-debts'] });
+      qc.invalidateQueries({ queryKey: ['rollovers'] });
+      qc.invalidateQueries({ queryKey: ['overview'] });
+    },
+  });
+}
+
 export function useRepayBankDebt(id: string) {
   const qc = useQueryClient();
   return useMutation({
