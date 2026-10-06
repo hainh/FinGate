@@ -3,7 +3,7 @@
  * Cấn trừ với phiếu thu/chi — liên kết bất kỳ lúc nào, hiệu lực khi phiếu ở trạng thái "Đã thanh toán".
  */
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { DatePicker } from 'antd';
 import dayjs from 'dayjs';
@@ -393,6 +393,7 @@ export function OwnerAttachmentSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<OwnerAttachment | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const { message } = useToast();
   const list = attachments ?? [];
 
@@ -463,19 +464,20 @@ export function OwnerAttachmentSection({
       ) : (
         <FgText style="caption" color="muted">Chưa có chứng từ. Tải lên ảnh/PDF bên dưới để xem ngay tại đây.</FgText>
       )}
-      <label style={{ display: 'inline-block', marginTop: 12 }}>
-        <input
-          type="file"
-          accept="application/pdf,image/*"
-          style={{ display: 'none' }}
-          disabled={busy}
-          onChange={(e) => {
-            void onPick(e.target.files?.[0] ?? null);
-            e.target.value = '';
-          }}
-        />
-        <span className="fg-btn" style={{ cursor: 'pointer' }}>{busy ? 'Đang tải…' : '+ Thêm chứng từ (PDF/ảnh, tối đa 100MB)'}</span>
-      </label>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="application/pdf,image/*"
+        style={{ display: 'none' }}
+        disabled={busy}
+        onChange={(e) => {
+          void onPick(e.target.files?.[0] ?? null);
+          e.target.value = '';
+        }}
+      />
+      <FgButton variant="primary" loading={busy} onClick={() => fileRef.current?.click()}>
+        + Thêm chứng từ (PDF/ảnh, tối đa 100MB)
+      </FgButton>
       {error ? <div style={{ marginTop: 8 }}><FgAlert tone="danger" title={error} /></div> : null}
       {preview ? <AttachmentPreviewModal att={preview} onClose={() => setPreview(null)} /> : null}
     </FgCard>

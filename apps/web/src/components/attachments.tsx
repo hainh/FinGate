@@ -417,7 +417,7 @@ export function AttachmentPreviewModal({ att, onClose }: { att: AttachmentPrevie
         {isImage(att) ? (
           <ZoomableImage src={href} alt={att.filename} maxHeight={bodyHeight} />
         ) : isPdf(att) ? (
-          <iframe src={href} title={att.filename} style={{ width: '100%', height: bodyHeight, border: 'none', borderRadius: 'var(--fg-radius-sm)' }} />
+          <iframe src={`${href}#view=FitH`} title={att.filename} style={{ width: '100%', height: bodyHeight, border: 'none', borderRadius: 'var(--fg-radius-sm)' }} />
         ) : (
           <FgEmptyState glyph="◇" title="Không xem trước được" description="Định dạng này chỉ tải về để mở bằng ứng dụng phù hợp." />
         )}
