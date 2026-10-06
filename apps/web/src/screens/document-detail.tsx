@@ -123,18 +123,6 @@ export function DocumentDetailScreen(): ReactNode {
                   ) : null}
                 </>
               }
-              actions={
-                <FgTooltip title={d.can.export ? 'Xuất hồ sơ có watermark' : 'Bạn không có quyền xuất hồ sơ này'}>
-                  <FgButton
-                    disabled={!d.can.export}
-                    onClick={() =>
-                      void apiCall('/exports', { method: 'POST', body: { preset: 'ho-so', document_id: d._id } }).catch(() => undefined)
-                    }
-                  >
-                    ⤓ Xuất
-                  </FgButton>
-                </FgTooltip>
-              }
             />
 
             {/* header hồ sơ: số tiền FULL + status + overdue chip */}
