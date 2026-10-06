@@ -38,13 +38,21 @@ export function parsePayeeAccountLabel(label: string | null | undefined): Parsed
   return { companyCode, accountName, accountNumber };
 }
 
-/** Tìm tài khoản tiền khớp với mô tả trong "Đơn vị nhận tiền" (null = không khớp). */
-export async function resolvePayeeAccount(
-  parsed: ParsedPayeeAccount,
-): Promise<{ accountId: string; companyId: string; isGroup: boolean; kind: string } | null> {
+/** Thông tin công ty/tài khoản đích khi "Đơn vị nhận tiền" là một tài khoản nội bộ. */
+export interface InternalTransferTarget {
+  accountId: string;
+  companyId: string;
+  companyCode: string;
+  companyName: string;
+  isGroup: boolean;
+  kind: string;
+}
+
+/** Phân giải mô tả "Mã công ty - Tên ngân hàng/quỹ - Số tài khoản/mã quỹ" → tài khoản nội bộ. */
+async function resolveInternalAccount(parsed: ParsedPayeeAccount): Promise<InternalTransferTarget | null> {
   const company = await Models.Company.findOne({ code: parsed.companyCode.toUpperCase() })
-    .select({ _id: 1, is_group: 1 })
-    .lean<{ _id: unknown; is_group?: boolean } | null>();
+    .select({ _id: 1, code: 1, name: 1, is_group: 1 })
+    .lean<{ _id: unknown; code?: string; name?: string; is_group?: boolean } | null>();
   if (!company) return null;
   const filter = company.is_group
     ? { is_group: true, bank_name: parsed.accountName, account_number: parsed.accountNumber }
@@ -56,9 +64,38 @@ export async function resolvePayeeAccount(
   return {
     accountId: String(account._id),
     companyId: String(company._id),
-    isGroup: Boolean(account.is_group),
+    companyCode: String(company.code ?? parsed.companyCode.toUpperCase()),
+    companyName: String(company.name ?? ''),
+    isGroup: Boolean(company.is_group),
     kind: String(account.kind ?? 'bank'),
   };
+}
+
+/** Tìm tài khoản tiền khớp với mô tả trong "Đơn vị nhận tiền" (null = không khớp). */
+export async function resolvePayeeAccount(
+  parsed: ParsedPayeeAccount,
+): Promise<{ accountId: string; companyId: string; isGroup: boolean; kind: string } | null> {
+  const resolved = await resolveInternalAccount(parsed);
+  if (!resolved) return null;
+  return {
+    accountId: resolved.accountId,
+    companyId: resolved.companyId,
+    isGroup: resolved.isGroup,
+    kind: resolved.kind,
+  };
+}
+
+/**
+ * Detect "Đơn vị nhận tiền" là tài khoản của một công ty/tập đoàn trong hệ thống
+ * (cơ chế dùng chung với `createAutoIncomeForSpend`). Dùng ở tạo/sửa phiếu chi để
+ * đánh dấu + hiển thị "chuyển tiền nội bộ trong tập đoàn".
+ */
+export async function detectInternalTransferTarget(
+  payeeName: string | null | undefined,
+): Promise<InternalTransferTarget | null> {
+  const parsed = parsePayeeAccountLabel(payeeName);
+  if (!parsed) return null;
+  return resolveInternalAccount(parsed);
 }
 
 /**

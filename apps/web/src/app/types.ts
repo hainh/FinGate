@@ -473,6 +473,7 @@ export interface PayeeAccountOption {
   label: string;
   company_id: string | null;
   company_code: string;
+  company_name: string;
   is_group: boolean;
   kind: string;
   bank_name: string;

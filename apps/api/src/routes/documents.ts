@@ -54,6 +54,7 @@ import {
   attachmentRemoveBody,
 } from '@fingate/shared';
 import { loadDoc, transition, assertStepUp } from '../domain/workflow/index.ts';
+import { detectInternalTransferTarget } from '../domain/workflow/auto-income.ts';
 import { documentPermissions, approvedFromChiefAccountantUp } from '../domain/entitlement/index.ts';
 import { awaitingBadge, decisionPack, docHref, queryQueue } from '../domain/queries/index.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
@@ -262,6 +263,15 @@ export function documentRoutes(app: FastifyInstance): void {
 
         const kind = body.kind;
         const amountMinor = BigInt(body.amount.amount_minor);
+        // Phiếu CHI trả cho tài khoản của một công ty/tập đoàn khác → đánh dấu chuyển tiền
+        // nội bộ ngay khi lập (không chờ tới lúc thực thi); UI dùng để thông báo rõ ràng.
+        const internalTarget = kind === 'spend' ? await detectInternalTransferTarget(body.payee.name) : null;
+        const target = body.target
+          ? { company_id: body.target.company_id, account_id: body.target.account_id ?? null }
+          : internalTarget
+            ? { company_id: internalTarget.companyId, account_id: internalTarget.accountId }
+            : null;
+        const isInternal = Boolean(body.payee.is_internal) || Boolean(internalTarget);
         const evidence = await rebuildEvidence({
           kind,
           category_id: body.category_id ?? null,
@@ -285,7 +295,7 @@ export function documentRoutes(app: FastifyInstance): void {
             name: body.payee.name,
             tax_code: body.payee.tax_code ?? null,
             counterparty_id: body.payee.counterparty_id ?? null,
-            is_internal: Boolean(body.payee.is_internal),
+            is_internal: isInternal,
             bank_name: body.payee.bank_name ?? null,
             bank_account: body.payee.bank_account ?? null,
           },
@@ -297,7 +307,7 @@ export function documentRoutes(app: FastifyInstance): void {
             group_account_id: body.source.group_account_id ?? null,
             group_managed: Boolean(body.source.group_managed),
           },
-          target: body.target ? { company_id: body.target.company_id, account_id: body.target.account_id ?? null } : null,
+          target,
           planned_date: normalizePlannedDate(body.planned_date),
           business_date: body.business_date ?? vnDate(),
           priority: body.priority,
@@ -375,7 +385,20 @@ export function documentRoutes(app: FastifyInstance): void {
           if (body[key] !== undefined) set[key] = body[key];
         }
         if (body.planned_date !== undefined) set.planned_date = normalizePlannedDate(body.planned_date);
-        if (body.payee) set.payee = { ...doc.payee, ...body.payee };
+        if (body.payee) {
+          const mergedPayee = { ...(doc.payee as Record<string, unknown>), ...body.payee };
+          // Phiếu CHI đổi "Đơn vị nhận tiền" sang tài khoản nội bộ → cập nhật lại dấu nội bộ/đích.
+          if (String(doc.kind) === 'spend') {
+            const internalTarget = await detectInternalTransferTarget(String(mergedPayee.name ?? ''));
+            if (internalTarget) {
+              mergedPayee.is_internal = true;
+              set.target = { company_id: internalTarget.companyId, account_id: internalTarget.accountId };
+            } else {
+              mergedPayee.is_internal = false;
+            }
+          }
+          set.payee = mergedPayee;
+        }
         if (body.source?.account_id) await assertSourceAccountAllowed(String(doc.company_id), body.source.account_id);
         if (body.source) set.source = { ...doc.source, ...body.source };
         if (body.contract) set.contract = { ...doc.contract, ...body.contract };
@@ -1089,6 +1112,15 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
   const currentStep = steps.find((s) => s.state === 'current') ?? steps.find((s) => s.state === 'waiting') ?? null;
   const owner = currentStep?.user_id ? await Models.User.findById(currentStep.user_id).select({ display_name: 1 }).lean() : null;
 
+  // công ty đích (chuyển nội bộ / phiếu chi trả tài khoản nội bộ) — để UI hiện "A → B".
+  const targetRaw = (doc.target ?? null) as { company_id?: unknown; account_id?: unknown } | null;
+  const targetCompany = targetRaw?.company_id
+    ? await Models.Company.findById(String(targetRaw.company_id)).select({ name: 1, code: 1 }).lean<{ name?: string; code?: string } | null>()
+    : null;
+  const target = targetRaw
+    ? { ...targetRaw, company_name: targetCompany?.name ? String(targetCompany.name) : null, company_code: targetCompany?.code ? String(targetCompany.code) : null }
+    : null;
+
   return {
     _id: String(doc._id),
     code: String(doc.code),
@@ -1119,7 +1151,7 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
     contract: doc.contract ?? {},
     loan_id: doc.loan_id ? String(doc.loan_id) : null,
     budget: doc.budget ?? { in_plan: true },
-    target: doc.target ?? null,
+    target,
     rollover: doc.rollover ?? null,
     debt_code: doc.debt_code ?? null,
     note: doc.note ?? null,

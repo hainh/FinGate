@@ -370,12 +370,15 @@ export function financeRoutes(app: FastifyInstance): void {
         const accounts = await Models.BankAccount.find({ status: 'active' } as never)
           .select({ company_id: 1, is_group: 1, bank_name: 1, account_number: 1, account_name: 1, kind: 1 })
           .lean();
-        const companies = await Models.Company.find({}).select({ code: 1, is_group: 1 }).lean();
-        const cmap = new Map(companies.map((c) => [String(c._id), String(c.code ?? '')]));
-        const groupCode = String(companies.find((c) => c.is_group)?.code ?? 'GROUP');
+        const companies = await Models.Company.find({}).select({ code: 1, name: 1, is_group: 1 }).lean();
+        const cmap = new Map(companies.map((c) => [String(c._id), { code: String(c.code ?? ''), name: String(c.name ?? '') }]));
+        const group = companies.find((c) => c.is_group);
+        const groupCode = String(group?.code ?? 'GROUP');
+        const groupName = String(group?.name ?? 'Tập đoàn');
         const items = accounts
           .map((a) => {
-            const code = a.is_group ? groupCode : (cmap.get(String(a.company_id ?? '')) ?? '');
+            const company = a.is_group ? { code: groupCode, name: groupName } : cmap.get(String(a.company_id ?? ''));
+            const code = company?.code ?? '';
             if (!code) return null;
             const bankName = String(a.bank_name ?? '');
             const number = String(a.account_number ?? '');
@@ -386,6 +389,7 @@ export function financeRoutes(app: FastifyInstance): void {
               label: `${code} - ${bankName} - ${number}`,
               company_id: a.company_id ? String(a.company_id) : null,
               company_code: code,
+              company_name: company?.name ?? '',
               is_group: Boolean(a.is_group),
               kind: String(a.kind ?? 'bank'),
               bank_name: bankName,

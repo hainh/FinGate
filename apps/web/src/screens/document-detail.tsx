@@ -261,6 +261,13 @@ function SummaryTab({ doc }: { doc: DocumentDetail }): ReactNode {
               description={`Đối ứng: ${doc.company_name} −${formatMoney(moneyFromWire(doc.amount)!, { mode: 'compact' })} → ${doc.target.company_name ?? 'công ty nhận'} +${formatMoney(moneyFromWire(doc.amount)!, { mode: 'compact' })}`}
               style={{ marginBottom: 'var(--fg-space-4)' }}
             />
+          ) : doc.kind === 'spend' && doc.payee.is_internal ? (
+            <FgAlert
+              tone="info"
+              title="Chuyển tiền nội bộ trong tập đoàn"
+              description={`Từ ${doc.company_name} → ${doc.target?.company_name ?? 'công ty nhận'}: ${formatMoney(moneyFromWire(doc.amount)!, { mode: 'full' })}. Khi phiếu chi được duyệt xong và thực thi, hệ thống tự động tạo phiếu thu tương ứng tại công ty nhận và tự duyệt — KHÔNG tính vào chi phí / doanh thu.`}
+              style={{ marginBottom: 'var(--fg-space-4)' }}
+            />
           ) : null}
           <FgDecisionPack pack={p} direction={directionOf(doc.kind)} />
         </>
@@ -369,7 +376,7 @@ function CashTab({ doc }: { doc: DocumentDetail }): ReactNode {
             '—'
           )}
         </div>
-        {doc.kind === 'internal' && doc.target?.company_name ? (
+        {doc.target?.company_name && (doc.kind === 'internal' || (doc.kind === 'spend' && doc.payee.is_internal)) ? (
           <div className="fg-stat-row">
             <span className="fg-stat-label">Công ty đối ứng</span>
             <span>{doc.target.company_name}: +{formatMoney(amt, { mode: 'compact' })}</span>

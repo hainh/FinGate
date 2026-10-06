@@ -99,6 +99,13 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
     return [...accountOpts, ...nameOpts].filter((o) => (seen.has(o.value) ? false : (seen.add(o.value), true)));
   })();
 
+  // "Đơn vị nhận tiền" của phiếu CHI khớp tài khoản của một công ty khác trong tập đoàn
+  // → đây là chuyển tiền nội bộ (A → B); server cũng tự phát hiện và đánh dấu khi lưu.
+  const internalTarget =
+    kind === 'spend'
+      ? (payeeAccounts.data?.items ?? []).find((o) => o.value === f.payee_name && o.company_id !== currentCompany)
+      : undefined;
+
 
   const buildBody = () => {
     // Hồ sơ thuộc công ty đang chọn ở bộ chuyển phạm vi (§7.5), không phải công ty
@@ -198,6 +205,14 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
           tone="warning"
           title="Chưa chọn công ty"
           description="Phiếu phải thuộc một công ty cụ thể. Đang để “Toàn tập đoàn” — chọn công ty ở bộ chuyển phạm vi (góc trên bên phải) trước khi lưu."
+          style={{ marginBottom: 16 }}
+        />
+      ) : null}
+      {internalTarget ? (
+        <FgAlert
+          tone="info"
+          title="Chuyển tiền nội bộ trong tập đoàn"
+          description={`${companyName ?? 'Công ty nguồn'} chuyển cho ${internalTarget.is_group ? `Tập đoàn ${internalTarget.company_name || ''}`.trim() : internalTarget.company_name || internalTarget.company_code}. Khi phiếu chi được duyệt xong và thực thi, hệ thống tự động tạo phiếu thu tương ứng tại ${internalTarget.company_code} và tự duyệt — KHÔNG tính vào chi phí/doanh thu.`}
           style={{ marginBottom: 16 }}
         />
       ) : null}
