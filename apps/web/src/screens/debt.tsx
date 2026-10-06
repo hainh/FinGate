@@ -16,7 +16,7 @@ import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useToast } from '../components/pagekit.tsx';
-import { acceptOwnerFile, AttachmentPreviewModal, problemText, uploadOwnerAttachment } from '../components/attachments.tsx';
+import { acceptOwnerFile, attachmentHref, AttachmentPreviewModal, isImage, problemText, uploadOwnerAttachment } from '../components/attachments.tsx';
 import type { OwnerAttachment } from '../app/types.ts';
 import { STATUS_REGISTRY, type StatusKey } from '@fingate/shared';
 
@@ -414,14 +414,55 @@ export function OwnerAttachmentSection({
 
   return (
     <FgCard title="Chứng từ đính kèm">
-      {list.map((a) => (
-        <div key={a.id} className="fg-stat-row">
-          <FgText style="bodyS">{a.filename}</FgText>
-          <FgButton size="small" onClick={() => setPreview(a)}>
-            Xem
-          </FgButton>
+      {list.length ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
+          {list.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              onClick={() => setPreview(a)}
+              title={a.filename}
+              aria-label={`Xem ${a.filename}`}
+              style={{
+                width: 160,
+                padding: 0,
+                border: 'var(--fg-border-w-1) solid var(--fg-border-default)',
+                borderRadius: 'var(--fg-radius-sm)',
+                background: 'var(--fg-bg-subtle)',
+                cursor: 'pointer',
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+                textAlign: 'left',
+              }}
+            >
+              <div style={{ width: '100%', height: 120, display: 'grid', placeItems: 'center', overflow: 'hidden' }}>
+                {isImage(a) ? (
+                  <img src={attachmentHref(a)} alt={a.filename} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  <FgText style="caption" strong color="secondary">
+                    {a.mime === 'application/pdf' || /\.pdf$/i.test(a.filename) ? 'PDF' : 'TỆP'}
+                  </FgText>
+                )}
+              </div>
+              <div
+                style={{
+                  padding: 'var(--fg-space-1) var(--fg-space-2)',
+                  fontSize: 'var(--fg-font-caption-size)',
+                  color: 'var(--fg-text-secondary)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {a.filename}
+              </div>
+            </button>
+          ))}
         </div>
-      ))}
+      ) : (
+        <FgText style="caption" color="muted">Chưa có chứng từ. Tải lên ảnh/PDF bên dưới để xem ngay tại đây.</FgText>
+      )}
       <label style={{ display: 'inline-block', marginTop: 12 }}>
         <input
           type="file"
