@@ -173,7 +173,7 @@ export function BankDebtFormScreen(): ReactNode {
         title={editMode ? `Sửa phiếu nợ ngân hàng ${existing.data?.code ?? ''}` : 'Tạo phiếu nợ ngân hàng'}
         meta="Khoản vay — dư nợ tự trừ khi phiếu chi trả nợ được thực thi"
       />
-      <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'minmax(0,2fr) minmax(240px,1fr)' }}>
+      <div className="fg-form-grid">
         <FgCard>
           <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))' }}>
             <FgField label="Tên ngân hàng *" error={errors['bank_name']}>

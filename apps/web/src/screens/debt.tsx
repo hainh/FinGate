@@ -186,7 +186,7 @@ export function DebtVoucherFormScreen({ side }: { side?: 'debit' | 'credit' }): 
         title={editMode ? `Sửa phiếu công nợ ${existing.data?.code ?? ''}` : `Tạo phiếu công nợ — ${DEBT_SIDE_LABEL[effectiveSide]}`}
         meta={`TK tự suy theo loại đối tượng: KH 131 · NCC 331 · NV 334`}
       />
-      <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'minmax(0,2fr) minmax(240px,1fr)' }}>
+      <div className="fg-form-grid">
         <FgCard>
           <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))' }}>
             <FgField label="Loại đối tượng *" error={errors['party_type']}>

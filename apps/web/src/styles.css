@@ -254,6 +254,24 @@ body {
 
 /* ---------------- card & blocks ---------------- */
 
+/* bố cục form tạo: cột nhập liệu + cột tóm tắt/hành động; xếp dọc khi ≤767px (tránh đè) */
+.fg-form-grid {
+  display: grid;
+  gap: var(--fg-space-4);
+  grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr);
+  align-items: start;
+}
+
+@media (max-width: 767px) {
+  .fg-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.fg-form-grid > * {
+  min-width: 0;
+}
+
 .fg-card {
   background: var(--fg-bg-surface);
   border: var(--fg-border-w-1) solid var(--fg-border-default);

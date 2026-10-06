@@ -201,7 +201,7 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
           style={{ marginBottom: 16 }}
         />
       ) : null}
-      <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'minmax(0,2fr) minmax(240px,1fr)' }}>
+      <div className="fg-form-grid">
         <FgCard>
           <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))' }}>
             <div style={{ gridColumn: '1/-1' }}>
