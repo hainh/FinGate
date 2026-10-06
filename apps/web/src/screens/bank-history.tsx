@@ -68,13 +68,11 @@ export function BankAccountHistoryScreen(): ReactNode {
                     title: 'Thời điểm',
                     dataIndex: 'at',
                     key: 'at',
-                    width: 170,
                     render: (v: string | null) => <span className="fg-num">{atLabel(v)}</span>,
                   },
                   {
                     title: 'Loại',
                     key: 'dir',
-                    width: 90,
                     render: (_v, r) => <FgTag tone={r.direction_tone}>{r.direction_label}</FgTag>,
                   },
                   {
@@ -113,7 +111,6 @@ export function BankAccountHistoryScreen(): ReactNode {
                   {
                     title: 'Chi tiết',
                     key: 'doc',
-                    width: 130,
                     render: (_v, r) =>
                       r.document ? (
                         <Link to={r.document.href}>

@@ -255,19 +255,20 @@ export function renderCellByType(value: unknown, type: FgCellType, row?: Record<
 /** nhãn status an toàn cho mọi chỗ cần text (registry — không tự dịch). */
 export const statusText = (s: string): string => statusLabel(s);
 
-/* ---------------- FgTable (DS §7.10) — bảng desktop, card list <768px ---------------- */
+/* ---------------- FgTable (DS §7.10) — bảng desktop, card list ≤1023px ---------------- */
 
 export interface FgTableProps<T> extends TableProps<T> {
   /** cao hàng theo density — antd size "small" khi compact. */
   dense?: boolean;
   /**
-   * ≤767px: đổi mỗi dòng thành 1 card dọc (mặc định bật, DS §5.4).
+   * ≤1023px (tablet + mobile): đổi mỗi dòng thành 1 card dọc (mặc định bật, DS §5.4).
    * Tắt cho bảng nhiều cột cần giữ dạng lưới (vd Dòng tiền).
    */
   mobileCards?: boolean;
 }
 
 const XS_BREAKPOINT = 767;
+const CARD_BREAKPOINT = 1023;
 
 /** true khi viewport ≤767px (khớp token `--fg-bp-xs` và `@media max-width:767`). */
 export function useIsMobile(): boolean {
@@ -282,11 +283,24 @@ export function useIsMobile(): boolean {
   return isMobile;
 }
 
-export function FgTable<T extends object>({ size, mobileCards = true, dataSource, ...props }: FgTableProps<T>): ReactNode {
+/** true khi viewport ≤1023px (tablet + mobile, DS §5.4) — FgTable đổi sang card list. */
+export function useIsCardView(): boolean {
+  const [isCardView, setIsCardView] = useState(() => (typeof window !== 'undefined' ? window.innerWidth <= CARD_BREAKPOINT : false));
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${CARD_BREAKPOINT}px)`);
+    const onChange = (): void => setIsCardView(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return isCardView;
+}
+
+export function FgTable<T extends object>({ size, mobileCards = true, dataSource, className, ...props }: FgTableProps<T>): ReactNode {
   const density = useUi()?.density;
-  const isMobile = useIsMobile();
+  const isCardView = useIsCardView();
   const rows = dataSource ?? [];
-  if (isMobile && mobileCards && rows.length > 0) {
+  if (isCardView && mobileCards && rows.length > 0) {
     return (
       <FgMobileCardList<T>
         columns={props.columns}
@@ -302,7 +316,8 @@ export function FgTable<T extends object>({ size, mobileCards = true, dataSource
     <Table<T>
       size={size ?? (density === 'compact' ? 'small' : 'middle')}
       pagination={false}
-      scroll={{ x: 'max-content' }}
+      tableLayout="fixed"
+      className={`fg-table${className ? ` ${className}` : ''}`}
       dataSource={dataSource}
       {...props}
     />

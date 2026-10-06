@@ -71,7 +71,6 @@ export function BankAccountsScreen(): ReactNode {
                 {
                   title: 'Hình thức',
                   key: 'kind',
-                  width: 110,
                   render: (_v, r) =>
                     r.kind === 'cash' ? (
                       <span className="fg-chip" style={{ borderColor: 'var(--fg-status-attention-border)', color: 'var(--fg-status-attention-text)', background: 'var(--fg-status-attention-bg)' }}>
@@ -84,7 +83,7 @@ export function BankAccountsScreen(): ReactNode {
                     ),
                 },
                 { title: 'Số TK / Mã quỹ', dataIndex: 'account_number_masked', key: 'num', render: (v: string) => <span className="fg-mono">{v}</span> },
-                { title: 'Loại tiền', dataIndex: 'currency', key: 'cur', width: 90 },
+                { title: 'Loại tiền', dataIndex: 'currency', key: 'cur' },
                 {
                   title: 'Số dư',
                   key: 'bal',
@@ -129,7 +128,6 @@ export function BankAccountsScreen(): ReactNode {
                 {
                   title: '',
                   key: 'act',
-                  width: 90,
                   render: (_v, r) =>
                     canEdit(r) ? (
                       <span onClick={(e) => e.stopPropagation()}>

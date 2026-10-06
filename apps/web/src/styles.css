@@ -610,6 +610,33 @@ body {
   z-index: var(--fg-z-table-sticky);
 }
 
+/* ---------------- bảng: luôn vừa 100% khung chứa, cell tự xuống dòng (không scroll ngang) ---------------- */
+
+.fg-table,
+.fg-table .ant-table,
+.fg-table .ant-table-container,
+.fg-table .ant-table-content,
+.fg-table table {
+  width: 100%;
+}
+
+.fg-table table {
+  table-layout: fixed;
+}
+
+.fg-table .ant-table-cell {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* số/tiền trong bảng được phép xuống dòng để không kéo bảng rộng ra */
+.fg-table .ant-table-cell .fg-money,
+.fg-table .ant-table-cell .fg-num {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 /* ---------------- bulk bar ---------------- */
 
 .fg-bulkbar {

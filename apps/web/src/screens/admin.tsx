@@ -115,18 +115,16 @@ export function PersonnelScreen(): ReactNode {
               rowKey="user_id"
               dataSource={data.items}
               columns={[
-                { title: 'Họ tên', dataIndex: 'display_name', key: 'n', width: 150, ellipsis: true, render: (v: string) => <FgText strong>{v}</FgText> },
+                { title: 'Họ tên', dataIndex: 'display_name', key: 'n', ellipsis: true, render: (v: string) => <FgText strong>{v}</FgText> },
                 {
                   title: 'Email',
                   dataIndex: 'email',
                   key: 'e',
-                  width: 150,
                   ellipsis: true,
                 },
                 {
                   title: 'Công ty',
                   key: 'c',
-                  width: 250,
                   render: (_v, r) => {
                     const names = (r.companies?.length ? r.companies.map((c) => c.company_name) : [r.company_name]).filter(Boolean) as string[];
                     if (!names.length) return '—';
@@ -938,7 +936,6 @@ export function CompaniesScreen(): ReactNode {
                       title: 'Tên',
                       dataIndex: 'name',
                       key: 'name',
-                      width: 400,
                       ellipsis: true,
                       render: (v: string, r: CompanyRow) => (
                         <span>
@@ -1809,11 +1806,10 @@ export function AuditLogScreen(): ReactNode {
                 rowKey="_id"
                 dataSource={data.items}
                 columns={[
-                  { title: 'Thời gian', dataIndex: 'at', key: 'at', render: (v: string) => dateTimeLabel(v), width: 180 },
+                  { title: 'Thời gian', dataIndex: 'at', key: 'at', render: (v: string) => dateTimeLabel(v) },
                   {
                     title: 'Người',
                     key: 'actor',
-                    width: 180,
                     render: (_v, r) => (
                       <span>
                         <FgText strong>{r.actor.name}</FgText>
@@ -1824,11 +1820,10 @@ export function AuditLogScreen(): ReactNode {
                       </span>
                     ),
                   },
-                  { title: 'Hành động', dataIndex: 'action', key: 'act', width: 180, ellipsis: true, render: (v: string) => AUDIT_ACTION_LABEL[v] ?? v },
+                  { title: 'Hành động', dataIndex: 'action', key: 'act', ellipsis: true, render: (v: string) => AUDIT_ACTION_LABEL[v] ?? v },
                   {
                     title: 'Đối tượng',
                     key: 'subj',
-                    width: 180,
                     ellipsis: true,
                     render: (_v, r) => `${r.subject.type}${r.subject.code ? ` · ${r.subject.code}` : ''}`,
                   },
@@ -1837,7 +1832,7 @@ export function AuditLogScreen(): ReactNode {
                     key: 'diff',
                     render: (_v, r) => <AuditDiffCell fields={r.diff_fields} />,
                   },
-                  { title: 'IP', key: 'ip', width: 180, ellipsis: true, render: (_v, r) => <span className="fg-mono">{r.ip ?? '—'}</span> },
+                  { title: 'IP', key: 'ip', ellipsis: true, render: (_v, r) => <span className="fg-mono">{r.ip ?? '—'}</span> },
                 ]}
               />
             </div>

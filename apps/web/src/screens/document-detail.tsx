@@ -394,7 +394,7 @@ function AuditTab({ doc }: { doc: DocumentDetail }): ReactNode {
         rowKey={(_r, i) => String(i)}
         dataSource={doc.history}
         columns={[
-          { title: 'Thời gian', dataIndex: 'at', key: 'at', render: (v: string) => dateTimeLabel(v), width: 170 },
+          { title: 'Thời gian', dataIndex: 'at', key: 'at', render: (v: string) => dateTimeLabel(v) },
           { title: 'Người', key: 'actor', render: (_v: unknown, r: DocumentDetail['history'][number]) => `${r.actor.name ?? r.actor.role ?? '—'}` },
           { title: 'Hành động', dataIndex: 'action', key: 'action', render: (v: string) => AUDIT_ACTION_LABEL[v] ?? v },
           { title: 'Chuyển trạng thái', key: 'st', render: (_v: unknown, r: DocumentDetail['history'][number]) => (r.from || r.to ? `${r.from ?? ''} → ${r.to ?? ''}` : '—') },

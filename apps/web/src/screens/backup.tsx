@@ -65,12 +65,11 @@ export function BackupScreen(): ReactNode {
                   dataSource={data.items}
                   columns={[
                     { title: 'Tệp', dataIndex: 'file', key: 'file' },
-                    { title: 'Dung lượng', key: 'size', width: 140, render: (_v, r) => <span className="fg-num">{sizeLabel(r.size)}</span> },
-                    { title: 'Tạo lúc', key: 'at', width: 200, render: (_v, r) => dateTimeLabel(r.created_at) },
+                    { title: 'Dung lượng', key: 'size', render: (_v, r) => <span className="fg-num">{sizeLabel(r.size)}</span> },
+                    { title: 'Tạo lúc', key: 'at', render: (_v, r) => dateTimeLabel(r.created_at) },
                     {
                       title: '',
                       key: 'act',
-                      width: 120,
                       render: (_v, r) => (
                         <FgButton size="small" onClick={() => openDownload(`/system/backups/${encodeURIComponent(r.file)}`)}>
                           Tải về
