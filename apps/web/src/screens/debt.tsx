@@ -8,7 +8,7 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { DatePicker } from 'antd';
 import dayjs from 'dayjs';
 import { ACCOUNT_CODE_BY_PARTY, DEBT_PARTY_LABEL, DEBT_SIDE_LABEL, moneyFromWire, type DebtPartyType, type Money } from '@fingate/shared';
-import { ApiRequestError, currentScope } from '../app/api.ts';
+import { ApiRequestError } from '../app/api.ts';
 import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
 import { useBankDebtCandidates, useCreateDebtVoucher, useDebtCandidates, useDebtVoucher, useDebtVouchers, useDeleteDebtVoucher, useLinkDebt, useUnlinkDebt, useUpdateDebtVoucher } from '../app/queries.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTextarea } from '../components/primitives.tsx';
@@ -16,7 +16,8 @@ import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useToast } from '../components/pagekit.tsx';
-import { acceptOwnerFile, problemText, uploadOwnerAttachment } from '../components/attachments.tsx';
+import { acceptOwnerFile, AttachmentPreviewModal, problemText, uploadOwnerAttachment } from '../components/attachments.tsx';
+import type { OwnerAttachment } from '../app/types.ts';
 import { STATUS_REGISTRY, type StatusKey } from '@fingate/shared';
 
 const PARTY_OPTIONS = (Object.keys(DEBT_PARTY_LABEL) as DebtPartyType[]).map((v) => ({ value: v, label: `${DEBT_PARTY_LABEL[v]} (TK ${ACCOUNT_CODE_BY_PARTY[v]})` }));
@@ -386,11 +387,12 @@ export function OwnerAttachmentSection({
 }: {
   base: string;
   ownerId: string;
-  attachments: { id: string; filename: string; size: number; mime: string; type: string; version: number }[];
+  attachments: OwnerAttachment[];
   onChanged: () => void;
 }): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<OwnerAttachment | null>(null);
   const { message } = useToast();
   const list = attachments ?? [];
 
@@ -415,9 +417,9 @@ export function OwnerAttachmentSection({
       {list.map((a) => (
         <div key={a.id} className="fg-stat-row">
           <FgText style="bodyS">{a.filename}</FgText>
-          <a className="fg-link" href={`/api/v1/attachments/${a.id}?scope=${currentScope()}`} target="_blank" rel="noreferrer">
+          <FgButton size="small" onClick={() => setPreview(a)}>
             Xem
-          </a>
+          </FgButton>
         </div>
       ))}
       <label style={{ display: 'inline-block', marginTop: 12 }}>
@@ -434,6 +436,7 @@ export function OwnerAttachmentSection({
         <span className="fg-btn" style={{ cursor: 'pointer' }}>{busy ? 'Đang tải…' : '+ Thêm chứng từ (PDF/ảnh, tối đa 100MB)'}</span>
       </label>
       {error ? <div style={{ marginTop: 8 }}><FgAlert tone="danger" title={error} /></div> : null}
+      {preview ? <AttachmentPreviewModal att={preview} onClose={() => setPreview(null)} /> : null}
     </FgCard>
   );
 }

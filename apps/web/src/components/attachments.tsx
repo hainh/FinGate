@@ -14,11 +14,18 @@ import { FgEmptyState, FgModal, FgProgressBar } from './uitk.tsx';
 const IMAGE_MIME = /^image\//;
 const MAX_BYTES = 25 * 1024 * 1024;
 
-export function isImage(att: AttachmentRef): boolean {
+/** Tối thiểu để xem trước/tải — cả `AttachmentRef` (hồ sơ) lẫn `OwnerAttachment` (công nợ/khoản vay) đều thoả. */
+export interface AttachmentPreviewable {
+  id: string;
+  filename: string;
+  mime: string;
+}
+
+export function isImage(att: { mime: string; filename: string }): boolean {
   return IMAGE_MIME.test(att.mime) || /\.(png|jpe?g|gif|webp|bmp)$/i.test(att.filename);
 }
 
-export function isPdf(att: AttachmentRef): boolean {
+export function isPdf(att: { mime: string; filename: string }): boolean {
   return att.mime === 'application/pdf' || /\.pdf$/i.test(att.filename);
 }
 
@@ -50,7 +57,7 @@ export async function uploadOwnerAttachment(opts: {
 
 export { problemText };
 
-export function attachmentHref(att: AttachmentRef, download = false): string {
+export function attachmentHref(att: { id: string }, download = false): string {
   // `<img>`/`<iframe>`/window.open không gắn được header → truyền phạm vi qua query `scope`
   // (server đọc cả header lẫn query; thiếu sẽ xét nhầm về công ty nhà của phiên → 403).
   const params = new URLSearchParams();
@@ -275,7 +282,7 @@ export function AttachmentUploadModal({ doc, onClose, onDone }: { doc: DocumentD
   );
 }
 
-export function AttachmentPreviewModal({ att, onClose }: { att: AttachmentRef; onClose: () => void }): ReactNode {
+export function AttachmentPreviewModal({ att, onClose }: { att: AttachmentPreviewable; onClose: () => void }): ReactNode {
   const href = attachmentHref(att);
   return (
     <FgModal
