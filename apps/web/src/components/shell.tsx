@@ -34,11 +34,11 @@ const NAV: NavItem[] = [
   { to: '/cho-toi-duyet', label: 'Chờ tôi duyệt', glyph: '✍', badge: 'awaiting', mobile: true, perm: ['approval:act', 'payment:mark'], match: ['/cho-toi-duyet', '/toi-da-duyet', '/can-bo-sung'] },
   // Tạm thời đóng màn "Cần xử lý"
   // { to: '/can-xu-ly', label: 'Cần xử lý', glyph: '⚑', badge: 'unread', mobile: true, perm: 'doc:read', match: ['/can-xu-ly'] },
-  { to: '/chi', label: 'Chi', glyph: '↗', mobile: true, perm: 'doc:read', match: ['/chi'] },
-  { to: '/thu', label: 'Thu', glyph: '↙', mobile: true, perm: 'doc:read', match: ['/thu'] },
-  { to: '/ngan-hang/taikhoan', label: 'Ngân hàng', glyph: '▤', mobile: true, perm: 'bank:read', match: ['/ngan-hang', '/ngan-hang/taikhoan', '/ngan-hang/chuyen-noi-bo'] },
+  { to: '/chi', label: 'Chi', glyph: '↗', mobile: true, perm: 'doc:read', match: ['/chi', '/ho-so/chi'] },
+  { to: '/thu', label: 'Thu', glyph: '↙', mobile: true, perm: 'doc:read', match: ['/thu', '/ho-so/thu'] },
+  { to: '/ngan-hang/taikhoan', label: 'Ngân hàng', glyph: '▤', mobile: true, perm: 'bank:read', match: ['/ngan-hang', '/ngan-hang/taikhoan', '/ngan-hang/chuyen-noi-bo', '/ho-so/noi-bo'] },
   { to: '/ngan-hang/khoan-vay', label: 'Nợ ngân hàng', glyph: '⌂', mobile: true, perm: 'loan:read', match: ['/ngan-hang/khoan-vay'] },
-  { to: '/ngan-hang/dao-han', label: 'Đáo hạn', glyph: '⧗', mobile: true, perm: 'loan:read', dev: true, match: ['/ngan-hang/dao-han'] },
+  { to: '/ngan-hang/dao-han', label: 'Đáo hạn', glyph: '⧗', mobile: true, perm: 'loan:read', dev: true, match: ['/ngan-hang/dao-han', '/ho-so/dao-han'] },
   { to: '/cong-no/phai-thu', label: 'Công nợ', glyph: '≡', mobile: true, perm: 'debt:read', match: ['/cong-no'] },
   { to: '/dong-tien', label: 'Dòng tiền', glyph: '∿', mobile: true, perm: 'forecast:read', match: ['/dong-tien'] },
   { to: '/baocao', label: 'Báo cáo', glyph: '☰', mobile: true, perm: 'report:view', dev: true, match: ['/baocao'] },
@@ -136,6 +136,23 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
     return visible.filter((n) => n.mobile);
   }, [isMobile, location.pathname, can]);
 
+  // Mục menu đang active = mục có tiền tố `match` dài nhất khớp path hiện tại (khớp theo SEGMENT).
+  // Dùng match thay cho NavLink isActive để giữ active cả ở màn con (chi tiết/tạo: /ho-so/*, /cong-no/phieu/*…).
+  const activeTo = useMemo(() => {
+    const path = location.pathname;
+    let best: string | null = null;
+    let bestLen = -1;
+    for (const n of items) {
+      for (const m of n.match ?? [n.to]) {
+        if ((path === m || path.startsWith(`${m}/`)) && m.length > bestLen) {
+          bestLen = m.length;
+          best = n.to;
+        }
+      }
+    }
+    return best;
+  }, [items, location.pathname]);
+
   const badgeCount = (b?: string): number =>
     b === 'awaiting' ? (overview?.counts?.awaiting_me ?? 0) : b === 'unread' ? (unread?.count ?? 0) : 0;
 
@@ -170,8 +187,8 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
             <NavLink
               key={n.to}
               to={n.to}
-              className={({ isActive }) => 'fg-rail-item' + (isActive ? ' fg-rail-item-active' : '')}
-              aria-current={(n.match ?? [n.to]).some((m) => location.pathname.startsWith(m)) ? 'page' : undefined}
+              className={'fg-rail-item' + (n.to === activeTo ? ' fg-rail-item-active' : '')}
+              aria-current={n.to === activeTo ? 'page' : undefined}
               title={collapsed ? n.label : undefined}
             >
               <span className="fg-rail-icon" aria-hidden>
