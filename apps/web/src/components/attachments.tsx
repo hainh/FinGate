@@ -9,7 +9,7 @@ import { EVIDENCE_LABEL, EVIDENCE_TYPES, type EvidenceType } from '@fingate/shar
 import type { AttachmentRef, DocumentDetail } from '../app/types.ts';
 import { ApiRequestError, apiData, currentScope } from '../app/api.ts';
 import { FgAlert, FgButton, FgField, FgSelect, FgText, FgTooltip } from './primitives.tsx';
-import { FgEmptyState, FgModal, FgProgressBar } from './uitk.tsx';
+import { FgEmptyState, FgModal, FgProgressBar, useIsMobile } from './uitk.tsx';
 
 const IMAGE_MIME = /^image\//;
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -284,21 +284,23 @@ export function AttachmentUploadModal({ doc, onClose, onDone }: { doc: DocumentD
 
 export function AttachmentPreviewModal({ att, onClose }: { att: AttachmentPreviewable; onClose: () => void }): ReactNode {
   const href = attachmentHref(att);
+  const isMobile = useIsMobile();
+  const bodyHeight = isMobile ? '62vh' : '86vh';
   return (
     <FgModal
       open
       title={att.filename}
-      width="92vw"
+      width={isMobile ? '96vw' : '92vw'}
       onCancel={onClose}
       footer={
         <FgButton onClick={() => window.open(attachmentHref(att, true), '_blank')}>⤓ Tải về</FgButton>
       }
     >
-      <div style={{ minHeight: 360, display: 'grid', placeItems: 'center' }}>
+      <div style={{ minHeight: isMobile ? 220 : 360, display: 'grid', placeItems: 'center' }}>
         {isImage(att) ? (
-          <img src={href} alt={att.filename} style={{ maxWidth: '100%', maxHeight: '86vh', objectFit: 'contain', borderRadius: 'var(--fg-radius-sm)' }} />
+          <img src={href} alt={att.filename} style={{ maxWidth: '100%', maxHeight: bodyHeight, objectFit: 'contain', borderRadius: 'var(--fg-radius-sm)' }} />
         ) : isPdf(att) ? (
-          <iframe src={href} title={att.filename} style={{ width: '100%', height: '86vh', border: 'none', borderRadius: 'var(--fg-radius-sm)' }} />
+          <iframe src={href} title={att.filename} style={{ width: '100%', height: bodyHeight, border: 'none', borderRadius: 'var(--fg-radius-sm)' }} />
         ) : (
           <FgEmptyState glyph="◇" title="Không xem trước được" description="Định dạng này chỉ tải về để mở bằng ứng dụng phù hợp." />
         )}
