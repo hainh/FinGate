@@ -20,7 +20,6 @@ export type CounterpartyBankField = z.infer<typeof counterpartyBankField>;
 
 export const counterpartyUpsertBody = z.object({
   name: z.string().min(2).max(200).describe('Tên công ty / đối tác'),
-  tax_code: z.string().max(40).nullable().optional(),
   banks: z.array(counterpartyBankField).max(100).default([]),
   note: z.string().max(2000).nullable().optional(),
 });

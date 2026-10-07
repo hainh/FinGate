@@ -870,7 +870,6 @@ export interface CounterpartyBank {
 export interface CounterpartyRow {
   _id: string;
   name: string;
-  tax_code: string | null;
   banks: CounterpartyBank[];
   note: string | null;
   updated_at: string | null;

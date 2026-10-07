@@ -120,11 +120,6 @@ export function CounterpartyScreen(): ReactNode {
                       r.first ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                           <span style={{ fontWeight: 500 }}>{r.cp.name}</span>
-                          {r.cp.tax_code ? (
-                            <FgText style="caption" color="muted">
-                              MST {r.cp.tax_code}
-                            </FgText>
-                          ) : null}
                           {canWrite ? (
                             <div style={{ display: 'flex', gap: 8 }}>
                               <FgButton size="small" onClick={() => openEdit(r.cp)}>
@@ -185,7 +180,6 @@ function CounterpartyFormModal({
   const update = useUpdateCounterparty(editing?._id ?? '');
   const { message } = useToast();
   const [name, setName] = useState(editing?.name ?? '');
-  const [taxCode, setTaxCode] = useState(editing?.tax_code ?? '');
   const [banks, setBanks] = useState<BankDraft[]>(
     editing && editing.banks.length
       ? editing.banks.map((b) => ({ bank_name: b.bank_name, account_number: b.account_number }))
@@ -210,7 +204,6 @@ function CounterpartyFormModal({
 
     const body: Record<string, unknown> = {
       name: name.trim(),
-      tax_code: taxCode.trim() || null,
       banks: cleaned,
     };
     try {
@@ -244,9 +237,6 @@ function CounterpartyFormModal({
       <div style={{ display: 'grid', gap: 'var(--fg-space-4)' }}>
         <FgField label="Tên công ty / đối tác *" error={errors.name}>
           <FgInput value={name} onChange={(e) => setName(e.target.value)} placeholder="VD: Công ty TNHH ABC" />
-        </FgField>
-        <FgField label="Mã số thuế" error={errors.tax_code}>
-          <FgInput value={taxCode} onChange={(e) => setTaxCode(e.target.value)} />
         </FgField>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-2)' }}>

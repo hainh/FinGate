@@ -691,7 +691,6 @@ export const CounterpartySchema = new Schema(
     name: { type: String, required: true },
     /** tên chuẩn hoá (gộp khoảng trắng + lowercase) — khoá chống trùng. */
     name_key: { type: String, required: true },
-    tax_code: { type: String, default: null },
     /** nhiều tài khoản ngân hàng của đối tác. */
     banks: { type: [counterpartyBankEmbed], default: [] },
     note: { type: String, default: null },

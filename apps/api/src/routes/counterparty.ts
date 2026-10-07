@@ -25,7 +25,6 @@ interface BankLean {
 interface CounterpartyLean {
   _id: unknown;
   name?: string;
-  tax_code?: string | null;
   banks?: BankLean[];
   note?: string | null;
   updated_at?: Date | string;
@@ -35,7 +34,6 @@ function serialize(cp: CounterpartyLean): Record<string, unknown> {
   return {
     _id: String(cp._id),
     name: String(cp.name ?? ''),
-    tax_code: cp.tax_code ?? null,
     banks: (cp.banks ?? []).map((b, i) => ({
       _id: String(b._id ?? `${String(cp._id)}-${i}`),
       bank_name: String(b.bank_name ?? ''),
@@ -148,7 +146,6 @@ export function counterpartyRoutes(app: FastifyInstance): void {
         const created = await Models.Counterparty.create({
           name,
           name_key: nameKey,
-          tax_code: body.tax_code ?? null,
           banks,
           note: body.note ?? null,
           created_by: actor.user_id,
@@ -185,7 +182,6 @@ export function counterpartyRoutes(app: FastifyInstance): void {
           set.name = name;
           set.name_key = nameKey;
         }
-        if (body.tax_code !== undefined) set.tax_code = body.tax_code ?? null;
         if (body.note !== undefined) set.note = body.note ?? null;
         if (body.banks !== undefined) {
           set.banks = body.banks.map((b) => ({
