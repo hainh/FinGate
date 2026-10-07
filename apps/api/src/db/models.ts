@@ -634,11 +634,13 @@ export const DebtVoucherSchema = new Schema(
     code: { type: String, required: true, unique: true },
     company_id: { type: Schema.Types.ObjectId, required: true },
     party_type: { type: String, enum: ['customer', 'supplier', 'employee'], required: true },
-    /** mã khách hàng / nhà cung cấp / nhân viên. */
-    party_code: { type: String, required: true },
+    /** (legacy) mã khách hàng / nhà cung cấp / nhân viên — không còn dùng. */
+    party_code: { type: String, default: null },
     /** tên công ty / đối tượng. */
     party_name: { type: String, required: true },
     party_tax_code: { type: String, default: null },
+    /** Ngân hàng của công ty đối tác. */
+    party_bank_name: { type: String, default: null },
     /** STK của công ty đối tác. */
     party_bank_account: { type: String, default: null },
     /** liên kết danh bạ đối tác (đồng bộ định danh — mục tiêu phụ). */

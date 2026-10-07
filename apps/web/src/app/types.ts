@@ -602,9 +602,8 @@ export interface DebtVoucherRow {
   company_name: string;
   code: string;
   party_type: DebtPartyType;
-  party_code: string;
   party_name: string;
-  party_tax_code: string | null;
+  party_bank_name: string | null;
   party_bank_account: string | null;
   account_code: string;
   side: DebtSide;

@@ -277,14 +277,13 @@ export const DEBT_SIDE_LABEL: Record<DebtSide, string> = { debit: 'Nợ', credit
 export const debtVoucherUpsertBody = z.object({
   company_id: objectId.optional().describe('Mặc định theo phiên làm việc'),
   party_type: debtPartyType,
-  /** Mã khách hàng / nhà cung cấp / nhân viên. */
-  party_code: z.string().min(1).max(60),
-  /** Tên công ty / đối tượng. */
+  /** Tên công ty / đối tượng (chọn từ danh bạ hoặc nhập mới). */
   party_name: z.string().min(2).max(200),
-  party_tax_code: z.string().max(20).optional(),
+  /** Ngân hàng của công ty đối tác. */
+  party_bank_name: z.string().max(200).optional(),
   /** STK của công ty đối tác. */
   party_bank_account: z.string().max(40).optional(),
-  /** Nợ / Có. */
+  /** Nợ / Có — chọn thủ công, không suy diễn. */
   side: debtSide,
   value: moneyField,
   due_date: businessDate,
@@ -299,9 +298,8 @@ export const debtVoucherRow = z.object({
   company_name: z.string(),
   code: z.string(),
   party_type: debtPartyType,
-  party_code: z.string(),
   party_name: z.string(),
-  party_tax_code: z.string().nullable(),
+  party_bank_name: z.string().nullable(),
   party_bank_account: z.string().nullable(),
   account_code: debtAccountCode,
   side: debtSide,

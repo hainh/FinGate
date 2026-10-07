@@ -28,7 +28,7 @@ import { buildHistoryEntry, mirrorAudit } from '../domain/audit/index.ts';
 import { nextSequentialCode } from '../domain/numbering/index.ts';
 import { storage } from '../storage/index.ts';
 import { registerOwnerAttachmentRoutes } from './attachment-owner.ts';
-import { linkCounterpartyByName } from '../domain/counterparty/index.ts';
+import { ensureCounterparty } from '../domain/counterparty/index.ts';
 import { debtAgingBucket, debtStatus, fetchLinkedDocs, settledFromLinks, type LinkedDocInfo, type OffsetLink } from '../domain/debt/index.ts';
 
 interface DebtDoc {
@@ -36,9 +36,8 @@ interface DebtDoc {
   company_id: unknown;
   code?: string;
   party_type: string;
-  party_code: string;
   party_name: string;
-  party_tax_code?: string | null;
+  party_bank_name?: string | null;
   party_bank_account?: string | null;
   account_code: string;
   side: string;
@@ -74,9 +73,8 @@ function serializeDebt(
     company_name: opts.companyName ?? '',
     code: String(d.code ?? ''),
     party_type: d.party_type,
-    party_code: d.party_code,
     party_name: d.party_name,
-    party_tax_code: d.party_tax_code ?? null,
+    party_bank_name: d.party_bank_name ?? null,
     party_bank_account: d.party_bank_account ?? null,
     account_code: d.account_code,
     side: d.side,
@@ -120,7 +118,7 @@ export function debtRoutes(app: FastifyInstance): void {
         if (q.company_id) filter.company_id = q.company_id;
         if (q.counterparty) {
           const rx = { $regex: q.counterparty.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
-          filter.$or = [{ party_name: rx }, { party_code: rx }];
+          filter.$or = [{ party_name: rx }, { party_bank_name: rx }, { party_bank_account: rx }];
         }
         if (q.overdue_only === 'true') filter.due_date = { $lt: today() };
         const rows = await scopedFind<Record<string, unknown>>(Models.DebtVoucher, scope, filter, {
@@ -215,11 +213,15 @@ export function debtRoutes(app: FastifyInstance): void {
           code,
           company_id: companyId,
           party_type: body.party_type,
-          party_code: body.party_code,
           party_name: body.party_name,
-          party_tax_code: body.party_tax_code ?? null,
+          party_bank_name: body.party_bank_name ?? null,
           party_bank_account: body.party_bank_account ?? null,
-          counterparty_id: await linkCounterpartyByName(body.party_name),
+          counterparty_id: await ensureCounterparty({
+            name: body.party_name,
+            bank_name: body.party_bank_name ?? null,
+            account_number: body.party_bank_account ?? null,
+            created_by: actor.user_id,
+          }),
           account_code: accountCode,
           side: body.side,
           value_minor: minor,
@@ -298,13 +300,17 @@ export function debtRoutes(app: FastifyInstance): void {
           set.party_type = body.party_type;
           set.account_code = accountCodeFor(body.party_type);
         }
-        if (body.party_code !== undefined) set.party_code = body.party_code;
-        if (body.party_name !== undefined) {
-          set.party_name = body.party_name;
-          set.counterparty_id = await linkCounterpartyByName(body.party_name);
-        }
-        if (body.party_tax_code !== undefined) set.party_tax_code = body.party_tax_code || null;
+        if (body.party_name !== undefined) set.party_name = body.party_name;
+        if (body.party_bank_name !== undefined) set.party_bank_name = body.party_bank_name || null;
         if (body.party_bank_account !== undefined) set.party_bank_account = body.party_bank_account || null;
+        if (body.party_name !== undefined || body.party_bank_name !== undefined || body.party_bank_account !== undefined) {
+          set.counterparty_id = await ensureCounterparty({
+            name: body.party_name ?? d.party_name,
+            bank_name: (body.party_bank_name !== undefined ? body.party_bank_name : d.party_bank_name) ?? null,
+            account_number: (body.party_bank_account !== undefined ? body.party_bank_account : d.party_bank_account) ?? null,
+            created_by: actor.user_id,
+          });
+        }
         if (body.side !== undefined) set.side = body.side;
         if (body.value) {
           const minor = BigInt(body.value.amount_minor);

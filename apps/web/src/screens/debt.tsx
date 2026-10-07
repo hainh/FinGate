@@ -7,11 +7,11 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { DatePicker } from 'antd';
 import dayjs from 'dayjs';
-import { ACCOUNT_CODE_BY_PARTY, DEBT_PARTY_LABEL, DEBT_SIDE_LABEL, formatMoney, moneyFromWire, type DebtPartyType, type Money } from '@fingate/shared';
+import { ACCOUNT_CODE_BY_PARTY, DEBT_PARTY_LABEL, DEBT_SIDE_LABEL, formatMoney, moneyFromWire, type DebtPartyType, type DebtSide, type Money } from '@fingate/shared';
 import { ApiRequestError } from '../app/api.ts';
 import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
-import { useBankDebtCandidates, useCreateDebtVoucher, useDebtCandidates, useDebtVoucher, useDebtVouchers, useDeleteDebtVoucher, useLinkDebt, useUnlinkDebt, useUpdateDebtVoucher } from '../app/queries.ts';
-import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTextarea } from '../components/primitives.tsx';
+import { useBankDebtCandidates, useCounterparties, useCreateDebtVoucher, useDebtCandidates, useDebtVoucher, useDebtVouchers, useDeleteDebtVoucher, useLinkDebt, useUnlinkDebt, useUpdateDebtVoucher } from '../app/queries.ts';
+import { FgAlert, FgButton, FgField, FgFreeSelect, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTextarea } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
@@ -66,7 +66,7 @@ export function DebtListScreen({ side, title }: { side: 'debit' | 'credit'; titl
                 dataSource={data.items}
                 columns={[
                   { title: 'Mã', dataIndex: 'code', key: 'code', render: (v, r) => <Link className="fg-link" to={`/cong-no/phieu/${r._id}`}>{v}</Link> },
-                  { title: 'Đối tượng', key: 'party', render: (_v, r) => `${r.party_code} · ${r.party_name}` },
+                  { title: 'Đối tượng', dataIndex: 'party_name', key: 'party' },
                   { title: 'TK', dataIndex: 'account_code', key: 'acct' },
                   { title: 'Nợ/Có', dataIndex: 'side', key: 'side', render: (v: 'debit' | 'credit') => DEBT_SIDE_LABEL[v] },
                   { title: 'Giá trị', dataIndex: 'value', key: 'value', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
@@ -104,33 +104,33 @@ export function DebtVoucherFormScreen({ side }: { side?: 'debit' | 'credit' }): 
   const existing = useDebtVoucher(id);
   const create = useCreateDebtVoucher();
   const update = useUpdateDebtVoucher(id ?? '');
+  const counterparties = useCounterparties();
   const { message } = useToast();
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [prefilled, setPrefilled] = useState(false);
   const [f, setF] = useState<{
     party_type: DebtPartyType;
-    party_code: string;
     party_name: string;
-    party_tax_code: string;
+    party_bank_name: string;
     party_bank_account: string;
+    side: DebtSide;
     value: Money | null;
     due_date: string;
     priority: string;
     note: string;
-  }>({ party_type: 'customer', party_code: '', party_name: '', party_tax_code: '', party_bank_account: '', value: null, due_date: dayjs().add(7, 'day').format('YYYY-MM-DD'), priority: 'normal', note: '' });
+  }>({ party_type: 'customer', party_name: '', party_bank_name: '', party_bank_account: '', side: side ?? 'debit', value: null, due_date: dayjs().add(7, 'day').format('YYYY-MM-DD'), priority: 'normal', note: '' });
 
   const editMode = !!id;
-  const effectiveSide: 'debit' | 'credit' = editMode ? (existing.data?.side ?? 'debit') : (side ?? 'debit');
 
   useEffect(() => {
     const d = existing.data;
     if (!d || prefilled) return;
     setF({
       party_type: d.party_type,
-      party_code: d.party_code,
       party_name: d.party_name,
-      party_tax_code: d.party_tax_code ?? '',
+      party_bank_name: d.party_bank_name ?? '',
       party_bank_account: d.party_bank_account ?? '',
+      side: d.side,
       value: moneyFromWire(d.value),
       due_date: d.due_date,
       priority: d.priority,
@@ -139,10 +139,25 @@ export function DebtVoucherFormScreen({ side }: { side?: 'debit' | 'credit' }): 
     setPrefilled(true);
   }, [existing.data, prefilled]);
 
+  // Chọn tên trong danh bạ Đối tác / Khách hàng → gợi ý sẵn ngân hàng + số tài khoản của đối tác đó.
+  const cpList = counterparties.data?.items ?? [];
+  const nameOptions = cpList.map((c) => ({ value: c.name, label: c.name }));
+  const selectedCp = cpList.find((c) => c.name === f.party_name);
+  const bankOptions = [...new Set((selectedCp?.banks ?? []).map((b) => b.bank_name).filter(Boolean))].map((b) => ({ value: b, label: b }));
+  const accountOptions = (selectedCp?.banks ?? [])
+    .filter((b) => !f.party_bank_name || b.bank_name === f.party_bank_name)
+    .map((b) => ({ value: b.account_number, label: b.account_number }));
+
+  const onNameChange = (v: string): void => {
+    const cp = cpList.find((c) => c.name === v);
+    const first = cp?.banks?.[0];
+    setF((s) => ({ ...s, party_name: v, party_bank_name: first?.bank_name ?? '', party_bank_account: first?.account_number ?? '' }));
+  };
+
   const submit = async (): Promise<void> => {
     setErrors({});
-    if (!f.party_code.trim() || !f.party_name.trim()) {
-      message.error('Nhập mã và tên đối tượng');
+    if (!f.party_name.trim()) {
+      message.error('Nhập tên công ty / đối tượng');
       return;
     }
     if (!f.value || f.value.minor <= 0n) {
@@ -151,10 +166,10 @@ export function DebtVoucherFormScreen({ side }: { side?: 'debit' | 'credit' }): 
     }
     const body: Record<string, unknown> = {
       party_type: f.party_type,
-      party_code: f.party_code.trim(),
       party_name: f.party_name.trim(),
-      party_tax_code: f.party_tax_code.trim() || undefined,
+      party_bank_name: f.party_bank_name.trim() || undefined,
       party_bank_account: f.party_bank_account.trim() || undefined,
+      side: f.side,
       value: { amount_minor: f.value.minor.toString(), currency: f.value.currency },
       due_date: f.due_date,
       priority: f.priority,
@@ -171,7 +186,7 @@ export function DebtVoucherFormScreen({ side }: { side?: 'debit' | 'credit' }): 
         message.error('Chưa chọn công ty');
         return;
       }
-      const r = await create.mutateAsync({ company_id: company, side: effectiveSide, ...body });
+      const r = await create.mutateAsync({ company_id: company, ...body });
       message.success('Đã lưu phiếu công nợ');
       navigate(`/cong-no/phieu/${r._id}`);
     } catch (e) {
@@ -183,7 +198,7 @@ export function DebtVoucherFormScreen({ side }: { side?: 'debit' | 'credit' }): 
   return (
     <>
       <FgPageHeader
-        title={editMode ? `Sửa phiếu công nợ ${existing.data?.code ?? ''}` : `Tạo phiếu công nợ — ${DEBT_SIDE_LABEL[effectiveSide]}`}
+        title={editMode ? `Sửa phiếu công nợ ${existing.data?.code ?? ''}` : 'Tạo phiếu công nợ'}
         meta={`TK tự suy theo loại đối tượng: KH 131 · NCC 331 · NV 334`}
       />
       <div className="fg-form-grid">
@@ -192,17 +207,25 @@ export function DebtVoucherFormScreen({ side }: { side?: 'debit' | 'credit' }): 
             <FgField label="Loại đối tượng *" error={errors['party_type']}>
               <FgSelect options={PARTY_OPTIONS} value={f.party_type} onChange={(v) => setF((s) => ({ ...s, party_type: (v as DebtPartyType) ?? 'customer' }))} style={{ width: '100%' }} />
             </FgField>
-            <FgField label="Mã đối tượng *" error={errors['party_code']}>
-              <FgInput value={f.party_code} onChange={(e) => setF((s) => ({ ...s, party_code: e.target.value }))} placeholder="VD: KH-001 / NCC-010 / NV-001" />
+            <FgField label="Tên công ty / đối tượng *" error={errors['party_name']} help={selectedCp ? undefined : 'Chọn trong danh bạ hoặc nhập mới — sẽ tự tạo đối tác khi lưu'}>
+              <FgFreeSelect options={nameOptions} value={f.party_name} onChange={onNameChange} placeholder="Chọn trong danh bạ hoặc nhập mới" style={{ width: '100%' }} />
             </FgField>
-            <FgField label="Tên công ty / đối tượng *" error={errors['party_name']}>
-              <FgInput value={f.party_name} onChange={(e) => setF((s) => ({ ...s, party_name: e.target.value }))} />
+            <FgField label="Ngân hàng của công ty đối tác">
+              <FgFreeSelect options={bankOptions} value={f.party_bank_name} onChange={(v) => setF((s) => ({ ...s, party_bank_name: v }))} placeholder="Chọn hoặc nhập mới" style={{ width: '100%' }} />
             </FgField>
-            <FgField label="Mã số thuế">
-              <FgInput value={f.party_tax_code} onChange={(e) => setF((s) => ({ ...s, party_tax_code: e.target.value }))} />
+            <FgField label="Số tài khoản của công ty đối tác">
+              <FgFreeSelect options={accountOptions} value={f.party_bank_account} onChange={(v) => setF((s) => ({ ...s, party_bank_account: v }))} placeholder="Chọn hoặc nhập mới" style={{ width: '100%' }} />
             </FgField>
-            <FgField label="STK của công ty đối tác">
-              <FgInput value={f.party_bank_account} onChange={(e) => setF((s) => ({ ...s, party_bank_account: e.target.value }))} />
+            <FgField label="Phân loại *">
+              <FgSelect
+                options={[
+                  { value: 'debit', label: 'Nợ' },
+                  { value: 'credit', label: 'Có' },
+                ]}
+                value={f.side}
+                onChange={(v) => setF((s) => ({ ...s, side: (v as DebtSide) ?? 'debit' }))}
+                style={{ width: '100%' }}
+              />
             </FgField>
             <FgField label="Số tiền *" error={errors['value']} help={f.value ? formatMoney(f.value, { mode: 'full' }) : 'Gõ "2,5 tỷ" hoặc "850 tr"'}>
               <FgMoneyInput value={f.value} onChange={(v) => setF((s) => ({ ...s, value: v }))} />
@@ -233,7 +256,7 @@ export function DebtVoucherFormScreen({ side }: { side?: 'debit' | 'credit' }): 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)' }}>
           <FgCard title="Tóm tắt">
             <FgText style="bodyS" color="muted">
-              {editMode && existing.data ? `Phiếu ${existing.data.code} · ghi ${DEBT_SIDE_LABEL[existing.data.side]}` : `Phiếu mới — ghi ${DEBT_SIDE_LABEL[effectiveSide]}`}
+              {editMode && existing.data ? `Phiếu ${existing.data.code} · ghi ${DEBT_SIDE_LABEL[f.side]}` : `Phiếu mới · ghi ${DEBT_SIDE_LABEL[f.side]}`}
             </FgText>
             <div className="fg-stat-row" style={{ marginTop: 8 }}>
               <span className="fg-stat-label">Tài khoản kế toán</span>
