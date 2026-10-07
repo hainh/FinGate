@@ -273,9 +273,11 @@ export function documentRoutes(app: FastifyInstance): void {
             ? { company_id: internalTarget.companyId, account_id: internalTarget.accountId }
             : null;
         const isInternal = Boolean(body.payee.is_internal) || Boolean(internalTarget);
-        // đồng bộ định danh đối tác: nhận diện payee.name dạng "Tên - Ngân hàng - STK".
-        const counterpartyId =
-          body.payee.counterparty_id && String(body.payee.counterparty_id)
+        // đồng bộ định danh đối tác: nhận diện payee.name dạng "Tên - Ngân hàng - STK"
+        // (bỏ qua tài khoản nội bộ của tập đoàn để không làm bẩn danh bạ).
+        const counterpartyId = isInternal
+          ? null
+          : body.payee.counterparty_id && String(body.payee.counterparty_id)
             ? String(body.payee.counterparty_id)
             : await ensureCounterpartyFromLabel(body.payee.name, actor.user_id);
         const evidence = await rebuildEvidence({
@@ -393,22 +395,27 @@ export function documentRoutes(app: FastifyInstance): void {
         if (body.planned_date !== undefined) set.planned_date = normalizePlannedDate(body.planned_date);
         if (body.payee) {
           const mergedPayee = { ...(doc.payee as Record<string, unknown>), ...body.payee };
-          // đồng bộ định danh đối tác khi đổi người nhận/khách hàng.
-          if (body.payee.counterparty_id !== undefined) {
-            mergedPayee.counterparty_id = body.payee.counterparty_id ?? null;
-          } else {
-            const ensured = await ensureCounterpartyFromLabel(String(mergedPayee.name ?? ''), actor.user_id);
-            if (ensured) mergedPayee.counterparty_id = ensured;
-          }
+          let isInternalPayee = Boolean(mergedPayee.is_internal);
           // Phiếu CHI đổi "Đơn vị nhận tiền" sang tài khoản nội bộ → cập nhật lại dấu nội bộ/đích.
           if (String(doc.kind) === 'spend') {
             const internalTarget = await detectInternalTransferTarget(String(mergedPayee.name ?? ''));
             if (internalTarget) {
               mergedPayee.is_internal = true;
+              isInternalPayee = true;
               set.target = { company_id: internalTarget.companyId, account_id: internalTarget.accountId };
             } else {
               mergedPayee.is_internal = false;
+              isInternalPayee = false;
             }
+          }
+          // đồng bộ định danh đối tác khi đổi người nhận/khách hàng (bỏ qua tài khoản nội bộ).
+          if (isInternalPayee) {
+            mergedPayee.counterparty_id = null;
+          } else if (body.payee.counterparty_id !== undefined) {
+            mergedPayee.counterparty_id = body.payee.counterparty_id ?? null;
+          } else {
+            const ensured = await ensureCounterpartyFromLabel(String(mergedPayee.name ?? ''), actor.user_id);
+            if (ensured) mergedPayee.counterparty_id = ensured;
           }
           set.payee = mergedPayee;
         }

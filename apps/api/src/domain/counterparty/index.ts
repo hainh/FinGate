@@ -13,6 +13,7 @@
 
 import { COUNTERPARTY_SEPARATOR } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
+import { detectInternalTransferTarget } from '../workflow/auto-income.ts';
 
 export interface ParsedCounterparty {
   name: string;
@@ -111,12 +112,23 @@ export async function ensureCounterpartyFromLabel(
 ): Promise<string | null> {
   const parsed = parseCounterpartyLabel(label);
   if (!parsed) return null;
+  // Bỏ qua tài khoản NỘI BỘ của tập đoàn (`Mã công ty - NH - STK`) để không làm bẩn danh bạ.
+  if (await isInternalLabel(label)) return null;
   return ensureCounterparty({
     name: parsed.name,
     bank_name: parsed.bank_name,
     account_number: parsed.account_number,
     created_by: createdBy ?? null,
   });
+}
+
+/**
+ * Nhãn `Tên - Ngân hàng - Số tài khoản` có trỏ tới tài khoản tiền NỘI BỘ của tập đoàn không.
+ * Dùng chung cơ chế nhận diện với phiếu thu tự động khi thực thi phiếu chi.
+ */
+export async function isInternalLabel(label: string | null | undefined): Promise<boolean> {
+  if (!parseCounterpartyLabel(label)) return false;
+  return Boolean(await detectInternalTransferTarget(label));
 }
 
 /** Khớp đối tác theo tên (dùng cho phiếu công nợ — không tạo mới). */
@@ -130,12 +142,51 @@ export async function linkCounterpartyByName(partyName: string | null | undefine
 const SCAN_LIMIT = 20_000;
 
 /**
+ * Dọn các đối tác "nội bộ" đã lỡ tạo từ tài khoản tiền của chính tập đoàn
+ * (mọi tài khoản ngân hàng đều trỏ tài khoản nội bộ) + gỡ liên kết định danh.
+ */
+async function cleanupInternalCounterparties(): Promise<number> {
+  const cps = await Models.Counterparty.find({ 'banks.0': { $exists: true } } as never)
+    .select({ name: 1, banks: 1 })
+    .limit(SCAN_LIMIT)
+    .lean<{ _id: unknown; name?: string; banks?: { bank_name?: string; account_number?: string }[] }[]>();
+  const internalIds: string[] = [];
+  for (const cp of cps) {
+    const banks = cp.banks ?? [];
+    if (!banks.length) continue;
+    let allInternal = true;
+    for (const b of banks) {
+      const label = formatCounterpartyLabel(String(cp.name ?? ''), String(b.bank_name ?? ''), String(b.account_number ?? ''));
+      if (!(await isInternalLabel(label))) {
+        allInternal = false;
+        break;
+      }
+    }
+    if (allInternal) internalIds.push(String(cp._id));
+  }
+  if (!internalIds.length) return 0;
+  await Models.Counterparty.deleteMany({ _id: { $in: internalIds } } as never).exec();
+  await Models.Document.updateMany(
+    { 'payee.counterparty_id': { $in: internalIds } } as never,
+    { $set: { 'payee.counterparty_id': null } } as never,
+  ).exec();
+  await Models.DebtVoucher.updateMany(
+    { counterparty_id: { $in: internalIds } } as never,
+    { $set: { counterparty_id: null } } as never,
+  ).exec();
+  return internalIds.length;
+}
+
+/**
  * Quét toàn bộ phiếu thu/chi + phiếu công nợ để tạo đối tác và đồng bộ định danh.
- * Idempotent — chạy an toàn nhiều lần. Chỉ xử lý dữ liệu hợp lệ theo chuẩn 3 trường.
+ * Idempotent — chạy an toàn nhiều lần. Chỉ xử lý dữ liệu hợp lệ theo chuẩn 3 trường,
+ * và BỎ QUA tài khoản nội bộ của tập đoàn.
  */
 export async function syncCounterparties(
   log?: (msg: string) => void,
-): Promise<{ partners: number; documents: number; debts: number }> {
+): Promise<{ partners: number; documents: number; debts: number; removed: number }> {
+  const removed = await cleanupInternalCounterparties();
+
   const docs = await Models.Document.find({
     kind: { $in: ['spend', 'income'] },
     'payee.name': { $type: 'string', $ne: '' },
@@ -179,7 +230,7 @@ export async function syncCounterparties(
   const partners = await Models.Counterparty.countDocuments({}).exec();
   log?.(
     `[counterparty] quét ${docs.length} phiếu, ${debts.length} phiếu công nợ → ${partners} đối tác ` +
-      `(cập nhật ${documents} phiếu, ${debtsChanged} công nợ)`,
+      `(cập nhật ${documents} phiếu, ${debtsChanged} công nợ, dọn ${removed} nội bộ)`,
   );
-  return { partners, documents, debts: debtsChanged };
+  return { partners, documents, debts: debtsChanged, removed };
 }
