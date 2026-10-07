@@ -525,9 +525,10 @@ export function documentRoutes(app: FastifyInstance): void {
   /* ----------------------------- workflow -------------------------------- */
 
   /**
-   * Xoá cứng phiếu thu/chi (yêu cầu ADM-01). Chỉ cho phép CHÍNH người lập xoá khi:
-   *  - phiếu còn nháp, bị trả về bổ sung, hoặc bị từ chối; VÀ
-   *  - chưa có ai từ Kế toán trưởng trở lên duyệt.
+   * Xoá cứng phiếu thu/chi (yêu cầu ADM-01). Cho phép khi:
+   *  - phiếu đã BỊ TỪ CHỐI — bất kỳ ai có `doc:delete` (mặc định KTT / Kế toán viên) đều xoá được; HOẶC
+   *  - CHÍNH người lập xoá phiếu còn nháp / đang chờ Kế toán trưởng / bị trả về bổ sung, và
+   *    chưa có ai từ Kế toán trưởng trở lên duyệt.
    * Mirror audit TRƯỚC khi xoá để còn dấu vết, nhưng KHÔNG ghi vào history hồ sơ
    * (bản ghi sắp bị xoá). Bắt buộc step-up (ADR-14) vì là thao tác phá huỷ.
    */
@@ -535,7 +536,7 @@ export function documentRoutes(app: FastifyInstance): void {
     defineRoute({
       method: 'POST',
       url: '/documents/:id/delete',
-      config: { perms: ['doc:delete'] as Permission[], stepUp: true, screen: 'DOC-01', summary: 'Xoá phiếu thu/chi (nháp/chờ KTT/trả về/từ chối của người lập, chưa qua KTT ở vòng này)' },
+      config: { perms: ['doc:delete'] as Permission[], stepUp: true, screen: 'DOC-01', summary: 'Xoá phiếu thu/chi (từ chối: mọi người có quyền xoá; còn lại: người lập, chưa qua KTT ở vòng này)' },
       schema: { tags: ['documents'], body: documentDeleteBodySchema },
       handler: async (req, reply) => {
         const actor = requireActor(req);
@@ -545,14 +546,17 @@ export function documentRoutes(app: FastifyInstance): void {
         await assertVisible(req, String(doc.company_id));
 
         const history = (doc.history ?? []) as { action?: string | null; actor?: { role?: string | null } | null }[];
+        // Phiếu đã bị từ chối là trạng thái kết thúc: mọi người có `doc:delete` được xoá.
+        // Các trạng thái còn lại vẫn chỉ cho người lập và khi chưa qua cấp KTT trở lên.
         const allowed =
-          String(doc.created_by) === actor.user_id &&
-          ['draft', 'pending.ktt', 'changes_requested', 'rejected'].includes(doc.status) &&
-          !approvedFromChiefAccountantUp(history);
+          doc.status === 'rejected' ||
+          (String(doc.created_by) === actor.user_id &&
+            ['draft', 'pending.ktt', 'changes_requested'].includes(doc.status) &&
+            !approvedFromChiefAccountantUp(history));
         if (!allowed) {
           throw new ApiError({
             code: 'FG-RBAC-001',
-            detail: 'Chỉ người lập xoá được phiếu còn nháp / đang chờ Kế toán trưởng / bị trả về bổ sung / bị từ chối và chưa qua cấp Kế toán trưởng trở lên ở vòng này',
+            detail: 'Phiếu đã bị từ chối thì ai có quyền xoá cũng xoá được; các trạng thái khác chỉ người lập xoá được (phiếu còn nháp / đang chờ Kế toán trưởng / bị trả về bổ sung) và chưa qua cấp Kế toán trưởng trở lên ở vòng này',
           });
         }
 

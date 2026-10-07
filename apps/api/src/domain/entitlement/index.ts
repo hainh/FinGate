@@ -247,6 +247,9 @@ export function documentPermissions(
   // bị trả về bổ sung, hoặc bị từ chối — miễn chưa ai từ KTT trở lên duyệt ở vòng này.
   const creatorMaintainable = mine && MAINTAINABLE_STATUSES.includes(doc.status) && !doc.approved_from_ktt_up;
   const editable = creatorMaintainable && has('doc:create');
+  // Phiếu ĐÃ BỊ TỪ CHỐI: bất kỳ ai có quyền xoá (mặc định Kế toán trưởng / Kế toán viên) đều
+  // xoá được — không phụ thuộc người lập, cũng không vướng gate đã từng qua KTT trở lên.
+  const deletable = doc.status === 'rejected' || creatorMaintainable;
   const currentSteps = doc.steps.filter((s) => s.state === 'current' || s.state === 'waiting');
   const iAmStep = currentSteps.filter(
     (s) =>
@@ -273,9 +276,9 @@ export function documentPermissions(
     read: inScope && has('doc:read'),
     edit: editable,
     submit: (doc.status === 'draft' || doc.status === 'changes_requested' || doc.status === 'rejected') && mine && has('doc:submit'),
-    // Xoá cứng phiếu: chỉ NGƯỜI LẬP, khi phiếu còn nháp / bị trả về bổ sung / bị từ chối
-    // và chưa có ai từ Kế toán trưởng trở lên duyệt.
-    delete: has('doc:delete') && creatorMaintainable,
+    // Xoá cứng phiếu: người lập khi phiếu còn nháp / bị trả về bổ sung / bị từ chối và chưa
+    // có ai từ KTT trở lên duyệt; riêng phiếu đã bị từ chối thì ai có doc:delete cũng xoá được.
+    delete: has('doc:delete') && deletable,
     approve: approveAllowed,
     reject: approveAllowed,
     request_changes: approveAllowed,

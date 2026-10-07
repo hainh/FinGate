@@ -126,7 +126,7 @@ describe('documentPermissions — xoá/sửa của người lập', () => {
     expect(c.delete).toBe(true);
   });
 
-  it('bị từ chối sau khi KTT đã duyệt: KHÔNG sửa/xoá được', () => {
+  it('bị từ chối sau khi KTT đã duyệt: KHÔNG sửa nhưng VẪN xoá được', () => {
     const c = perms('rejected', {
       history: [
         { action: 'submit', actor: { role: 'staff' } },
@@ -135,12 +135,43 @@ describe('documentPermissions — xoá/sửa của người lập', () => {
       ],
     });
     expect(c.edit).toBe(false);
-    expect(c.delete).toBe(false);
+    expect(c.delete).toBe(true);
   });
 
   it('không phải người lập: KHÔNG sửa/xoá được', () => {
     const c = perms('draft', { mine: false });
     expect(c.edit).toBe(false);
+    expect(c.delete).toBe(false);
+  });
+
+  it('không phải người lập, phiếu bị từ chối: xoá được (KTT/kế toán viên)', () => {
+    const c = perms('rejected', {
+      mine: false,
+      history: [
+        { action: 'submit', actor: { role: 'staff' } },
+        { action: 'approve', actor: { role: 'chief_accountant' } },
+        { action: 'reject', actor: { role: 'director' } },
+      ],
+    });
+    expect(c.edit).toBe(false);
+    expect(c.delete).toBe(true);
+  });
+
+  it('thiếu quyền doc:delete: không xoá được dù bị từ chối', () => {
+    const c = documentPermissions(
+      { user_id: 'u2', permissions: ['doc:read'], amount_limit_minor: 0n, role: 'staff' },
+      {
+        status: 'rejected',
+        created_by: 'u1',
+        amount_minor: 1_000_000n,
+        steps: [],
+        evidence_missing: [],
+        company_id: 'A',
+        actor_companies: ['A'],
+        delegatedStepOrders: [],
+        approved_from_ktt_up: false,
+      },
+    );
     expect(c.delete).toBe(false);
   });
 });
