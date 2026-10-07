@@ -32,8 +32,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { to: '/dashboard', label: 'Tổng quan', glyph: '◧', mobile: true, perm: 'doc:read', match: ['/dashboard', '/hom-nay'] },
   { to: '/cho-toi-duyet', label: 'Chờ tôi duyệt', glyph: '✍', badge: 'awaiting', mobile: true, perm: ['approval:act', 'payment:mark'], match: ['/cho-toi-duyet', '/toi-da-duyet', '/can-bo-sung'] },
-  // Tạm thời đóng màn "Cần xử lý"
-  // { to: '/can-xu-ly', label: 'Cần xử lý', glyph: '⚑', badge: 'unread', mobile: true, perm: 'doc:read', match: ['/can-xu-ly'] },
+  { to: '/can-xu-ly', label: 'Cần xử lý', glyph: '⚑', badge: 'unread', mobile: true, perm: 'doc:read', match: ['/can-xu-ly'] },
   { to: '/chi', label: 'Chi', glyph: '↗', mobile: true, perm: 'doc:read', match: ['/chi', '/ho-so/chi'] },
   { to: '/thu', label: 'Thu', glyph: '↙', mobile: true, perm: 'doc:read', match: ['/thu', '/ho-so/thu'] },
   { to: '/ngan-hang/taikhoan', label: 'Ngân hàng', glyph: '▤', mobile: true, perm: 'bank:read', match: ['/ngan-hang', '/ngan-hang/taikhoan', '/ngan-hang/chuyen-noi-bo', '/ho-so/noi-bo'] },
