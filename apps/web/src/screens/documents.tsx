@@ -61,6 +61,15 @@ const SPEND_LANES = [
   { key: 'khac', title: 'Hủy / hết hiệu lực', statuses: ['cancelled', 'expired', 'overdue'] },
 ];
 
+/** THU-01 — swimlane màn Thu: "đã duyệt chờ thu" lên đầu cho kế toán thực hiện. */
+const INCOME_LANES = [
+  { key: 'cho-thu', title: 'Đã duyệt — chờ thu', statuses: ['approved', 'processing'] },
+  { key: 'cho-duyet', title: 'Đang chờ duyệt', statuses: ['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'] },
+  { key: 'nhap', title: 'Nháp / cần bổ sung / từ chối', statuses: ['draft', 'changes_requested', 'rejected'] },
+  { key: 'da-thu', title: 'Đã thu', statuses: ['paid'] },
+  { key: 'khac', title: 'Hủy / hết hiệu lực', statuses: ['cancelled', 'expired', 'overdue'] },
+];
+
 export function useDocColumns(sortable = false): TableColumnsType<QueueRow> {
   return useMemo(
     () =>
@@ -516,9 +525,19 @@ export function SpendPaidScreen(): ReactNode {
   return <DocListScreen title="Chi đã thanh toán" source="documents" fixed={{ kind: 'spend', status: 'paid' }} sortOnTable />;
 }
 
-/** THU-01. */
+/** THU-01 — danh sách thu (swimlane: đã duyệt chờ thu lên đầu cho kế toán). */
 export function IncomeListScreen(): ReactNode {
-  return <DocListScreen title="Phiếu thu" source="documents" fixed={{ kind: 'income' }} createHref="/thu/moi" createLabel="+ Khoản thu" sortOnTable />;
+  return (
+    <DocListScreen
+      title="Phiếu thu"
+      source="documents"
+      fixed={{ kind: 'income' }}
+      createHref="/thu/moi"
+      createLabel="+ Khoản thu"
+      sortOnTable
+      swimlanes={INCOME_LANES}
+    />
+  );
 }
 
 /** THU-04 — thu quá hạn. */
