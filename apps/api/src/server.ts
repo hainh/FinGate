@@ -12,6 +12,7 @@ import { connectDb, disconnectDb, dbUp } from './lib/mongo.ts';
 import { applyIndexes } from './db/indexes.ts';
 import { seedIfEmpty } from './db/seed.ts';
 import { bootstrapAdminIfEmpty, ensureGroupCompany } from './db/bootstrap.ts';
+import { syncCounterparties } from './domain/counterparty/index.ts';
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -25,6 +26,12 @@ async function main(): Promise<void> {
     if (env.SEED_ON_BOOT === 'true') await seedIfEmpty(app.log);
     // DB trắng (chưa seed demo) → luôn có tài khoản quản trị đầu tiên để đăng nhập.
     else if (env.BOOTSTRAP_ON_BOOT === 'true') await bootstrapAdminIfEmpty(app.log);
+    // Quét phiếu thu/chi cũ để tạo danh bạ đối tác (chỉ chạy khi khởi động lại backend).
+    try {
+      await syncCounterparties((m) => app.log.info(m));
+    } catch (err) {
+      app.log.error({ err }, 'không quét được danh bạ đối tác — bỏ qua');
+    }
   } catch (err) {
     // DB chưa lên (Atlas M0 bị pause / mongo container chưa ready) → vẫn boot để
     // /healthz trả về degraded, Render không kill loop vô hạn

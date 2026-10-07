@@ -856,3 +856,33 @@ export interface BackupFile {
   size: number;
   created_at: string;
 }
+
+/* ---------------- danh bạ đối tác / khách hàng ---------------- */
+
+export interface CounterpartyBank {
+  _id: string;
+  bank_name: string;
+  account_number: string;
+  branch: string | null;
+  account_name: string | null;
+}
+
+export interface CounterpartyRow {
+  _id: string;
+  name: string;
+  tax_code: string | null;
+  banks: CounterpartyBank[];
+  note: string | null;
+  updated_at: string | null;
+}
+
+/** GET /counterparties/options — gợi ý select box "Khách hàng trả tiền"/"Đơn vị nhận tiền". */
+export interface CounterpartyOption {
+  _id: string;
+  counterparty_id: string;
+  name: string;
+  bank_name: string;
+  account_number: string;
+  value: string;
+  label: string;
+}

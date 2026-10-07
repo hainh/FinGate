@@ -16,6 +16,8 @@ import type {
   BankDebtDetail,
   BankDebtRow,
   CashflowHistoryResult,
+  CounterpartyOption,
+  CounterpartyRow,
   DashboardOverview,
   DecisionPack,
   DebtVoucherDetail,
@@ -371,6 +373,57 @@ export function useDeleteDebtVoucher() {
   return useMutation({
     mutationFn: (id: string) => apiData(`/debts/${id}`, { method: 'DELETE' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['debt-vouchers'] }),
+  });
+}
+
+/* ---------------- danh bạ đối tác / khách hàng ---------------- */
+
+export function useCounterparties(q?: string) {
+  return useQuery({
+    queryKey: ['counterparties', q ?? ''],
+    queryFn: () => apiCall<{ items: CounterpartyRow[] }>('/counterparties', { query: { q } }),
+  });
+}
+
+/** Gợi ý cho select box "Khách hàng trả tiền"/"Đơn vị nhận tiền" (đối tác + tài khoản NH). */
+export function useCounterpartyOptions() {
+  return useQuery({
+    queryKey: ['counterparty-options'],
+    staleTime: 300_000,
+    queryFn: () => apiCall<{ items: CounterpartyOption[] }>('/counterparties/options'),
+  });
+}
+
+export function useCreateCounterparty() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => apiData<{ _id: string }>('/counterparties', { method: 'POST', body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['counterparties'] });
+      qc.invalidateQueries({ queryKey: ['counterparty-options'] });
+    },
+  });
+}
+
+export function useUpdateCounterparty(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Record<string, unknown>) => apiData(`/counterparties/${id}`, { method: 'PATCH', body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['counterparties'] });
+      qc.invalidateQueries({ queryKey: ['counterparty-options'] });
+    },
+  });
+}
+
+export function useDeleteCounterparty() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiData(`/counterparties/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['counterparties'] });
+      qc.invalidateQueries({ queryKey: ['counterparty-options'] });
+    },
   });
 }
 

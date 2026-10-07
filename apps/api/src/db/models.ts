@@ -639,6 +639,8 @@ export const DebtVoucherSchema = new Schema(
     party_tax_code: { type: String, default: null },
     /** STK của công ty đối tác. */
     party_bank_account: { type: String, default: null },
+    /** liên kết danh bạ đối tác (đồng bộ định danh — mục tiêu phụ). */
+    counterparty_id: { type: Schema.Types.ObjectId, default: null },
     /** mã tài khoản kế toán — suy ra từ `party_type`. */
     account_code: { type: String, enum: ['131', '331', '334'], required: true },
     /** Nợ (debit) / Có (credit). */
@@ -663,6 +665,44 @@ export const DebtVoucherSchema = new Schema(
 DebtVoucherSchema.index({ company_id: 1, party_type: 1, side: 1, due_date: 1 });
 DebtVoucherSchema.index({ company_id: 1, party_code: 1 });
 DebtVoucherSchema.index({ 'document_links.document_id': 1 });
+
+/**
+ * Danh bạ Đối tác / Khách hàng — DÙNG CHUNG toàn tập đoàn.
+ *
+ * Khoá đối tác = `name_key` (tên công ty chuẩn hoá: gộp khoảng trắng + lowercase).
+ * Khoá tài khoản ngân hàng = `account_number` (doc con trong `banks[]`).
+ * Việc chống trùng khi quét phiếu thu/chi làm ở tầng ứng dụng (không dùng unique
+ * index trên `banks.account_number`) để một số tài khoản dùng cho 2 công ty khác
+ * nhau không bị chặn.
+ */
+const counterpartyBankEmbed = new Schema(
+  {
+    bank_name: { type: String, required: true },
+    account_number: { type: String, required: true },
+    branch: { type: String, default: null },
+    account_name: { type: String, default: null },
+    created_at: { type: Date, default: () => new Date() },
+  },
+  { _id: true },
+);
+
+export const CounterpartySchema = new Schema(
+  {
+    name: { type: String, required: true },
+    /** tên chuẩn hoá (gộp khoảng trắng + lowercase) — khoá chống trùng. */
+    name_key: { type: String, required: true },
+    tax_code: { type: String, default: null },
+    /** nhiều tài khoản ngân hàng của đối tác. */
+    banks: { type: [counterpartyBankEmbed], default: [] },
+    note: { type: String, default: null },
+    created_by: { type: Schema.Types.ObjectId, default: null },
+    created_at: { type: Date, default: () => new Date() },
+    updated_at: { type: Date, default: () => new Date() },
+  },
+  { collection: 'counterparties', versionKey: false },
+);
+CounterpartySchema.index({ name_key: 1 }, { unique: true });
+CounterpartySchema.index({ 'banks.account_number': 1 });
 
 export const BudgetSchema = new Schema(
   {
@@ -908,6 +948,7 @@ export const Models = {
   BankTransaction: model('BankTransaction', BankTransactionSchema),
   BankDebt: model('BankDebt', BankDebtSchema),
   DebtVoucher: model('DebtVoucher', DebtVoucherSchema),
+  Counterparty: model('Counterparty', CounterpartySchema),
   Budget: model('Budget', BudgetSchema),
   BudgetLine: model('BudgetLine', BudgetLineSchema),
   Category: model('Category', CategorySchema),

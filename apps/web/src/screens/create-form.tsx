@@ -12,7 +12,7 @@ import dayjs from 'dayjs';
 import { DOC_KIND_LABEL, formatMoney, moneyFromWire, normalizePlannedDate, statusLabel, type Money } from '@fingate/shared';
 import { ApiRequestError, apiData } from '../app/api.ts';
 import { SCOPE_ALL, useAuth, useCurrentCompanyId } from '../app/store.tsx';
-import { useBankAccounts, useDocument, usePayeeAccountOptions, usePayeeNames } from '../app/queries.ts';
+import { useBankAccounts, useCounterpartyOptions, useDocument, usePayeeAccountOptions, usePayeeNames } from '../app/queries.ts';
 import { FgAlert, FgButton, FgField, FgFreeSelect, FgInput, FgMoneyInput, FgSelect, FgTextarea, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
@@ -72,6 +72,7 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
   const accounts = useBankAccounts();
   const payees = usePayeeNames();
   const payeeAccounts = usePayeeAccountOptions();
+  const counterparties = useCounterpartyOptions();
   const [f, setF] = useState<FormState>(initial);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -94,10 +95,15 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
   // tự sinh phiếu thu khi phiếu chi được thực thi.
   const payeeOptions = (() => {
     const accountOpts = kind === 'spend' ? (payeeAccounts.data?.items ?? []).map((a) => ({ value: a.value, label: a.value })) : [];
+    // đối tác/khách hàng + tài khoản ngân hàng (danh bạ) — mỗi tài khoản 1 entry 3 trường.
+    const partnerOpts = (counterparties.data?.items ?? []).map((o) => ({ value: o.value, label: o.value }));
     const nameOpts = (payees.data ?? []).map((name) => ({ value: name, label: name }));
     const seen = new Set<string>();
-    return [...accountOpts, ...nameOpts].filter((o) => (seen.has(o.value) ? false : (seen.add(o.value), true)));
+    return [...accountOpts, ...partnerOpts, ...nameOpts].filter((o) => (seen.has(o.value) ? false : (seen.add(o.value), true)));
   })();
+
+  // entry danh bạ khớp giá trị đang chọn → gắn counterparty_id khi lưu phiếu.
+  const selectedPartner = (counterparties.data?.items ?? []).find((o) => o.value === f.payee_name);
 
   // "Đơn vị nhận tiền" của phiếu CHI khớp tài khoản của một công ty khác trong tập đoàn
   // → đây là chuyển tiền nội bộ (A → B); server cũng tự phát hiện và đánh dấu khi lưu.
@@ -119,7 +125,7 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
       payee:
         kind === 'rollover'
           ? { name: f.payee_name || 'Ngân hàng', is_internal: false }
-          : { name: f.payee_name, is_internal: false, bank_name: f.payee_bank || undefined },
+          : { name: f.payee_name, is_internal: false, bank_name: f.payee_bank || undefined, counterparty_id: selectedPartner?.counterparty_id },
       amount: f.amount ? { amount_minor: f.amount.minor.toString(), currency: f.amount.currency } : undefined,
       source: { fund: f.fund, account_id: f.account_id || null, group_managed: false },
       planned_date: f.planned_date,
@@ -232,8 +238,8 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
               error={errors['payee.name']}
               help={
                 kind === 'spend'
-                  ? 'Chọn tài khoản tiền (Mã công ty - Tên ngân hàng/quỹ - Số tài khoản/mã quỹ) để khi thực thi tự sinh phiếu thu, hoặc chọn/gõ đối tượng khác'
-                  : 'Chọn đối tượng đã có ở phiếu khác, hoặc gõ tên mới'
+                  ? 'Chọn tài khoản tiền (Mã công ty - Tên ngân hàng/quỹ - Số tài khoản/mã quỹ) để khi thực thi tự sinh phiếu thu, hoặc chọn đối tác/khách hàng trong danh bạ, hoặc gõ đối tượng khác'
+                  : 'Chọn đối tác/khách hàng trong danh bạ (Tên - Ngân hàng - Số tài khoản), chọn đối tượng đã có ở phiếu khác, hoặc gõ tên mới'
               }
             >
               <FgFreeSelect
@@ -241,7 +247,7 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
                 value={f.payee_name}
                 onChange={(v) => set('payee_name', v)}
                 placeholder="Chọn hoặc nhập mới…"
-                loading={payees.isLoading || (kind === 'spend' && payeeAccounts.isLoading)}
+                loading={payees.isLoading || counterparties.isLoading || (kind === 'spend' && payeeAccounts.isLoading)}
                 style={{ width: '100%' }}
                 disabled={!canEdit}
               />

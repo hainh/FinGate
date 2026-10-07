@@ -26,6 +26,7 @@ import { BankAccountHistoryScreen } from './screens/bank-history.tsx';
 import { BankAccountFormScreen } from './screens/bank-account-form.tsx';
 import { RolloverPreparationScreen, RolloversScreen } from './screens/loans.tsx';
 import { DebtListScreen, DebtVoucherFormScreen, DebtDetailScreen } from './screens/debt.tsx';
+import { CounterpartyScreen } from './screens/counterparty.tsx';
 import { BankDebtListScreen, BankDebtFormScreen, BankDebtDetailScreen, LoanScheduleScreen } from './screens/bank-debt.tsx';
 import { CashflowHistoryScreen } from './screens/cashflow.tsx';
 import { ReportLibraryScreen, ReportRunnerScreen } from './screens/reports.tsx';
@@ -77,6 +78,7 @@ const PATH_PERMS: { prefix: string; perm: string | string[] }[] = [
   { prefix: '/ngan-hang/khoan-vay', perm: 'loan:read' },
   { prefix: '/ngan-hang/dao-han', perm: 'loan:read' },
   { prefix: '/cong-no', perm: 'debt:read' },
+  { prefix: '/doi-tac', perm: 'partner:read' },
   { prefix: '/dong-tien', perm: 'forecast:read' },
   { prefix: '/baocao', perm: 'report:view' },
   { prefix: '/ban-tin', perm: 'report:view' },
@@ -169,6 +171,7 @@ export function AppRoutes(): ReactNode {
       <Route path="/cong-no/phai-tra/moi" element={<Shell><DebtVoucherFormScreen side="credit" /></Shell>} />
       <Route path="/cong-no/phieu/:id" element={<Shell><DebtDetailScreen /></Shell>} /> {/* DEBT-02/04 */}
       <Route path="/cong-no/phieu/:id/sua" element={<Shell><DebtVoucherFormScreen /></Shell>} /> {/* DEBT-02 sửa */}
+      <Route path="/doi-tac" element={<Shell><CounterpartyScreen /></Shell>} /> {/* PARTNER-01 */}
       <Route path="/dong-tien" element={<Shell><CashflowHistoryScreen /></Shell>} /> {/* CASH-01 */}
       <Route path="/baocao" element={<Shell><ReportLibraryScreen /></Shell>} /> {/* RPT-00 */}
       <Route path="/baocao/:preset" element={<Shell><ReportRunnerScreen /></Shell>} /> {/* RPT-01→13 */}

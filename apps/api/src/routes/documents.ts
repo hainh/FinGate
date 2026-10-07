@@ -55,6 +55,7 @@ import {
 } from '@fingate/shared';
 import { loadDoc, transition, assertStepUp } from '../domain/workflow/index.ts';
 import { detectInternalTransferTarget } from '../domain/workflow/auto-income.ts';
+import { ensureCounterpartyFromLabel } from '../domain/counterparty/index.ts';
 import { documentPermissions, approvedFromChiefAccountantUp } from '../domain/entitlement/index.ts';
 import { awaitingBadge, decisionPack, docHref, queryQueue } from '../domain/queries/index.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
@@ -272,6 +273,11 @@ export function documentRoutes(app: FastifyInstance): void {
             ? { company_id: internalTarget.companyId, account_id: internalTarget.accountId }
             : null;
         const isInternal = Boolean(body.payee.is_internal) || Boolean(internalTarget);
+        // đồng bộ định danh đối tác: nhận diện payee.name dạng "Tên - Ngân hàng - STK".
+        const counterpartyId =
+          body.payee.counterparty_id && String(body.payee.counterparty_id)
+            ? String(body.payee.counterparty_id)
+            : await ensureCounterpartyFromLabel(body.payee.name, actor.user_id);
         const evidence = await rebuildEvidence({
           kind,
           category_id: body.category_id ?? null,
@@ -294,7 +300,7 @@ export function documentRoutes(app: FastifyInstance): void {
           payee: {
             name: body.payee.name,
             tax_code: body.payee.tax_code ?? null,
-            counterparty_id: body.payee.counterparty_id ?? null,
+            counterparty_id: counterpartyId ?? null,
             is_internal: isInternal,
             bank_name: body.payee.bank_name ?? null,
             bank_account: body.payee.bank_account ?? null,
@@ -387,6 +393,13 @@ export function documentRoutes(app: FastifyInstance): void {
         if (body.planned_date !== undefined) set.planned_date = normalizePlannedDate(body.planned_date);
         if (body.payee) {
           const mergedPayee = { ...(doc.payee as Record<string, unknown>), ...body.payee };
+          // đồng bộ định danh đối tác khi đổi người nhận/khách hàng.
+          if (body.payee.counterparty_id !== undefined) {
+            mergedPayee.counterparty_id = body.payee.counterparty_id ?? null;
+          } else {
+            const ensured = await ensureCounterpartyFromLabel(String(mergedPayee.name ?? ''), actor.user_id);
+            if (ensured) mergedPayee.counterparty_id = ensured;
+          }
           // Phiếu CHI đổi "Đơn vị nhận tiền" sang tài khoản nội bộ → cập nhật lại dấu nội bộ/đích.
           if (String(doc.kind) === 'spend') {
             const internalTarget = await detectInternalTransferTarget(String(mergedPayee.name ?? ''));

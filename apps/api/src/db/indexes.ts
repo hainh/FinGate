@@ -42,6 +42,10 @@ const INDEXES: Record<string, IndexDef[]> = {
     { key: { company_id: 1, party_code: 1 } },
     { key: { 'document_links.document_id': 1 } },
   ],
+  counterparties: [
+    { key: { name_key: 1 }, options: { unique: true } },
+    { key: { 'banks.account_number': 1 } },
+  ],
   jobs: [
     { key: { state: 1, run_at: 1 } },
     { key: { dedupe_key: 1 }, options: { unique: true, partialFilterExpression: { dedupe_key: { $type: 'string' } } } },
@@ -88,6 +92,7 @@ const COLLECTION_MODEL: Record<string, keyof typeof Models> = {
   audit_log: 'AuditLog',
   bank_debts: 'BankDebt',
   debt_vouchers: 'DebtVoucher',
+  counterparties: 'Counterparty',
   jobs: 'Job',
   sessions: 'Session',
   notifications: 'Notification',
