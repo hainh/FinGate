@@ -28,7 +28,7 @@ interface BankDebtDoc {
   company_id: unknown;
   code?: string;
   bank_name: string;
-  branch?: string | null;
+  credit_limit_minor?: unknown;
   principal_minor?: unknown;
   outstanding_minor?: unknown;
   currency?: string;
@@ -75,7 +75,7 @@ function serializeBankDebt(
     company_name: opts.companyName ?? '',
     code: String(d.code ?? ''),
     bank_name: d.bank_name,
-    branch: d.branch ?? null,
+    credit_limit: wire(asBigInt(d.credit_limit_minor), String(d.currency ?? 'VND')),
     principal: wire(principal, String(d.currency ?? 'VND')),
     outstanding: wire(outstanding, String(d.currency ?? 'VND')),
     repaid: wire(repaid, String(d.currency ?? 'VND')),
@@ -149,12 +149,13 @@ export function bankDebtRoutes(app: FastifyInstance): void {
           ip: requestCtx(req).ip,
           fields: { bank_name: body.bank_name, amount_minor: minor.toString() },
         });
+        const creditLimit = body.credit_limit ? BigInt(body.credit_limit.amount_minor) : 0n;
         const created = await Models.BankDebt.create({
           code,
           company_id: companyId,
           bank_name: body.bank_name,
-          branch: body.branch ?? null,
           principal_minor: minor,
+          credit_limit_minor: creditLimit,
           outstanding_minor: minor,
           amount: { minor, currency: body.currency, decimals: 0 },
           currency: body.currency,
@@ -230,7 +231,7 @@ export function bankDebtRoutes(app: FastifyInstance): void {
         assertCompanyScope(req, String(d.company_id));
         const set: Record<string, unknown> = { updated_at: new Date() };
         if (body.bank_name !== undefined) set.bank_name = body.bank_name;
-        if (body.branch !== undefined) set.branch = body.branch || null;
+        if (body.credit_limit !== undefined) set.credit_limit_minor = BigInt(body.credit_limit?.amount_minor ?? 0);
         if (body.amount) {
           const minor = BigInt(body.amount.amount_minor);
           if (minor <= 0n) throw new ApiError({ code: 'FG-VAL-001', errors: { amount: 'Số tiền vay phải lớn hơn 0' } });

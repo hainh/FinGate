@@ -3,7 +3,7 @@
  * hợp đồng đính kèm (PDF/ảnh ≤100MB) và gán phiếu chi để đánh dấu đã trả nợ.
  */
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { DatePicker } from 'antd';
 import dayjs from 'dayjs';
@@ -11,7 +11,7 @@ import { formatMoney, moneyFromWire, type Money } from '@fingate/shared';
 import { ApiRequestError } from '../app/api.ts';
 import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
 import { useBankDebt, useBankDebts, useCreateBankDebt, useDeleteBankDebt, useLoanSchedule, useRepayBankDebt, useUnrepayBankDebt, useUpdateBankDebt } from '../app/queries.ts';
-import { FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTextarea } from '../components/primitives.tsx';
+import { FgButton, FgField, FgFreeSelect, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTextarea } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
@@ -41,7 +41,7 @@ export function BankDebtListScreen(): ReactNode {
           </Link>
         }
       />
-      <FgQuery query={query} skeleton={<FgSkeletonTable rows={5} cols={7} />}>
+      <FgQuery query={query} skeleton={<FgSkeletonTable rows={5} cols={8} />}>
         {(data) =>
           !data.items.length ? (
             <div className="fg-card">
@@ -54,9 +54,10 @@ export function BankDebtListScreen(): ReactNode {
                 dataSource={data.items}
                 columns={[
                   { title: 'Mã', dataIndex: 'code', key: 'code', render: (v, r) => <Link className="fg-link" to={`/ngan-hang/khoan-vay/${r._id}`}>{v}</Link> },
-                  { title: 'Ngân hàng', dataIndex: 'bank_name', key: 'bn', render: (v: string, r) => (r.branch ? `${v} — ${r.branch}` : v) },
+                  { title: 'Ngân hàng', dataIndex: 'bank_name', key: 'bn' },
                   { title: 'Công ty', dataIndex: 'company_name', key: 'co' },
                   { title: 'Số tiền vay', dataIndex: 'principal', key: 'principal', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
+                  { title: 'Hạn mức vay', dataIndex: 'credit_limit', key: 'credit_limit', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
                   { title: 'Dư nợ', dataIndex: 'outstanding', key: 'os', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
                   { title: 'Lãi suất', dataIndex: 'interest_rate', key: 'ir', render: (v: string) => `${v} %/năm` },
                   { title: 'Hạn trả', dataIndex: 'maturity_date', key: 'md' },
@@ -78,6 +79,7 @@ export function BankDebtFormScreen(): ReactNode {
   const navigate = useNavigate();
   const company = useCurrentCompanyId();
   const existing = useBankDebt(id);
+  const bankDebts = useBankDebts();
   const create = useCreateBankDebt();
   const update = useUpdateBankDebt(id ?? '');
   const { message } = useToast();
@@ -85,8 +87,8 @@ export function BankDebtFormScreen(): ReactNode {
   const [prefilled, setPrefilled] = useState(false);
   const [f, setF] = useState<{
     bank_name: string;
-    branch: string;
     amount: Money | null;
+    credit_limit: Money | null;
     interest_rate: string;
     maturity_date: string;
     term_months: string;
@@ -95,8 +97,8 @@ export function BankDebtFormScreen(): ReactNode {
     note: string;
   }>({
     bank_name: '',
-    branch: '',
     amount: null,
+    credit_limit: null,
     interest_rate: '0',
     maturity_date: dayjs().add(30, 'day').format('YYYY-MM-DD'),
     term_months: '12',
@@ -107,13 +109,22 @@ export function BankDebtFormScreen(): ReactNode {
 
   const editMode = !!id;
 
+  /** Tên ngân hàng đã có trong các phiếu nợ — chọn nhanh hoặc nhập mới. */
+  const bankNameOptions = useMemo(() => {
+    const names = new Set<string>();
+    for (const it of bankDebts.data?.items ?? []) {
+      if (it.bank_name) names.add(it.bank_name);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b, 'vi')).map((n) => ({ value: n, label: n }));
+  }, [bankDebts.data]);
+
   useEffect(() => {
     const d = existing.data;
     if (!d || prefilled) return;
     setF({
       bank_name: d.bank_name,
-      branch: d.branch ?? '',
       amount: moneyFromWire(d.principal),
+      credit_limit: d.credit_limit ? moneyFromWire(d.credit_limit) : null,
       interest_rate: d.interest_rate,
       maturity_date: d.maturity_date,
       term_months: d.term_months != null ? String(d.term_months) : '',
@@ -140,8 +151,8 @@ export function BankDebtFormScreen(): ReactNode {
     }
     const body: Record<string, unknown> = {
       bank_name: f.bank_name.trim(),
-      branch: f.branch.trim() || undefined,
       amount: { amount_minor: f.amount.minor.toString(), currency: f.amount.currency },
+      credit_limit: f.credit_limit ? { amount_minor: f.credit_limit.minor.toString(), currency: f.credit_limit.currency } : undefined,
       interest_rate: f.interest_rate.trim() || '0',
       maturity_date: f.maturity_date,
       term_months: f.term_months ? Number(f.term_months) : undefined,
@@ -176,14 +187,22 @@ export function BankDebtFormScreen(): ReactNode {
       <div className="fg-form-grid">
         <FgCard>
           <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))' }}>
-            <FgField label="Tên ngân hàng *" error={errors['bank_name']}>
-              <FgInput value={f.bank_name} onChange={(e) => setF((s) => ({ ...s, bank_name: e.target.value }))} placeholder="VD: BIDV" />
-            </FgField>
-            <FgField label="Chi nhánh ngân hàng">
-              <FgInput value={f.branch} onChange={(e) => setF((s) => ({ ...s, branch: e.target.value }))} placeholder="VD: Chi nhánh TP.HCM" />
+            <FgField label="Tên ngân hàng *" error={errors['bank_name']} help="Chọn ngân hàng đã có hoặc gõ tên mới">
+              <FgFreeSelect
+                options={bankNameOptions}
+                value={f.bank_name}
+                onChange={(v) => setF((s) => ({ ...s, bank_name: v }))}
+                placeholder="VD: BIDV — chọn hoặc nhập mới"
+                allowClear
+                loading={bankDebts.isLoading}
+                style={{ width: '100%' }}
+              />
             </FgField>
             <FgField label="Số tiền vay *" error={errors['amount']} help={f.amount ? formatMoney(f.amount, { mode: 'full' }) : 'Gõ "2,5 tỷ" hoặc "850 tr"'}>
               <FgMoneyInput value={f.amount} onChange={(v) => setF((s) => ({ ...s, amount: v }))} />
+            </FgField>
+            <FgField label="Hạn mức vay" error={errors['credit_limit']} help={f.credit_limit ? formatMoney(f.credit_limit, { mode: 'full' }) : 'Hạn mức tín dụng được cấp (nếu có)'}>
+              <FgMoneyInput value={f.credit_limit} onChange={(v) => setF((s) => ({ ...s, credit_limit: v }))} />
             </FgField>
             <FgField label="Lãi suất vay (%/năm)" error={errors['interest_rate']}>
               <FgInput value={f.interest_rate} onChange={(e) => setF((s) => ({ ...s, interest_rate: e.target.value }))} placeholder="VD: 9,5" />
@@ -271,7 +290,7 @@ export function BankDebtDetailScreen(): ReactNode {
       {(d) => (
         <>
           <FgPageHeader
-            title={`${d.code} · ${d.bank_name}${d.branch ? ` — ${d.branch}` : ''}`}
+            title={`${d.code} · ${d.bank_name}`}
             meta={`Hạn thanh toán ${d.maturity_date} · lãi suất ${d.interest_rate}%/năm`}
             actions={
               <div style={{ display: 'flex', gap: 8 }}>
@@ -294,6 +313,10 @@ export function BankDebtDetailScreen(): ReactNode {
             <FgCard className="fg-kpi">
               <FgText style="caption" color="muted">Số tiền vay</FgText>
               <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.principal)} mode="compact" /></div>
+            </FgCard>
+            <FgCard className="fg-kpi">
+              <FgText style="caption" color="muted">Hạn mức vay</FgText>
+              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.credit_limit)} mode="compact" /></div>
             </FgCard>
             <FgCard className="fg-kpi">
               <FgText style="caption" color="muted">Đã trả</FgText>

@@ -521,8 +521,8 @@ export interface BankDebtRow {
   company_name: string;
   code: string;
   bank_name: string;
-  branch: string | null;
   principal: MoneyWire;
+  credit_limit: MoneyWire;
   outstanding: MoneyWire;
   repaid: MoneyWire;
   currency: string;

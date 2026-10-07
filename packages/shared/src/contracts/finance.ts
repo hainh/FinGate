@@ -112,9 +112,10 @@ export type RepaymentMethod = z.infer<typeof repaymentMethod>;
 export const bankDebtUpsertBody = z.object({
   company_id: objectId.optional().describe('Mặc định theo phiên làm việc'),
   bank_name: z.string().min(2).max(120),
-  branch: z.string().max(160).optional(),
   /** Số tiền vay. */
   amount: moneyField,
+  /** Hạn mức vay (hạn mức tín dụng) — mặc định 0 nếu bỏ trống. */
+  credit_limit: moneyField.optional(),
   interest_rate: z.string().regex(/^\d+([.,]\d{1,2})?$/, 'Lãi suất tối đa 2 chữ số thập phân').default('0'),
   maturity_date: businessDate.describe('Hạn thanh toán'),
   currency: z.string().length(3).default('VND'),
@@ -131,8 +132,9 @@ export const bankDebtRow = z.object({
   company_name: z.string(),
   code: z.string(),
   bank_name: z.string(),
-  branch: z.string().nullable(),
   principal: moneyWire,
+  /** Hạn mức vay (hạn mức tín dụng). */
+  credit_limit: moneyWire,
   outstanding: moneyWire,
   repaid: moneyWire,
   currency: z.string(),

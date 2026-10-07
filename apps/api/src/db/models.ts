@@ -589,6 +589,8 @@ export const BankDebtSchema = new Schema(
     branch: { type: String, default: null },
     /** Số tiền vay (gốc). */
     principal_minor: { type: BigInt, required: true },
+    /** Hạn mức vay (hạn mức tín dụng). */
+    credit_limit_minor: { type: BigInt, default: 0n },
     /** Dư nợ — cache để aggregate nhanh; giá trị chuẩn suy ra ở tầng đọc. */
     outstanding_minor: { type: BigInt, default: 0n },
     amount: { minor: { type: BigInt, required: true }, currency: { type: String, default: 'VND' }, decimals: { type: Number, default: 0 } },
