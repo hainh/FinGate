@@ -207,15 +207,6 @@ export function DebtVoucherFormScreen({ side }: { side?: 'debit' | 'credit' }): 
             <FgField label="Loại đối tượng *" error={errors['party_type']}>
               <FgSelect options={PARTY_OPTIONS} value={f.party_type} onChange={(v) => setF((s) => ({ ...s, party_type: (v as DebtPartyType) ?? 'customer' }))} style={{ width: '100%' }} />
             </FgField>
-            <FgField label="Tên công ty / đối tượng *" error={errors['party_name']} help={selectedCp ? undefined : 'Chọn trong danh bạ hoặc nhập mới — sẽ tự tạo đối tác khi lưu'}>
-              <FgFreeSelect options={nameOptions} value={f.party_name} onChange={onNameChange} placeholder="Chọn trong danh bạ hoặc nhập mới" style={{ width: '100%' }} />
-            </FgField>
-            <FgField label="Ngân hàng của công ty đối tác">
-              <FgFreeSelect options={bankOptions} value={f.party_bank_name} onChange={(v) => setF((s) => ({ ...s, party_bank_name: v }))} placeholder="Chọn hoặc nhập mới" style={{ width: '100%' }} />
-            </FgField>
-            <FgField label="Số tài khoản của công ty đối tác">
-              <FgFreeSelect options={accountOptions} value={f.party_bank_account} onChange={(v) => setF((s) => ({ ...s, party_bank_account: v }))} placeholder="Chọn hoặc nhập mới" style={{ width: '100%' }} />
-            </FgField>
             <FgField label="Phân loại *">
               <FgSelect
                 options={[
@@ -229,6 +220,15 @@ export function DebtVoucherFormScreen({ side }: { side?: 'debit' | 'credit' }): 
             </FgField>
             <FgField label="Số tiền *" error={errors['value']} help={f.value ? formatMoney(f.value, { mode: 'full' }) : 'Gõ "2,5 tỷ" hoặc "850 tr"'}>
               <FgMoneyInput value={f.value} onChange={(v) => setF((s) => ({ ...s, value: v }))} />
+            </FgField>
+            <FgField label="Tên công ty / đối tượng *" error={errors['party_name']} help={selectedCp ? undefined : 'Chọn trong danh bạ hoặc nhập mới — sẽ tự tạo đối tác khi lưu'}>
+              <FgFreeSelect options={nameOptions} value={f.party_name} onChange={onNameChange} placeholder="Chọn trong danh bạ hoặc nhập mới" style={{ width: '100%' }} />
+            </FgField>
+            <FgField label="Ngân hàng của công ty đối tác">
+              <FgFreeSelect options={bankOptions} value={f.party_bank_name} onChange={(v) => setF((s) => ({ ...s, party_bank_name: v }))} placeholder="Chọn hoặc nhập mới" style={{ width: '100%' }} />
+            </FgField>
+            <FgField label="Số tài khoản của công ty đối tác">
+              <FgFreeSelect options={accountOptions} value={f.party_bank_account} onChange={(v) => setF((s) => ({ ...s, party_bank_account: v }))} placeholder="Chọn hoặc nhập mới" style={{ width: '100%' }} />
             </FgField>
             <FgField label="Hạn thanh toán *" error={errors['due_date']}>
               <DatePicker value={f.due_date ? dayjs(f.due_date) : null} onChange={(d) => setF((s) => ({ ...s, due_date: d ? d.format('YYYY-MM-DD') : '' }))} format="DD/MM/YYYY" style={{ width: '100%' }} />
