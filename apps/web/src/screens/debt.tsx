@@ -399,6 +399,11 @@ export function DebtDetailScreen(): ReactNode {
           </div>
 
           <FgCard title="Liên kết cấn trừ" style={{ marginBottom: 'var(--fg-space-4)' }}>
+            <div style={{ marginBottom: 8 }}>
+              <FgText style="caption" color="muted">
+                Chỉ phiếu thu/chi ở trạng thái <strong>Đã thanh toán</strong> mới được cấn trừ. Phiếu còn chờ duyệt/thực thi sẽ <strong>tự động trừ</strong> khi thực thi — không cần gán lại.
+              </FgText>
+            </div>
             {!d.document_links.length ? (
               <FgEmptyState glyph="◇" title="Chưa liên kết phiếu nào" description="Liên kết phiếu thu/chi — khi phiếu được thực thi, công nợ tự trừ." />
             ) : (
@@ -407,7 +412,19 @@ export function DebtDetailScreen(): ReactNode {
                 dataSource={d.document_links}
                 columns={[
                   { title: 'Phiếu', key: 'doc', render: (_v, r) => `${r.document_code} · ${r.document_title}` },
-                  { title: 'Trạng thái', dataIndex: 'document_status', key: 'st', render: (v: string) => statusLabelVi(v) },
+                  {
+                    title: 'Trạng thái',
+                    dataIndex: 'document_status',
+                    key: 'st',
+                    render: (v: string) =>
+                      v === 'paid' ? (
+                        statusLabelVi(v)
+                      ) : (
+                        <span className="fg-chip" style={{ borderColor: 'var(--fg-status-warning-border)', color: 'var(--fg-status-warning-text)', background: 'var(--fg-status-warning-bg)' }}>
+                          ⏳ {statusLabelVi(v)} — chưa cấn trừ
+                        </span>
+                      ),
+                  },
                   { title: 'Số tiền', dataIndex: 'amount', key: 'amount', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
                   {
                     title: '',
@@ -613,6 +630,11 @@ export function LinkPickerModal({
       <FgField label="Tìm theo mã / nội dung">
         <FgInput value={q} onChange={(e) => setQ(e.target.value)} placeholder="VD: PC-2026 hoặc tên" />
       </FgField>
+      <div style={{ marginBottom: 4 }}>
+        <FgText style="caption" color="muted">
+          Gán được phiếu ở mọi trạng thái — chỉ phiếu <strong>Đã thanh toán</strong> mới cấn trừ ngay, phiếu chờ thực thi sẽ tự trừ khi thực thi.
+        </FgText>
+      </div>
       <div style={{ marginTop: 12 }}>
         {candidates.isLoading ? (
           <FgSkeletonTable rows={4} cols={3} />
