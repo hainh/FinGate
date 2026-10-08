@@ -22,6 +22,9 @@ import { STATUS_REGISTRY, type StatusKey } from '@fingate/shared';
 
 const BANK_STATUS_LABEL: Record<string, string> = { active: 'Đang vay', overdue: 'Quá hạn', settled: 'Đã tất toán', archived: 'Lưu trữ' };
 
+/** Bảng mẫu để nhập nợ ngân hàng theo lô (Google Sheets) — người dùng điền rồi tải .tsv. */
+const SHEETS_IMPORT_URL = 'https://docs.google.com/spreadsheets/d/1CsgfK4J17nxxWXR2NDOdrM5NzSW3ltI7jKpwYIN-UkM/edit?gid=0#gid=0';
+
 function docStatus(s: string): string {
   return STATUS_REGISTRY[s as StatusKey]?.labelVi ?? s;
 }
@@ -177,19 +180,40 @@ function BankDebtImportModal({ open, onClose, onImported }: { open: boolean; onC
     >
       <FgAlert
         tone="info"
-        title="Định dạng file .tsv"
+        title="Cách nhập theo lô"
         description={
-          <>
-            Dòng 1 là tiêu đề (bỏ qua). Mỗi dòng dữ liệu gồm 7 cột, phân tách bằng phím Tab:
-            <br />
-            <strong>Tên NH - Chi nhánh · Số tiền vay · Hạn mức vay · Lãi suất % · Hạn thanh toán (ng/th/năm) · Kỳ hạn (tháng) · Ghi chú</strong>
-            <br />
-            Ví dụ: <em>ViettinBank - Đan Phượng&nbsp;&nbsp;50000000&nbsp;&nbsp;1000000000&nbsp;&nbsp;9,5&nbsp;&nbsp;09/12/2027&nbsp;&nbsp;12&nbsp;&nbsp;abc</em>. Các field còn lại dùng mặc định (VND, trả khi đáo hạn, gốc cuối kỳ).
-          </>
+          <ol style={{ margin: 0, paddingLeft: 20 }}>
+            <li style={{ marginBottom: 4 }}>
+              Mở{' '}
+              <a href={SHEETS_IMPORT_URL} target="_blank" rel="noopener noreferrer">
+                bảng mẫu trên Google Sheets
+              </a>
+              , điền mỗi dòng một khoản vay theo 7 cột:{' '}
+              <strong>Tên NH - Chi nhánh · Số tiền vay · Hạn mức vay · Lãi suất % · Hạn thanh toán (ng/th/năm) · Kỳ hạn (tháng) · Ghi chú</strong>. Dòng 1 là tiêu đề, từ dòng 2 trở đi là dữ liệu. Các field còn lại dùng mặc định (VND, trả khi đáo hạn, gốc cuối kỳ).
+            </li>
+            <li style={{ marginBottom: 4 }}>
+              Trong Google Sheets: <strong>Tệp → Tải xuống → Giá trị được phân tách bằng tab (.tsv)</strong> để lưu file <code>.tsv</code>.
+            </li>
+            <li>Chọn file vừa tải ở dưới, xem trước rồi bấm <strong>Nhập</strong> — dòng lỗi sẽ bị bỏ qua và báo riêng.</li>
+          </ol>
         }
         style={{ marginBottom: 'var(--fg-space-4)' }}
       />
-      <FgField label="Chọn file .tsv" help={fileName ? `Đã chọn: ${fileName}` : 'Excel: Lưu thành "Text (Tab delimited)" hoặc CSV dùng Tab'}>
+      {!rows.length && !result ? (
+        <figure style={{ margin: 0, marginBottom: 'var(--fg-space-4)' }}>
+          <a href="/hd-nhap-no.png" target="_blank" rel="noopener noreferrer" title="Bấm để phóng to">
+            <img
+              src="/hd-nhap-no.png"
+              alt="Hướng dẫn cấu trúc file nhập nợ ngân hàng theo lô"
+              style={{ width: '100%', maxWidth: 640, display: 'block', border: '1px solid var(--fg-border-subtle)', borderRadius: 'var(--fg-radius-md)' }}
+            />
+          </a>
+          <FgText style="caption" color="muted" as="div">
+            Ví dụ cấu trúc file .tsv (bấm ảnh để phóng to).
+          </FgText>
+        </figure>
+      ) : null}
+      <FgField label="Chọn file .tsv" help={fileName ? `Đã chọn: ${fileName}` : 'Tải từ Google Sheets: Tệp → Tải xuống → Giá trị được phân tách bằng tab (.tsv)'}>
         <input type="file" accept=".tsv,.txt,text/tab-separated-values,text/plain" onChange={(e) => void onFile(e.target.files?.[0])} />
       </FgField>
 
