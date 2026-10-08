@@ -248,12 +248,13 @@ export function ApprovalConfirmModal({
   const pack = useDecisionPack(doc._id);
   const runner = useTransitionRunner();
   const [opinion, setOpinion] = useState('');
-  const accounts = useBankAccounts();
+  const accounts = useBankAccounts(doc.company_id);
   // cấp duyệt được đổi tài khoản đích (phiếu thu) / nguồn (phiếu chi) trong phạm vi
-  // công ty của phiếu (kể cả tài khoản Tập đoàn) — §VIII/§XXX.
+  // công ty của phiếu (server lọc theo for_company — công ty con không dùng được
+  // tài khoản Tập đoàn) — §VIII/§XXX.
   const canChangeAccount = action === 'approve' || action === 'approve_with_reason';
   const accountOptions = (accounts.data?.items ?? [])
-    .filter((a) => a.status === 'active' && a.kind === doc.source.fund && (a.is_group || a.company_id === doc.company_id))
+    .filter((a) => a.status === 'active' && a.kind === doc.source.fund)
     .map((a) => ({ value: a._id, label: `${a.is_group ? 'Tập đoàn' : (a.company_name ?? '—')} · ${a.bank_name} ${a.account_number_masked}` }));
   const [accountId, setAccountId] = useState<string>(doc.source.account_id ?? '');
   const accountChanged = accountId !== (doc.source.account_id ?? '');

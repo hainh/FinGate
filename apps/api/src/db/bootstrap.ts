@@ -38,7 +38,8 @@ export async function ensureGroupCompany(): Promise<string> {
 /** Số hiệu quỹ tiền mặt mặc định của Tập đoàn. */
 export const GROUP_CASH_ACCOUNT_NUMBER = 'CASH-GROUP';
 
-/** Tạo (nếu chưa có) quỹ tiền mặt mặc định của Tập đoàn — công ty con thấy để chọn nguồn tiền. */
+/** Tạo (nếu chưa có) quỹ tiền mặt mặc định của Tập đoàn — chỉ dùng cho phiếu cấp
+ * Tập đoàn; phiếu công ty con không được chọn (§VIII, chặn ở `domain/accounts.ts`). */
 export async function ensureGroupCashAccount(): Promise<string> {
   const existing = await Models.BankAccount.findOne({ account_number: GROUP_CASH_ACCOUNT_NUMBER, company_id: null }).lean();
   if (existing) return String(existing._id);

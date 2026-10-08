@@ -435,15 +435,22 @@ export interface AccountSnapshot {
  * company) để tài khoản Tập đoàn (company_id null, nhận bút toán từ nhiều công ty con)
  * ra đúng số dư ở mọi phạm vi — danh sách account đã được scope trước đó.
  * `includeGroup`: công ty con vẫn thấy tài khoản Tập đoàn (company_id null, is_group)
- * bên cạnh tài khoản của chính mình — dùng cho danh sách/chọn nguồn tiền (§VIII).
+ * bên cạnh tài khoản của chính mình — CHỈ cho màn danh sách/ngân hàng (BANK-01);
+ * picker nguồn tiền của phiếu DÙNG `forCompany` (§VIII — phiếu công ty con không
+ * chạm quỹ Tập đoàn).
+ * `forCompany`: bộ lọc theo công ty của phiếu — pháp nhân Tập đoàn (isGroup) →
+ * chỉ tài khoản Tập đoàn; công ty con → chỉ tài khoản của chính nó.
  */
 export async function accountSnapshots(
   scope: ScopeLike,
-  opts: { includeClosed?: boolean; includeGroup?: boolean } = {},
+  opts: { includeClosed?: boolean; includeGroup?: boolean; forCompany?: { id: string; isGroup: boolean } } = {},
 ): Promise<AccountSnapshot[]> {
   const base = opts.includeClosed ? {} : { status: { $ne: 'closed' } };
-  const filter: Record<string, unknown> =
-    scope.companyIds === null
+  const filter: Record<string, unknown> = opts.forCompany
+    ? opts.forCompany.isGroup
+      ? { ...base, is_group: true }
+      : { ...base, company_id: opts.forCompany.id }
+    : scope.companyIds === null
       ? base
       : opts.includeGroup
         ? { ...base, $or: [{ company_id: { $in: scope.companyIds } }, { is_group: true }] }

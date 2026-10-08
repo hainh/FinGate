@@ -41,7 +41,7 @@ import { nextDocumentCode } from '../numbering/index.ts';
 import { notifyNextApprover, rebuildEvidence, syncBalancesForDocument } from '../side-effects.ts';
 import { createAutoIncomeForSpend } from './auto-income.ts';
 import { bookedBalance } from '../ledger/index.ts';
-import { assertAccountAllowedForCompany } from '../accounts.ts';
+import { assertAccountAllowedForCompany, assertGroupAccountForCompany } from '../accounts.ts';
 import {
   applyDecision,
   canTransition,
@@ -169,6 +169,11 @@ export async function submitDocument(input: {
       errors: Object.fromEntries(missingFields.map((f) => [f, 'Bắt buộc nhập'])),
     });
   }
+
+  // Nguồn/đích tiền phải thuộc công ty của phiếu — chặn cả nháp cũ tham chiếu
+  // tài khoản Tập đoàn (phiếu công ty con không dùng quỹ Tập đoàn — §VIII).
+  await assertAccountAllowedForCompany(String(doc.company_id), doc.source?.account_id);
+  await assertGroupAccountForCompany(String(doc.company_id), doc.source?.group_account_id);
 
   const matrix = await resolveMatrix({
     company_id: String(doc.company_id),
@@ -488,7 +493,7 @@ export async function transition(input: {
 
   // 1b. đổi tài khoản đích/nguồn khi duyệt (blueprint §VIII/§XXX):
   //     chỉ cấp duyệt (hoặc người thực thi thanh toán) được đổi, và chỉ trong
-  //     phạm vi công ty của phiếu (tài khoản công ty HOẶC tài khoản Tập đoàn).
+  //     phạm vi công ty của phiếu — tài khoản Tập đoàn chỉ cho phiếu cấp Tập đoàn.
   const oldAccountId = doc.source?.account_id ? String(doc.source.account_id) : null;
   const nextAccountId = body.source_account_id ? String(body.source_account_id) : null;
   if (nextAccountId && !isApproval && action !== 'pay') {

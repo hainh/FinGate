@@ -59,19 +59,13 @@ import { ensureCounterpartyFromLabel } from '../domain/counterparty/index.ts';
 import { documentPermissions, approvedFromChiefAccountantUp, UNRESTRICTED_DELETE_ROLES } from '../domain/entitlement/index.ts';
 import { awaitingBadge, decisionPack, docHref, queryQueue } from '../domain/queries/index.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
-import { assertAccountAllowedForCompany } from '../domain/accounts.ts';
+import { assertAccountAllowedForCompany, assertGroupAccountForCompany } from '../domain/accounts.ts';
 import { invalidateFor, rebuildEvidence } from '../domain/side-effects.ts';
 import { attachmentKey, detectMagic, sha256hex, storage } from '../storage/index.ts';
 import { newRequestId } from '../lib/http.ts';
 
-/**
- * Nguồn tiền chỉ được chọn từ tài khoản của công ty mình HOẶC tài khoản Tập đoàn
- * (company_id null, is_group) — chặn ở server, không tin UI (§VIII). Logic dùng
- * chung với workflow (cấp duyệt đổi tài khoản) ở `domain/accounts.ts`.
- */
-async function assertSourceAccountAllowed(companyId: string, accountId: string | null | undefined): Promise<void> {
-  await assertAccountAllowedForCompany(companyId, accountId);
-}
+/* Nguồn/đích tiền chặn ở server theo công ty của phiếu — logic dùng chung với workflow
+ * (cấp duyệt đổi tài khoản) ở `domain/accounts.ts` (§VIII). */
 
 /**
  * `/api/v1/documents` + `/api/v1/queue*`.
@@ -260,7 +254,8 @@ export function documentRoutes(app: FastifyInstance): void {
         if (body.target?.company_id && scope.companyIds !== null && !scope.companyIds.includes(body.target.company_id)) {
           throw new ApiError({ code: 'FG-RBAC-002', detail: 'Công ty nhận không nằm trong phạm vi của bạn' });
         }
-        await assertSourceAccountAllowed(companyId, body.source.account_id);
+        await assertAccountAllowedForCompany(companyId, body.source.account_id);
+        await assertGroupAccountForCompany(companyId, body.source.group_account_id);
 
         const kind = body.kind;
         const amountMinor = BigInt(body.amount.amount_minor);
@@ -419,8 +414,17 @@ export function documentRoutes(app: FastifyInstance): void {
           }
           set.payee = mergedPayee;
         }
-        if (body.source?.account_id) await assertSourceAccountAllowed(String(doc.company_id), body.source.account_id);
-        if (body.source) set.source = { ...doc.source, ...body.source };
+        if (body.source) {
+          // validate trên BẢN MERGE để không lọt tổ hợp account_id/group_account_id
+          // tham chiếu tài khoản Tập đoàn khi phiếu thuộc công ty con (§VIII).
+          const mergedSource = { ...(doc.source as Record<string, unknown>), ...body.source } as {
+            account_id?: string | null;
+            group_account_id?: string | null;
+          };
+          await assertAccountAllowedForCompany(String(doc.company_id), mergedSource.account_id);
+          await assertGroupAccountForCompany(String(doc.company_id), mergedSource.group_account_id);
+          set.source = mergedSource;
+        }
         if (body.contract) set.contract = { ...doc.contract, ...body.contract };
         if (body.budget) set.budget = { ...doc.budget, ...body.budget };
         if (body.target) set.target = body.target;

@@ -149,11 +149,19 @@ export function useReport(preset: string | undefined, query?: Record<string, str
 
 /* ---------------- ngân hàng · vay · đảo hạn · nợ · dòng tiền ---------------- */
 
-export function useBankAccounts() {
+/**
+ * Danh sách tài khoản tiền. `companyId` (công ty của phiếu) → server trả ĐÚNG tài
+ * khoản của công ty đó — picker tạo/duyệt phiếu dùng để công ty con không chạm
+ * quỹ Tập đoàn (§VIII). Bỏ trống → theo phạm vi (màn Ngân hàng).
+ */
+export function useBankAccounts(companyId?: string | null) {
   const { scope } = useAuth();
   return useQuery({
-    queryKey: ['bank-accounts', scope],
-    queryFn: () => apiCall<{ items: BankAccountRow[] }>('/bank-accounts', { query: { scope } }),
+    queryKey: ['bank-accounts', scope, companyId ?? null],
+    queryFn: () =>
+      apiCall<{ items: BankAccountRow[] }>('/bank-accounts', {
+        query: companyId ? { scope, for_company: companyId } : { scope },
+      }),
   });
 }
 

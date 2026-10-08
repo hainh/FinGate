@@ -69,10 +69,27 @@ export function financeRoutes(app: FastifyInstance): void {
       config: { perms: ['doc:read'] as Permission[], screen: 'BANK-01', summary: 'Tài khoản ngân hàng + số dư' },
       handler: async (req, reply) => {
         const scope = requireScope(req);
+        const q = req.query as { include_closed?: string; for_company?: string };
+        // for_company = công ty của phiếu (picker nguồn tiền khi tạo/sửa/duyệt):
+        // chỉ trả tài khoản của đúng công ty đó — pháp nhân Tập đoàn → tài khoản
+        // Tập đoàn; công ty con → KHÔNG thấy quỹ/tài khoản Tập đoàn (§VIII).
+        let forCompanyOpt: { id: string; isGroup: boolean } | undefined;
+        if (q.for_company) {
+          if (scope.companyIds !== null && !scope.companyIds.includes(q.for_company)) {
+            throw new ApiError({ code: 'FG-RBAC-002' });
+          }
+          const company = await Models.Company.findById(q.for_company)
+            .select({ is_group: 1 })
+            .lean<{ is_group?: boolean } | null>();
+          if (!company) throw new ApiError({ code: 'FG-VAL-001', detail: 'Công ty không tồn tại' });
+          forCompanyOpt = { id: q.for_company, isGroup: Boolean(company.is_group) };
+        }
         const rows = await accountSnapshots(scope, {
-          includeClosed: (req.query as { include_closed?: string }).include_closed === 'true',
-          // Công ty con thấy tài khoản Tập đoàn để chọn nguồn tiền (§VIII).
-          includeGroup: true,
+          includeClosed: q.include_closed === 'true',
+          // Màn BANK-01: công ty con thấy tài khoản Tập đoàn để theo dõi số dư;
+          // khi chọn nguồn tiền cho phiếu (for_company) server đã lọc theo công ty.
+          includeGroup: !forCompanyOpt,
+          forCompany: forCompanyOpt,
         });
         return ok(
           reply,

@@ -69,7 +69,7 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
   const companyName = me?.companies.find((c) => c.company_id === currentCompany)?.company_name ?? null;
   const { message } = useToast();
   const existing = useDocument(id);
-  const accounts = useBankAccounts();
+  const accounts = useBankAccounts(currentCompany);
   const payees = usePayeeNames();
   const payeeAccounts = usePayeeAccountOptions();
   const counterparties = useCounterpartyOptions();
@@ -81,7 +81,8 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
   const set = (k: keyof FormState, v: string | Money | null) => setF((s) => ({ ...s, [k]: v }));
 
   // Tài khoản của phiếu: phiếu thu chọn tài khoản ĐÍCH (nhận tiền), phiếu chi chọn
-  // tài khoản NGUỒN (xuất tiền) — chỉ tài khoản công ty mình hoặc Tập đoàn.
+  // tài khoản NGUỒN (xuất tiền) — chỉ tài khoản của công ty lập phiếu (server lọc
+  // theo `for_company`; công ty con không thấy/không dùng được quỹ Tập đoàn — §VIII).
   const accountOptions = (accounts.data?.items ?? [])
     .filter((a) => a.status === 'active' && a.kind === f.fund)
     .map((a) => ({
@@ -284,7 +285,7 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
             <FgField
               label={kind === 'income' ? 'Tài khoản đích *' : 'Tài khoản nguồn *'}
               error={errors['source.account_id'] ?? null}
-              help={kind === 'income' ? 'Tiền thu về tài khoản của công ty hoặc tài khoản Tập đoàn' : 'Chỉ tài khoản của công ty bạn và tài khoản Tập đoàn'}
+              help={kind === 'income' ? 'Tiền thu về tài khoản của công ty lập phiếu' : 'Chỉ tài khoản của công ty lập phiếu'}
             >
               <FgSelect
                 options={accountOptions}
