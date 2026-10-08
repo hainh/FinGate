@@ -469,7 +469,7 @@ function DeleteDocumentModal({ doc, onClose, onDone }: { doc: DocumentDetail; on
       <FgAlert
         tone="danger"
         title="Xoá vĩnh viễn — không thể khôi phục"
-        description="Bản ghi phiếu bị xoá khỏi hệ thống; một dòng audit vẫn được lưu lại. Chủ tịch / Tổng Giám đốc xoá được ở bất kỳ trạng thái nào mà không cần nhập lại mật khẩu / OTP. Phiếu đã bị từ chối thì Kế toán trưởng / Kế toán viên đều xoá được; các trạng thái khác chỉ người lập xoá được khi phiếu còn nháp, đang chờ Kế toán trưởng hoặc bị trả về bổ sung — và chưa qua cấp Kế toán trưởng trở lên ở vòng duyệt này."
+        description="Bản ghi phiếu bị xoá khỏi hệ thống; một dòng audit vẫn được lưu lại. Chủ tịch / Tổng Giám đốc xoá được ở bất kỳ trạng thái nào, không giới hạn phiếu còn nháp hay chưa ai duyệt. Phiếu đã bị từ chối thì Kế toán trưởng / Kế toán viên đều xoá được; các trạng thái khác chỉ người lập xoá được khi phiếu còn nháp, đang chờ Kế toán trưởng hoặc bị trả về bổ sung — và chưa qua cấp Kế toán trưởng trở lên ở vòng duyệt này."
       />
       <div style={{ marginTop: 16 }}>
         <FgField label="Lý do xoá (bắt buộc, vào audit)" error={reason && reason.trim().length < 5 ? 'Tối thiểu 5 ký tự' : null}>
