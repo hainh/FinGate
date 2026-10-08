@@ -532,13 +532,15 @@ export function documentRoutes(app: FastifyInstance): void {
    *  - CHÍNH người lập xoá phiếu còn nháp / đang chờ Kế toán trưởng / bị trả về bổ sung, và
    *    chưa có ai từ Kế toán trưởng trở lên duyệt.
    * Mirror audit TRƯỚC khi xoá để còn dấu vết, nhưng KHÔNG ghi vào history hồ sơ
-   * (bản ghi sắp bị xoá). Bắt buộc step-up (ADR-14) vì là thao tác phá huỷ.
+   * (bản ghi sắp bị xoá). Bắt buộc step-up (ADR-14) vì là thao tác phá huỷ —
+   * NGOẠI TRỪ Chủ tịch / Tổng Giám đốc (`UNRESTRICTED_DELETE_ROLES`), những tài khoản này
+   * xoá được ở mọi trạng thái mà KHÔNG cần xác thực lại mật khẩu / OTP.
    */
   app.route(
     defineRoute({
       method: 'POST',
       url: '/documents/:id/delete',
-      config: { perms: ['doc:delete'] as Permission[], stepUp: true, screen: 'DOC-01', summary: 'Xoá phiếu thu/chi (từ chối: mọi người có quyền xoá; còn lại: người lập, chưa qua KTT ở vòng này)' },
+      config: { perms: ['doc:delete'] as Permission[], stepUp: true, screen: 'DOC-01', summary: 'Xoá phiếu thu/chi (Chủ tịch/TGĐ: mọi trạng thái, bỏ step-up; từ chối: mọi người có quyền xoá; còn lại: người lập, chưa qua KTT ở vòng này)' },
       schema: { tags: ['documents'], body: documentDeleteBodySchema },
       handler: async (req, reply) => {
         const actor = requireActor(req);
@@ -549,11 +551,12 @@ export function documentRoutes(app: FastifyInstance): void {
 
         const history = (doc.history ?? []) as { action?: string | null; actor?: { role?: string | null } | null }[];
         // Chủ tịch / Tổng Giám đốc: xoá được ở bất kỳ thời điểm & trạng thái nào, không vướng
-        // gate người lập hay "chưa ai từ KTT trở lên duyệt".
+        // gate người lập hay "chưa ai từ KTT trở lên duyệt", và KHÔNG cần step-up (mật khẩu/OTP).
         // Phiếu đã bị từ chối là trạng thái kết thúc: mọi người có `doc:delete` được xoá.
         // Các trạng thái còn lại vẫn chỉ cho người lập và khi chưa qua cấp KTT trở lên.
+        const unrestricted = UNRESTRICTED_DELETE_ROLES.includes(actor.role);
         const allowed =
-          UNRESTRICTED_DELETE_ROLES.includes(actor.role) ||
+          unrestricted ||
           doc.status === 'rejected' ||
           (String(doc.created_by) === actor.user_id &&
             ['draft', 'pending.ktt', 'changes_requested'].includes(doc.status) &&
@@ -565,7 +568,8 @@ export function documentRoutes(app: FastifyInstance): void {
           });
         }
 
-        await assertStepUp(actor.user_id, body.verify);
+        // Step-up (ADR-14) cho thao tác phá huỷ — bỏ qua với Chủ tịch / Tổng Giám đốc.
+        if (!unrestricted) await assertStepUp(actor.user_id, body.verify);
 
         await mirrorAudit({
           at: new Date(),
