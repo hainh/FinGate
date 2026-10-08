@@ -198,6 +198,7 @@ Chuyển tiền nội bộ: tab `Tóm tắt` **bắt buộc** 2 cột đối ứ
 | LOAN-02 | Chi tiết khoản vay | `/ngan-hang/khoan-vay/:id` | KTT, GĐ | §IX: `FgLoanCard` header, `FgDebtBar` (dư nợ/hạn mức), lịch trả gốc/lãi, TSĐB, người phụ trách, `FgChart.line` dư nợ, liên kết đảo hạn | lãi suất thay đổi, gia hạn, tất toán | P2 | D/T |
 | LOAN-03 | Tạo / sửa khoản vay | `/ngan-hang/khoan-vay/moi` | KT, KTT | form + `FgMoneyInput` (hạn mức, dư nợ) + lãi suất 2 decimal + `FgSelect`(kỳ trả lãi/gốc) + TSĐB | validate ngày giải ngân ≤ đáo hạn, trùng HĐTD | P3 | D |
 | LOAN-04 | Lịch nghĩa vụ trả nợ (gốc + lãi + phí) | `/ngan-hang/khoan-vay/lich-tra` | KTT, KT, GĐ | `FgTable` theo ngày + `FgCashFlowTable` gộp vào forecast | nhóm quá hạn, nhóm 7/30 ngày | P3 | D/T |
+| LOAN-05 | Nhập nợ ngân hàng theo lô (.tsv) | modal tại `/ngan-hang/khoan-vay` | KT, KTT | `FgModal` + chọn file `.tsv` + `FgTable` xem trước (validate từng dòng) | dòng lỗi bỏ qua, báo riêng | P3 | D |
 
 ---
 

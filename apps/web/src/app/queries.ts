@@ -273,6 +273,20 @@ export function useCreateBankDebt() {
   });
 }
 
+/** LOAN-05 — import nợ ngân hàng theo lô từ file .tsv (đã parse ở FE). */
+export function useImportBankDebts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { company_id?: string; rows: Record<string, unknown>[] }) =>
+      apiData<{ inserted: number; failed: { row: number; error: string }[]; total_rows: number }>('/bank-debts/import', { method: 'POST', body }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bank-debts'] });
+      qc.invalidateQueries({ queryKey: ['rollovers'] });
+      qc.invalidateQueries({ queryKey: ['overview'] });
+    },
+  });
+}
+
 export function useUpdateBankDebt(id: string) {
   const qc = useQueryClient();
   return useMutation({

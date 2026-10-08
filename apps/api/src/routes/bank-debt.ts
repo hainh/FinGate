@@ -11,8 +11,8 @@ import { ApiError, daysBetween, daysUntil, today, vnDate, type Permission, type 
 import { Models } from '../db/models.ts';
 import { assertCompanyScope, defineRoute, requestCtx, requireActor, requireScope, validate } from '../lib/http.ts';
 import { ok } from '../lib/serialize.ts';
-import { bankDebtRepayBody, bankDebtUpsertBody } from '@fingate/shared';
-import { bankDebtRepayBodySchema, bankDebtUpsertBodySchema } from './schemas.ts';
+import { bankDebtImportBody, bankDebtRepayBody, bankDebtUpsertBody } from '@fingate/shared';
+import { bankDebtImportBodySchema, bankDebtRepayBodySchema, bankDebtUpsertBodySchema } from './schemas.ts';
 import { scopedFind } from '../lib/mongo.ts';
 import { asBigInt, wire } from '../domain/queries/index.ts';
 import { buildHistoryEntry, mirrorAudit } from '../domain/audit/index.ts';
@@ -179,6 +179,79 @@ export function bankDebtRoutes(app: FastifyInstance): void {
           ip: requestCtx(req).ip,
         });
         return ok(reply, { data: { _id: String(created._id), code } }, { status: 201 });
+      },
+    }),
+  );
+
+  /* --------------------------- LOAN-05 · import theo lô --------------------------- */
+
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/bank-debts/import',
+      config: { perms: ['loan:write'] as Permission[], screen: 'LOAN-05', summary: 'Nhập nợ ngân hàng theo lô (.tsv)' },
+      schema: { tags: ['bank-debts'], body: bankDebtImportBodySchema },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const body = validate(bankDebtImportBody, req.body);
+        const companyId = body.company_id ?? actor.company_id;
+        if (!companyId) throw new ApiError({ code: 'FG-RBAC-002', detail: 'Chưa chọn công ty' });
+        assertCompanyScope(req, companyId);
+        const created: { code: string; bank_name: string }[] = [];
+        const failed: { row: number; error: string }[] = [];
+        for (let i = 0; i < body.rows.length; i++) {
+          const parsed = bankDebtUpsertBody.safeParse({ ...body.rows[i], company_id: companyId });
+          if (!parsed.success) {
+            failed.push({ row: i + 1, error: parsed.error.issues[0]?.message ?? 'Dữ liệu không hợp lệ' });
+            continue;
+          }
+          const r = parsed.data;
+          const minor = BigInt(r.amount.amount_minor);
+          if (minor <= 0n) {
+            failed.push({ row: i + 1, error: 'Số tiền vay phải lớn hơn 0' });
+            continue;
+          }
+          const code = await nextSequentialCode('NHD');
+          const creditLimit = r.credit_limit ? BigInt(r.credit_limit.amount_minor) : 0n;
+          const history = buildHistoryEntry({
+            action: 'create',
+            actor: { user_id: actor.user_id, role: actor.role, name: actor.name },
+            to: null,
+            ip: requestCtx(req).ip,
+            fields: { bank_name: r.bank_name, amount_minor: minor.toString(), import: true },
+          });
+          await Models.BankDebt.create({
+            code,
+            company_id: companyId,
+            bank_name: r.bank_name,
+            principal_minor: minor,
+            credit_limit_minor: creditLimit,
+            outstanding_minor: minor,
+            amount: { minor, currency: r.currency, decimals: 0 },
+            currency: r.currency,
+            interest_rate: r.interest_rate,
+            term_months: r.term_months ?? null,
+            payment_frequency: r.payment_frequency,
+            repayment_method: r.repayment_method,
+            maturity_date: r.maturity_date,
+            next_due_date: r.maturity_date,
+            status: 'active',
+            note: r.note ?? null,
+            created_by: actor.user_id,
+            history: [history],
+          } as never);
+          created.push({ code, bank_name: r.bank_name });
+        }
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'bank_debt.import',
+          subject: { type: 'bank_debt', id: null, code: `${created.length} dòng` },
+          company_id: companyId,
+          diff_fields: { total_rows: body.rows.length, inserted: created.length, failed: failed.length },
+          ip: requestCtx(req).ip,
+        });
+        return ok(reply, { data: { inserted: created.length, failed, total_rows: body.rows.length, created } }, { status: 201 });
       },
     }),
   );

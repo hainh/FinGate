@@ -26,6 +26,7 @@ import {
   debtListQuery,
   debtLinkBody,
   debtVoucherUpsertBody,
+  bankDebtImportBody,
   bankDebtRepayBody,
   bankDebtUpsertBody,
   delegationBody,
@@ -112,6 +113,7 @@ export const bankAccountUpsertBodySchema = j(bankAccountUpsertBody);
 export const bankAccountUpdateBodySchema = j(bankAccountUpdateBody);
 export const statementImportBodySchema = j(statementImportBody);
 export const bankDebtUpsertBodySchema = j(bankDebtUpsertBody);
+export const bankDebtImportBodySchema = j(bankDebtImportBody);
 export const bankDebtRepayBodySchema = j(bankDebtRepayBody);
 export const rolloverListQuerySchema = j(rolloverListQuery);
 export const rolloverResultBodySchema = j(rolloverResultBody);

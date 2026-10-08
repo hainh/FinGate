@@ -126,6 +126,16 @@ export const bankDebtUpsertBody = z.object({
   note: z.string().max(1000).optional(),
 });
 
+/**
+ * LOAN-05 — import nợ ngân hàng theo lô từ file `.tsv` (đã parse ở FE).
+ * Mỗi dòng là một khoản vay; field thiếu dùng mặc định của `bankDebtUpsertBody`.
+ * Dòng lỗi được báo riêng (không chặn cả lô).
+ */
+export const bankDebtImportBody = z.object({
+  company_id: objectId.optional().describe('Mặc định theo phiên làm việc'),
+  rows: z.array(z.record(z.string(), z.unknown())).min(1).max(1000),
+});
+
 export const bankDebtRow = z.object({
   _id: objectId,
   company_id: objectId,

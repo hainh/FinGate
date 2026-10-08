@@ -7,11 +7,11 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { DatePicker } from 'antd';
 import dayjs from 'dayjs';
-import { formatMoney, moneyFromWire, type Money } from '@fingate/shared';
+import { formatMoney, money, moneyFromWire, parseMoneyInput, type Money } from '@fingate/shared';
 import { ApiRequestError } from '../app/api.ts';
 import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
-import { useBankDebt, useBankDebts, useCreateBankDebt, useDeleteBankDebt, useLoanSchedule, useRepayBankDebt, useUnrepayBankDebt, useUpdateBankDebt } from '../app/queries.ts';
-import { FgButton, FgField, FgFreeSelect, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTextarea } from '../components/primitives.tsx';
+import { useBankDebt, useBankDebts, useCreateBankDebt, useDeleteBankDebt, useImportBankDebts, useLoanSchedule, useRepayBankDebt, useUnrepayBankDebt, useUpdateBankDebt } from '../app/queries.ts';
+import { FgAlert, FgButton, FgField, FgFreeSelect, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTextarea } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
@@ -26,21 +26,243 @@ function docStatus(s: string): string {
   return STATUS_REGISTRY[s as StatusKey]?.labelVi ?? s;
 }
 
+/* ============================== LOAN-05 · import theo lô (.tsv) ============================== */
+
+interface ImportPreviewRow {
+  line: number;
+  bank_name: string;
+  amount_minor: string;
+  credit_limit_minor: string;
+  interest_rate: string;
+  maturity_date: string;
+  term_months: string;
+  note: string;
+  errors: string[];
+}
+
+/** Giải mã .tsv — chấp nhận UTF-8 (BOM) và UTF-16LE/BE (Excel "Unicode Text"). */
+function decodeTsvBuffer(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be').decode(bytes.subarray(2));
+  return new TextDecoder('utf-8').decode(bytes).replace(/^\uFEFF/, '');
+}
+
+/** `09/12/2027` (ng/th/năm) hoặc `2027-12-09` → `YYYY-MM-DD`. */
+function parseVnDate(text: string): string | null {
+  const t = text.trim();
+  let m = /^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/.exec(t);
+  if (m) return `${m[3]}-${m[2]!.padStart(2, '0')}-${m[1]!.padStart(2, '0')}`;
+  m = /^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})$/.exec(t);
+  if (m) return `${m[1]}-${m[2]!.padStart(2, '0')}-${m[3]!.padStart(2, '0')}`;
+  return null;
+}
+
+function parseImportTsv(text: string): ImportPreviewRow[] {
+  const lines = text.split(/\r\n|\r|\n/).filter((l) => l.trim().length > 0);
+  const rows: ImportPreviewRow[] = [];
+  if (!lines.length) return rows;
+  const firstCells = lines[0]!.split('\t');
+  const header = !/^\d[\d.,\s]*$/.test((firstCells[1] ?? '').trim());
+  for (let i = header ? 1 : 0; i < lines.length; i++) {
+    const cells = lines[i]!.split('\t');
+    const errors: string[] = [];
+
+    const bank_name = (cells[0] ?? '').trim();
+    if (bank_name.length < 2) errors.push('Thiếu tên ngân hàng');
+
+    const amountRaw = (cells[1] ?? '').trim();
+    const amount = amountRaw ? parseMoneyInput(amountRaw).minor : 0n;
+    if (amount <= 0n) errors.push('Số tiền vay không hợp lệ');
+
+    const limitRaw = (cells[2] ?? '').trim();
+    const limit = limitRaw ? parseMoneyInput(limitRaw).minor : 0n;
+
+    const interest_rate = (cells[3] ?? '').trim().replace(',', '.') || '0';
+    if (!/^\d+(\.\d{1,2})?$/.test(interest_rate)) errors.push('Lãi suất không hợp lệ');
+
+    const maturity_date = parseVnDate((cells[4] ?? '').trim()) ?? '';
+    if (!maturity_date) errors.push('Hạn thanh toán không hợp lệ');
+
+    const termRaw = (cells[5] ?? '').trim().replace(/\D/g, '');
+    const term = termRaw ? Number(termRaw) : null;
+    if (termRaw && (term === null || term < 1 || term > 600)) errors.push('Kỳ hạn phải 1–600 tháng');
+
+    rows.push({
+      line: i + 1,
+      bank_name,
+      amount_minor: amount.toString(),
+      credit_limit_minor: limit > 0n ? limit.toString() : '',
+      interest_rate,
+      maturity_date,
+      term_months: term ? String(term) : '',
+      note: (cells[6] ?? '').trim(),
+      errors,
+    });
+  }
+  return rows;
+}
+
+function BankDebtImportModal({ open, onClose, onImported }: { open: boolean; onClose: () => void; onImported: () => void }): ReactNode {
+  const company = useCurrentCompanyId();
+  const imp = useImportBankDebts();
+  const { message } = useToast();
+  const [rows, setRows] = useState<ImportPreviewRow[]>([]);
+  const [fileName, setFileName] = useState('');
+  const [parseError, setParseError] = useState('');
+  const [result, setResult] = useState<{ inserted: number; failed: { row: number; error: string }[] } | null>(null);
+
+  const validRows = rows.filter((r) => !r.errors.length);
+  const invalidCount = rows.length - validRows.length;
+
+  const onFile = async (file: File | undefined): Promise<void> => {
+    setRows([]);
+    setFileName('');
+    setParseError('');
+    setResult(null);
+    if (!file) return;
+    setFileName(file.name);
+    const parsed = parseImportTsv(decodeTsvBuffer(await file.arrayBuffer()));
+    if (!parsed.length) {
+      setParseError('File không có dòng dữ liệu nào — dòng 1 là tiêu đề, từ dòng 2 trở đi là dữ liệu.');
+      return;
+    }
+    setRows(parsed);
+  };
+
+  const submit = async (): Promise<void> => {
+    if (!validRows.length) {
+      message.error('Không có dòng hợp lệ để nhập');
+      return;
+    }
+    try {
+      const r = await imp.mutateAsync({
+        ...(company ? { company_id: company } : {}),
+        rows: validRows.map((row) => ({
+          bank_name: row.bank_name,
+          amount: { amount_minor: row.amount_minor, currency: 'VND' },
+          ...(row.credit_limit_minor ? { credit_limit: { amount_minor: row.credit_limit_minor, currency: 'VND' } } : {}),
+          interest_rate: row.interest_rate,
+          maturity_date: row.maturity_date,
+          ...(row.term_months ? { term_months: Number(row.term_months) } : {}),
+          ...(row.note ? { note: row.note } : {}),
+        })),
+      });
+      setResult({ inserted: r.inserted, failed: r.failed });
+      message.success(`Đã nhập ${r.inserted} khoản nợ`);
+      onImported();
+    } catch (e) {
+      message.error(problemText(e, 'Không nhập được nợ ngân hàng'));
+    }
+  };
+
+  return (
+    <FgModal
+      open={open}
+      title="Nhập nợ ngân hàng theo lô (.tsv)"
+      width={1024}
+      onCancel={onClose}
+      footer={
+        <>
+          <FgButton onClick={onClose} disabled={imp.isPending}>
+            {result ? 'Đóng' : 'Hủy'}
+          </FgButton>
+          {!result ? (
+            <FgButton variant="primary" loading={imp.isPending} disabled={!validRows.length} onClick={() => void submit()}>
+              Nhập{validRows.length ? ` ${validRows.length} dòng` : ''}
+            </FgButton>
+          ) : null}
+        </>
+      }
+    >
+      <FgAlert
+        tone="info"
+        title="Định dạng file .tsv"
+        description={
+          <>
+            Dòng 1 là tiêu đề (bỏ qua). Mỗi dòng dữ liệu gồm 7 cột, phân tách bằng phím Tab:
+            <br />
+            <strong>Tên NH - Chi nhánh · Số tiền vay · Hạn mức vay · Lãi suất % · Hạn thanh toán (ng/th/năm) · Kỳ hạn (tháng) · Ghi chú</strong>
+            <br />
+            Ví dụ: <em>ViettinBank - Đan Phượng&nbsp;&nbsp;50000000&nbsp;&nbsp;1000000000&nbsp;&nbsp;9,5&nbsp;&nbsp;09/12/2027&nbsp;&nbsp;12&nbsp;&nbsp;abc</em>. Các field còn lại dùng mặc định (VND, trả khi đáo hạn, gốc cuối kỳ).
+          </>
+        }
+        style={{ marginBottom: 'var(--fg-space-4)' }}
+      />
+      <FgField label="Chọn file .tsv" help={fileName ? `Đã chọn: ${fileName}` : 'Excel: Lưu thành "Text (Tab delimited)" hoặc CSV dùng Tab'}>
+        <input type="file" accept=".tsv,.txt,text/tab-separated-values,text/plain" onChange={(e) => void onFile(e.target.files?.[0])} />
+      </FgField>
+
+      {parseError ? <FgAlert tone="warning" title={parseError} style={{ marginTop: 'var(--fg-space-3)' }} /> : null}
+
+      {result ? (
+        <FgAlert
+          tone={result.failed.length ? 'warning' : 'success'}
+          title={`Đã nhập ${result.inserted} khoản nợ${result.failed.length ? `, ${result.failed.length} dòng lỗi` : ''}`}
+          description={result.failed.length ? result.failed.map((f) => `Dòng ${f.row}: ${f.error}`).join(' · ') : undefined}
+          style={{ marginTop: 'var(--fg-space-4)' }}
+        />
+      ) : null}
+
+      {rows.length ? (
+        <>
+          {invalidCount ? (
+            <FgAlert tone="warning" title={`${invalidCount} dòng không hợp lệ sẽ bị bỏ qua`} style={{ marginTop: 'var(--fg-space-3)', marginBottom: 'var(--fg-space-3)' }} />
+          ) : null}
+          <FgTable<ImportPreviewRow>
+            rowKey="line"
+            dataSource={rows}
+            columns={[
+              { title: 'Dòng', dataIndex: 'line', key: 'line', width: 60 },
+              { title: 'Ngân hàng', dataIndex: 'bank_name', key: 'bn', render: (v: string) => v || '—' },
+              { title: 'Số tiền vay', key: 'amt', align: 'right', render: (_v, r) => (r.amount_minor && r.amount_minor !== '0' ? formatMoney(money(r.amount_minor), { mode: 'full' }) : '—') },
+              { title: 'Hạn mức', key: 'cl', align: 'right', render: (_v, r) => (r.credit_limit_minor ? formatMoney(money(r.credit_limit_minor), { mode: 'full' }) : '—') },
+              { title: 'Lãi suất', dataIndex: 'interest_rate', key: 'ir', render: (v: string) => `${v} %` },
+              { title: 'Hạn TT', dataIndex: 'maturity_date', key: 'md', render: (v: string) => (v ? dayjs(v).format('DD/MM/YYYY') : '—') },
+              { title: 'Kỳ hạn', dataIndex: 'term_months', key: 'tm', render: (v: string) => (v ? `${v} tháng` : '—') },
+              { title: 'Ghi chú', dataIndex: 'note', key: 'nt', render: (v: string) => v || '—' },
+              {
+                title: 'Trạng thái',
+                key: 'st',
+                render: (_v, r) => (r.errors.length ? <FgText style="caption" color="danger">{r.errors.join('; ')}</FgText> : <FgText style="caption" color="success">Hợp lệ</FgText>),
+              },
+            ]}
+          />
+        </>
+      ) : null}
+    </FgModal>
+  );
+}
+
 /* ============================== LOAN-01 list ============================== */
 
 export function BankDebtListScreen(): ReactNode {
   const query = useBankDebts();
+  const { can } = useAuth();
+  const [importOpen, setImportOpen] = useState(false);
   return (
     <>
       <FgPageHeader
         title="Nợ ngân hàng"
         meta="Khoản vay — dư nợ tự trừ khi phiếu chi trả nợ được thực thi"
         actions={
-          <Link to="/ngan-hang/khoan-vay/moi">
-            <FgButton variant="primary">+ Tạo phiếu nợ</FgButton>
-          </Link>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {can('loan:write') ? (
+              <FgButton onClick={() => setImportOpen(true)}>Nhập theo lô (.tsv)</FgButton>
+            ) : null}
+            <Link to="/ngan-hang/khoan-vay/moi">
+              <FgButton variant="primary">+ Tạo phiếu nợ</FgButton>
+            </Link>
+          </div>
         }
       />
+      {importOpen ? (
+        <BankDebtImportModal
+          open
+          onClose={() => setImportOpen(false)}
+          onImported={() => void query.refetch()}
+        />
+      ) : null}
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={5} cols={8} />}>
         {(data) =>
           !data.items.length ? (
