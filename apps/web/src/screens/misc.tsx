@@ -8,7 +8,7 @@ import { Link, useSearchParams } from 'react-router';
 import { dateTimeLabel, formatMoney, money, moneyFromWire, relativeTime } from '@fingate/shared';
 import { useAlerts, useNeedsAttention, useNewsletter, useNotifications, useSearch, useMarkRead, useUnreadCount } from '../app/queries.ts';
 import type { MoneyWire } from '../app/types.ts';
-import { FgAlert, FgButton, FgText, FgMoney } from '../components/primitives.tsx';
+import { FgAlert, FgButton, FgText, FgMoneyStack } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgSkeletonTable } from '../components/uitk.tsx';
 import { FgExceptionList } from '../components/finance.tsx';
@@ -56,7 +56,7 @@ export function NewsletterScreen(): ReactNode {
               return (
                 <div className="fg-stat-row" key={k}>
                   <span className="fg-stat-label">{label}</span>
-                  {typeof v === 'object' ? <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> : <span className="fg-num">{v}</span>}
+                  {typeof v === 'object' ? <FgMoneyStack value={moneyFromWire(v)} emphasis /> : <span className="fg-num">{v}</span>}
                 </div>
               );
             })}
@@ -69,7 +69,7 @@ export function NewsletterScreen(): ReactNode {
                     {it.label}
                     {it.note ? <span style={{ color: 'var(--fg-status-danger-text)' }}> · {it.note}</span> : null}
                   </span>
-                  {it.amount ? <FgMoney value={moneyFromWire(it.amount)} mode="compact" /> : <span>{it.text ?? '—'}</span>}
+                  {it.amount ? <FgMoneyStack value={moneyFromWire(it.amount)} /> : <span>{it.text ?? '—'}</span>}
                 </div>
               ))}
             </FgCard>
@@ -133,7 +133,7 @@ export function NeedsAttentionScreen(): ReactNode {
                               {r.company_name} · chờ {r.waiting_days} ngày
                             </FgText>
                           </div>
-                          <FgMoney value={moneyFromWire(r.amount)} mode="compact" emphasis />
+                          <FgMoneyStack value={moneyFromWire(r.amount)} emphasis />
                         </div>
                       ))}
                       {g.items.length > 15 ? (
@@ -261,7 +261,7 @@ export function SearchScreen(): ReactNode {
                       {h.subtitle}
                     </FgText>
                   </div>
-                  {h.amount ? <FgMoney value={moneyFromWire(h.amount)} mode="compact" /> : null}
+                  {h.amount ? <FgMoneyStack value={moneyFromWire(h.amount)} /> : null}
                 </div>
               ))}
             </div>

@@ -407,6 +407,44 @@ export function FgMoney({
   );
 }
 
+/**
+ * Hiển thị tiền theo kiểu bảng Ngân hàng: bản ĐẦY ĐỦ ở trên + bản RÚT GỌN
+ * (mờ, nhỏ) ở dưới — chỉ khi khác nhau. Dùng cho các ô/KPI từng hiển thị compact đơn lẻ.
+ */
+export function FgMoneyStack({
+  value,
+  missingLabel = '—',
+  emphasis,
+  className,
+  style,
+}: {
+  value: Money | { minor: string; currency?: string; decimals?: number } | string | number | bigint | null | undefined;
+  missingLabel?: string;
+  emphasis?: boolean;
+  className?: string;
+  style?: CSSProperties;
+}): ReactNode {
+  const m = toMoney(value as never);
+  if (m === null) {
+    return <FgMoney value={null} mode="full" missingLabel={missingLabel} emphasis={emphasis} className={className} style={style} />;
+  }
+  const full = formatMoney(m, { mode: 'full' });
+  const compact = formatMoney(m, { mode: 'compact' });
+  return (
+    <span
+      className={className}
+      style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.35, ...style }}
+    >
+      <FgMoney value={m} mode="full" emphasis={emphasis} />
+      {compact !== full ? (
+        <span style={{ fontSize: 'var(--fg-font-caption-size)', lineHeight: 'var(--fg-font-caption-line)', color: 'var(--fg-text-muted)' }}>
+          {compact}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 /** Input số tiền: hiển thị theo vi-VN, parse qua `parseMoneyInput` (cấm Number()/parseFloat). */
 export function FgMoneyInput({
   value,

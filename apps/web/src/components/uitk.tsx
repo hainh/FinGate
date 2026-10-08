@@ -31,7 +31,7 @@ import {
   statusLabel,
   type Money,
 } from '@fingate/shared';
-import { FgMoney, FgStatusChip, FgText } from './primitives.tsx';
+import { FgMoney, FgMoneyStack, FgStatusChip, FgText } from './primitives.tsx';
 import { toneStyle } from '../app/theme.ts';
 import { useUi } from '../app/store.tsx';
 
@@ -234,7 +234,7 @@ export function renderCellByType(value: unknown, type: FgCellType, row?: Record<
       // server gửi compact đã format ("2,50 tỷ"); nếu chạm money wire object (cột không hậu tố _compact)
       // → format qua shared. KHÔNG truyền nguyên `row` vào money() — sẽ ném TypeError.
       if (typeof value === 'string') return <span className="fg-money">{value}</span>;
-      if (value && typeof value === 'object' && 'minor' in (value as object)) return <FgMoney value={value as never} mode="compact" />;
+      if (value && typeof value === 'object' && 'minor' in (value as object)) return <FgMoneyStack value={value as never} />;
       return <span className="fg-money">{String(value ?? '—')}</span>;
     }
     case 'percent':

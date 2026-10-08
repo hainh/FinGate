@@ -29,7 +29,7 @@ import {
 } from '@fingate/shared';
 import { useApprovalThreshold, useApprovalThresholdUpsert, useAuditLog, useCompanies, useDepartments, useMatrix, useMatrixUpsert, usePersonnel, type DepartmentRow } from '../app/queries.ts';
 import { useAuth, useUi, useCurrentCompanyId } from '../app/store.tsx';
-import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgMultiSelect, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
+import { FgAlert, FgButton, FgField, FgInput, FgMoneyStack, FgMoneyInput, FgMultiSelect, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonTable, FgTable, FgTabs, FgTag } from '../components/uitk.tsx';
 import { FgApprovalTimeline } from '../components/finance.tsx';
@@ -145,7 +145,7 @@ export function PersonnelScreen(): ReactNode {
                   dataIndex: 'amount_limit_minor',
                   key: 'lim',
                   align: 'right',
-                  render: (v: string) => <FgMoney value={money(v)} mode="compact" />,
+                  render: (v: string) => <FgMoneyStack value={money(v)} />,
                 },
                 {
                   title: 'Trạng thái',
@@ -950,7 +950,7 @@ export function CompaniesScreen(): ReactNode {
                       dataIndex: 'min_balance',
                       key: 'mb',
                       align: 'right',
-                      render: (v: string | undefined) => <FgMoney value={v ?? '0'} mode="compact" />,
+                      render: (v: string | undefined) => <FgMoneyStack value={v ?? '0'} />,
                     },
                     {
                       title: 'Trạng thái',
@@ -1295,13 +1295,13 @@ export function MatrixScreen(): ReactNode {
                     dataIndex: 'amount_min_minor',
                     key: 'mn',
                     align: 'right',
-                    render: (v: string) => <FgMoney value={money(v)} mode="compact" />,
+                    render: (v: string) => <FgMoneyStack value={money(v)} />,
                   },
                   {
                     title: 'Đến',
                     key: 'mx',
                     align: 'right',
-                    render: (_v, r) => (r.amount_max_minor ? <FgMoney value={money(r.amount_max_minor)} mode="compact" /> : <span className="fg-muted">∞</span>),
+                    render: (_v, r) => (r.amount_max_minor ? <FgMoneyStack value={money(r.amount_max_minor)} /> : <span className="fg-muted">∞</span>),
                   },
                   {
                     title: 'Chuỗi duyệt',
@@ -1640,7 +1640,7 @@ export function ApprovalThresholdScreen(): ReactNode {
                     title: DOC_KIND_LABEL[k],
                     key: k,
                     align: 'right' as const,
-                    render: (_v: unknown, r: ApprovalThresholdCompany) => <FgMoney value={money(r.effective[k])} mode="compact" />,
+                    render: (_v: unknown, r: ApprovalThresholdCompany) => <FgMoneyStack value={money(r.effective[k])} />,
                   })),
                 ]}
               />

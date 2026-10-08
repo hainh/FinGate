@@ -4,14 +4,13 @@
 
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { formatMoney, moneyFromWire } from '@fingate/shared';
 import { useBankAccounts } from '../app/queries.ts';
 import { useAuth } from '../app/store.tsx';
-import { FgButton, FgMoney, FgText } from '../components/primitives.tsx';
+import { FgButton, FgMoneyStack, FgText } from '../components/primitives.tsx';
 import { FgSegmented, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery } from '../components/pagekit.tsx';
-import type { BankAccountRow, MoneyWire } from '../app/types.ts';
+import type { BankAccountRow } from '../app/types.ts';
 
 export function BankAccountsScreen(): ReactNode {
   const query = useBankAccounts();
@@ -88,7 +87,7 @@ export function BankAccountsScreen(): ReactNode {
                   title: 'Số dư',
                   key: 'bal',
                   align: 'right',
-                  render: (_v, r) => <MoneyStack value={r.balance} missingLabel="—" />,
+                  render: (_v, r) => <FgMoneyStack value={r.balance} missingLabel="—" />,
                 },
                 {
                   title: 'Khả dụng',
@@ -96,7 +95,7 @@ export function BankAccountsScreen(): ReactNode {
                   align: 'right',
                   render: (_v, r) => (
                     <span className={r.breach ? 'fg-cell-breach' : undefined} style={{ padding: r.breach ? '2px 6px' : undefined, borderRadius: 'var(--fg-radius-sm)' }}>
-                      <MoneyStack value={r.available} />
+                      <FgMoneyStack value={r.available} />
                       {r.breach ? ' ⛔' : ''}
                     </span>
                   ),
@@ -105,7 +104,7 @@ export function BankAccountsScreen(): ReactNode {
                   title: 'Ngưỡng tối thiểu',
                   key: 'min',
                   align: 'right',
-                  render: (_v, r) => <MoneyStack value={r.min_balance} />,
+                  render: (_v, r) => <FgMoneyStack value={r.min_balance} />,
                 },
                 {
                   title: 'Trạng thái',
@@ -152,24 +151,6 @@ function FgTooltipNew(): ReactNode {
     <Link to="/ngan-hang/taikhoan/moi">
       <FgButton variant="primary">+ Thêm tài khoản</FgButton>
     </Link>
-  );
-}
-
-/** Số tiền: bản đầy đủ ở trên, bản rút gọn (mờ, cỡ nhỏ hơn) ở dưới — chỉ khi khác bản đầy đủ. */
-function MoneyStack({ value, missingLabel }: { value: MoneyWire | null; missingLabel?: string }): ReactNode {
-  const m = moneyFromWire(value);
-  if (!m) return <FgMoney value={null} mode="full" missingLabel={missingLabel} />;
-  const full = formatMoney(m, { mode: 'full' });
-  const compact = formatMoney(m, { mode: 'compact' });
-  return (
-    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.35 }}>
-      <FgMoney value={m} mode="full" />
-      {compact !== full ? (
-        <span style={{ fontSize: 'var(--fg-font-caption-size)', lineHeight: 'var(--fg-font-caption-line)', color: 'var(--fg-text-muted)' }}>
-          {compact}
-        </span>
-      ) : null}
-    </span>
   );
 }
 

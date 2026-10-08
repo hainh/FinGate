@@ -10,7 +10,7 @@ import type { ReactNode } from 'react';
 import { moneyFromWire } from '@fingate/shared';
 import { useOverview, useReport, useRollovers } from '../app/queries.ts';
 import { useAuth } from '../app/store.tsx';
-import { FgButton, FgMoney, FgStatusChip, FgText } from '../components/primitives.tsx';
+import { FgButton, FgMoney, FgMoneyStack, FgStatusChip, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgSkeletonKpi, FgSkeletonTable } from '../components/uitk.tsx';
 import { FgExceptionList, FgKpiCard, OwnerLine } from '../components/finance.tsx';
@@ -156,7 +156,7 @@ export function DashboardScreen(): ReactNode {
                               {m.label}
                             </span>
                             <span style={{ flex: 1 }} />
-                            <FgMoney value={moneyFromWire(m.outstanding)} mode="compact" />
+                            <FgMoneyStack value={moneyFromWire(m.outstanding)} />
                           </div>
                         ))}
                         {ro.kpi ? (
@@ -200,7 +200,7 @@ export function DashboardScreen(): ReactNode {
                         <OwnerLine owner={row.next_role_label} roleLabel={row.next_role_label} waitingDays={row.waiting_days} />
                       </div>
                       <FgStatusChip status={row.status} overdue={row.overdue} size="small" />
-                      <FgMoney value={moneyFromWire(row.amount)} mode="compact" emphasis />
+                      <FgMoneyStack value={moneyFromWire(row.amount)} emphasis />
                     </div>
                   ))}
                 </div>

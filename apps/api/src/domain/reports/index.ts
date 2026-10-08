@@ -131,7 +131,7 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
       const totalOut = out.reduce((a, r) => a + asBigInt(r.expense.minor), 0n);
       return {
         ...base,
-        columns: [D('date', 'Ngày'), C('income_compact', 'Thu'), C('expense_compact', 'Chi'), C('rollover' as never, 'Đảo hạn') as never, C('net_compact', 'Thuần'), N('documents', 'Số phiếu')] as ReportColumn[],
+        columns: [D('date', 'Ngày'), C('income', 'Thu'), C('expense', 'Chi'), C('rollover' as never, 'Đảo hạn') as never, C('net', 'Thuần'), N('documents', 'Số phiếu')] as ReportColumn[],
         rows: out,
         totals: { income: wire(totalIn), expense: wire(totalOut), net: wire(totalIn - totalOut) },
         kpi: [
@@ -172,12 +172,13 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
         income_compact: formatMoney(money(asBigInt(r.income)), { mode: 'compact' }),
         expense: wire(asBigInt(r.expense)),
         expense_compact: formatMoney(money(asBigInt(r.expense)), { mode: 'compact' }),
+        net: wire(asBigInt(r.income) - asBigInt(r.expense)),
         net_compact: formatMoney(money(asBigInt(r.income) - asBigInt(r.expense)), { mode: 'compact' }),
         count: r.count,
       }));
       return {
         ...base,
-        columns: [T('month', 'Tháng'), C('income_compact', 'Thu'), C('expense_compact', 'Chi'), C('net_compact', 'Thuần'), N('count', 'Số phiếu')],
+        columns: [T('month', 'Tháng'), C('income', 'Thu'), C('expense', 'Chi'), C('net', 'Thuần'), N('count', 'Số phiếu')],
         rows: out,
         totals: {},
         kpi: out.slice(0, 1).map((r) => ({ label: r.month, value: r.net_compact, note: 'so sánh với kỳ trước ở bảng' })),
@@ -208,7 +209,9 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
           account: String((a as { account_number?: string } | undefined)?.account_number ?? ''),
           balance: wire(closing),
           balance_compact: formatMoney(money(closing), { mode: 'compact' }),
+          available: wire(closing - blocked),
           available_compact: formatMoney(money(closing - blocked), { mode: 'compact' }),
+          blocked: wire(blocked),
           blocked_compact: formatMoney(money(blocked), { mode: 'compact' }),
           as_of: l.date,
         };
@@ -216,7 +219,7 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
       const total = out.reduce((a, r) => a + asBigInt(r.balance.minor), 0n);
       return {
         ...base,
-        columns: [T('company_name', 'Công ty'), T('bank_name', 'Ngân hàng'), T('account', 'Số TK'), C('balance_compact', 'Số dư'), C('available_compact', 'Khả dụng'), C('blocked_compact', 'Phong tỏa'), D('as_of', 'Cập nhật')],
+        columns: [T('company_name', 'Công ty'), T('bank_name', 'Ngân hàng'), T('account', 'Số TK'), C('balance', 'Số dư'), C('available', 'Khả dụng'), C('blocked', 'Phong tỏa'), D('as_of', 'Cập nhật')],
         rows: out,
         totals: { balance: wire(total) },
         kpi: [{ label: 'Tổng số dư', value: formatMoney(money(total), { mode: 'kpi' }), note: null }],
@@ -263,7 +266,9 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
           const overdue = r.oldest_due && r.oldest_due < today() ? -daysUntil(r.oldest_due) : 0;
           return {
             counterparty: r.counterparty,
+            value: wire(r.value),
             value_compact: formatMoney(money(r.value), { mode: 'compact' }),
+            settled: wire(r.settled),
             settled_compact: formatMoney(money(r.settled), { mode: 'compact' }),
             remaining: wire(remaining),
             remaining_compact: formatMoney(money(remaining), { mode: 'compact' }),
@@ -275,7 +280,7 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
       const totalRemaining = out.reduce((a, r) => a + asBigInt(r.remaining.minor), 0n);
       return {
         ...base,
-        columns: [T('counterparty', 'Đối tượng'), C('value_compact', 'Giá trị'), C('settled_compact', 'Đã cấn trừ'), C('remaining_compact', 'Còn lại'), N('count', 'Số phiếu'), D('due_date', 'Hạn'), N('days_overdue', 'Quá hạn (ngày)')],
+        columns: [T('counterparty', 'Đối tượng'), C('value', 'Giá trị'), C('settled', 'Đã cấn trừ'), C('remaining', 'Còn lại'), N('count', 'Số phiếu'), D('due_date', 'Hạn'), N('days_overdue', 'Quá hạn (ngày)')],
         rows: out,
         totals: { remaining: wire(totalRemaining) },
         kpi: [{ label: side === 'debit' ? 'Tổng còn ghi Nợ' : 'Tổng còn ghi Có', value: formatMoney(money(totalRemaining), { mode: 'kpi' }), note: null }],
@@ -306,6 +311,7 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
           company_name: cmap.get(String(l.company_id)) ?? '',
           bank_name: String(l.bank_name),
           contract_code: String((l as { code?: unknown }).code ?? ''),
+          limit: wire(principal),
           limit_compact: formatMoney(money(principal), { mode: 'compact' }),
           outstanding: wire(outstanding),
           outstanding_compact: formatMoney(money(outstanding), { mode: 'compact' }),
@@ -318,7 +324,7 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
       const total = out.reduce((a, r) => a + asBigInt(r.outstanding.minor), 0n);
       return {
         ...base,
-        columns: [T('company_name', 'Công ty'), T('bank_name', 'Ngân hàng'), T('contract_code', 'Mã khoản'), C('limit_compact', 'Số tiền vay'), C('outstanding_compact', 'Dư nợ'), T('interest_rate', 'Lãi suất'), D('maturity_date', 'Hạn trả'), N('days_to_due', 'Còn lại')],
+        columns: [T('company_name', 'Công ty'), T('bank_name', 'Ngân hàng'), T('contract_code', 'Mã khoản'), C('limit', 'Số tiền vay'), C('outstanding', 'Dư nợ'), T('interest_rate', 'Lãi suất'), D('maturity_date', 'Hạn trả'), N('days_to_due', 'Còn lại')],
         rows: out,
         totals: { outstanding: wire(total) },
         kpi: [{ label: 'Tổng dư nợ', value: formatMoney(money(total), { mode: 'kpi' }), note: `${out.length} khoản` }],
@@ -368,7 +374,7 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
       const bucketSum = (b: string) => out.filter((r) => r.bucket === b).reduce((a, r) => a + asBigInt(r.outstanding.minor), 0n);
       return {
         ...base,
-        columns: [T('company_name', 'Công ty'), T('bank_name', 'Ngân hàng'), T('contract_code', 'Khoản vay'), C('outstanding_compact', 'Dư nợ'), C('interest_compact', 'Lãi dự kiến'), C('need_compact', 'Cần chuẩn bị'), D('maturity_date', 'Đáo hạn'), N('days_to_due', 'Còn lại'), T('bucket', 'Nhóm')],
+        columns: [T('company_name', 'Công ty'), T('bank_name', 'Ngân hàng'), T('contract_code', 'Khoản vay'), C('outstanding', 'Dư nợ'), C('interest', 'Lãi dự kiến'), C('need', 'Cần chuẩn bị'), D('maturity_date', 'Đáo hạn'), N('days_to_due', 'Còn lại'), T('bucket', 'Nhóm')],
         rows: out,
         totals: { today: wire(bucketSum('Hôm nay')), d7: wire(bucketSum('4–7 ngày') + bucketSum('3 ngày') + bucketSum('Hôm nay')) },
         kpi: [
@@ -407,7 +413,9 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
         return {
           date: r._id,
           opening: wire(start),
+          inflow: wire(inn),
           inflow_compact: formatMoney(money(inn), { mode: 'compact' }),
+          outflow: wire(ot),
           outflow_compact: formatMoney(money(ot), { mode: 'compact' }),
           closing: wire(running),
           closing_compact: formatMoney(money(running), { mode: 'compact' }),
@@ -416,7 +424,7 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
       });
       return {
         ...base,
-        columns: [D('date', 'Ngày'), C('opening' as never, 'Đầu kỳ') as never, C('inflow_compact', 'Thu'), C('outflow_compact', 'Chi'), C('closing_compact', 'Cuối kỳ')],
+        columns: [D('date', 'Ngày'), C('opening' as never, 'Đầu kỳ') as never, C('inflow', 'Thu'), C('outflow', 'Chi'), C('closing', 'Cuối kỳ')],
         rows: out,
         totals: {},
         kpi: [{ label: 'Số dư cuối kỳ dự kiến', value: formatMoney(money(running), { mode: 'kpi' }), note: threshold > 0n ? `Ngưỡng ${formatMoney(money(threshold), { mode: 'compact' })}` : null }],
@@ -456,15 +464,18 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
         const exp = asBigInt(r.expense);
         return {
           company_name: cmap.get(String(r._id)) ?? '—',
+          income: wire(inc),
           income_compact: formatMoney(money(inc), { mode: 'compact' }),
+          expense: wire(exp),
           expense_compact: formatMoney(money(exp), { mode: 'compact' }),
+          net: wire(inc - exp),
           net_compact: formatMoney(money(inc - exp), { mode: 'compact' }),
           documents: r.count,
         };
       });
       return {
         ...base,
-        columns: [T('company_name', 'Công ty'), C('income_compact', 'Thu'), C('expense_compact', 'Chi'), C('net_compact', 'Thuần'), N('documents', 'Số phiếu')],
+        columns: [T('company_name', 'Công ty'), C('income', 'Thu'), C('expense', 'Chi'), C('net', 'Thuần'), N('documents', 'Số phiếu')],
         rows: out,
         totals: {},
         kpi: out.slice(0, 3).map((r) => ({ label: r.company_name, value: r.net_compact, note: null })),
@@ -513,7 +524,7 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
       }
       return {
         ...base,
-        columns: [T('code', 'Mã'), T('company_name', 'Công ty'), T('title', 'Nội dung'), T('kind', 'Loại'), C('amount_compact', 'Số tiền'), T('owner', 'Cấp duyệt'), N('waiting_days', 'Đã chờ'), T('status_label', 'Trạng thái')],
+        columns: [T('code', 'Mã'), T('company_name', 'Công ty'), T('title', 'Nội dung'), T('kind', 'Loại'), C('amount', 'Số tiền'), T('owner', 'Cấp duyệt'), N('waiting_days', 'Đã chờ'), T('status_label', 'Trạng thái')],
         rows: out,
         totals: { amount: wire(total) },
         kpi: [
@@ -620,7 +631,7 @@ async function groupByDimension(input: ReportInput, field: string, kind: 'depart
     };
   });
   return {
-    columns: [T('label', kind === 'department' ? 'Bộ phận' : 'Loại khoản chi'), C('amount_compact', 'Số tiền'), T('percent', '% tổng', { type: 'percent', align: 'right', sortable: true }), N('count', 'Số phiếu')],
+    columns: [T('label', kind === 'department' ? 'Bộ phận' : 'Loại khoản chi'), C('amount', 'Số tiền'), T('percent', '% tổng', { type: 'percent', align: 'right', sortable: true }), N('count', 'Số phiếu')],
     rows: out,
     totals: { amount: wire(total) },
     kpi: [

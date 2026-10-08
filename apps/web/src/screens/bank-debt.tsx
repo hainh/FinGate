@@ -11,7 +11,7 @@ import { formatMoney, money, moneyFromWire, parseMoneyInput, type Money } from '
 import { ApiRequestError } from '../app/api.ts';
 import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
 import { useBankDebt, useBankDebts, useCreateBankDebt, useDeleteBankDebt, useImportBankDebts, useLoanSchedule, useRepayBankDebt, useUnrepayBankDebt, useUpdateBankDebt } from '../app/queries.ts';
-import { FgAlert, FgButton, FgField, FgFreeSelect, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTextarea } from '../components/primitives.tsx';
+import { FgAlert, FgButton, FgField, FgFreeSelect, FgInput, FgMoneyStack, FgMoneyInput, FgSelect, FgText, FgTextarea } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
@@ -302,9 +302,9 @@ export function BankDebtListScreen(): ReactNode {
                   { title: 'Mã', dataIndex: 'code', key: 'code', render: (v, r) => <Link className="fg-link" to={`/ngan-hang/khoan-vay/${r._id}`}>{v}</Link> },
                   { title: 'Ngân hàng', dataIndex: 'bank_name', key: 'bn' },
                   { title: 'Công ty', dataIndex: 'company_name', key: 'co' },
-                  { title: 'Số tiền vay', dataIndex: 'principal', key: 'principal', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-                  { title: 'Hạn mức vay', dataIndex: 'credit_limit', key: 'credit_limit', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-                  { title: 'Dư nợ', dataIndex: 'outstanding', key: 'os', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
+                  { title: 'Số tiền vay', dataIndex: 'principal', key: 'principal', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
+                  { title: 'Hạn mức vay', dataIndex: 'credit_limit', key: 'credit_limit', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
+                  { title: 'Dư nợ', dataIndex: 'outstanding', key: 'os', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} emphasis /> },
                   { title: 'Lãi suất', dataIndex: 'interest_rate', key: 'ir', render: (v: string) => `${v} %/năm` },
                   { title: 'Hạn trả', dataIndex: 'maturity_date', key: 'md' },
                   { title: 'Trạng thái', dataIndex: 'status', key: 'st', render: (v: string) => BANK_STATUS_LABEL[v] ?? v },
@@ -558,19 +558,19 @@ export function BankDebtDetailScreen(): ReactNode {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 'var(--fg-space-3)', marginBottom: 'var(--fg-space-4)' }}>
             <FgCard className="fg-kpi">
               <FgText style="caption" color="muted">Số tiền vay</FgText>
-              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.principal)} mode="compact" /></div>
+              <div className="fg-kpi-value"><FgMoneyStack value={moneyFromWire(d.principal)} /></div>
             </FgCard>
             <FgCard className="fg-kpi">
               <FgText style="caption" color="muted">Hạn mức vay</FgText>
-              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.credit_limit)} mode="compact" /></div>
+              <div className="fg-kpi-value"><FgMoneyStack value={moneyFromWire(d.credit_limit)} /></div>
             </FgCard>
             <FgCard className="fg-kpi">
               <FgText style="caption" color="muted">Đã trả</FgText>
-              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.repaid)} mode="compact" /></div>
+              <div className="fg-kpi-value"><FgMoneyStack value={moneyFromWire(d.repaid)} /></div>
             </FgCard>
             <FgCard className="fg-kpi">
               <FgText style="caption" color="muted">Dư nợ</FgText>
-              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.outstanding)} mode="compact" emphasis /></div>
+              <div className="fg-kpi-value"><FgMoneyStack value={moneyFromWire(d.outstanding)} emphasis /></div>
             </FgCard>
           </div>
 
@@ -584,7 +584,7 @@ export function BankDebtDetailScreen(): ReactNode {
                 columns={[
                   { title: 'Phiếu chi', key: 'doc', render: (_v, r) => `${r.document_code} · ${r.document_title}` },
                   { title: 'Trạng thái', dataIndex: 'document_status', key: 'st', render: (v: string) => docStatus(v) },
-                  { title: 'Số tiền', dataIndex: 'amount', key: 'amount', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
+                  { title: 'Số tiền', dataIndex: 'amount', key: 'amount', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
                   {
                     title: '',
                     key: 'act',
@@ -691,15 +691,15 @@ export function LoanScheduleScreen(): ReactNode {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 'var(--fg-space-3)', marginBottom: 'var(--fg-space-4)' }}>
             <FgCard className="fg-kpi">
               <FgText style="caption" color="muted">Tổng gốc</FgText>
-              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.totals.principal)} mode="compact" /></div>
+              <div className="fg-kpi-value"><FgMoneyStack value={moneyFromWire(d.totals.principal)} /></div>
             </FgCard>
             <FgCard className="fg-kpi">
               <FgText style="caption" color="muted">Tổng lãi</FgText>
-              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.totals.interest)} mode="compact" /></div>
+              <div className="fg-kpi-value"><FgMoneyStack value={moneyFromWire(d.totals.interest)} /></div>
             </FgCard>
             <FgCard className="fg-kpi">
               <FgText style="caption" color="muted">Tổng phải trả</FgText>
-              <div className="fg-kpi-value"><FgMoney value={moneyFromWire(d.totals.total)} mode="compact" emphasis /></div>
+              <div className="fg-kpi-value"><FgMoneyStack value={moneyFromWire(d.totals.total)} emphasis /></div>
             </FgCard>
           </div>
           <div className="fg-card" style={{ padding: 0 }}>
@@ -710,10 +710,10 @@ export function LoanScheduleScreen(): ReactNode {
                 { title: 'Kỳ', dataIndex: 'period', key: 'p' },
                 { title: 'Ngày đến hạn', dataIndex: 'due_date', key: 'd' },
                 { title: 'Số ngày', dataIndex: 'days', key: 'days', align: 'right' },
-                { title: 'Gốc', dataIndex: 'principal', key: 'pr', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-                { title: 'Lãi', dataIndex: 'interest', key: 'in', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-                { title: 'Phí', dataIndex: 'fee', key: 'fe', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-                { title: 'Cộng', dataIndex: 'total', key: 'to', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
+                { title: 'Gốc', dataIndex: 'principal', key: 'pr', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
+                { title: 'Lãi', dataIndex: 'interest', key: 'in', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
+                { title: 'Phí', dataIndex: 'fee', key: 'fe', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
+                { title: 'Cộng', dataIndex: 'total', key: 'to', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} emphasis /> },
                 { title: 'Trạng thái', dataIndex: 'status', key: 'st', render: (v: string) => SCHEDULE_STATUS_LABEL[v] ?? v },
               ]}
             />

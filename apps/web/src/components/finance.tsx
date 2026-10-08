@@ -12,7 +12,7 @@ import type {
   KpiBlock,
   MoneyWire,
 } from '../app/types.ts';
-import { FgButton, FgMoney, FgText, FgTooltip } from './primitives.tsx';
+import { FgButton, FgMoney, FgMoneyStack, FgText, FgTooltip } from './primitives.tsx';
 import { FgCard } from './cards.tsx';
 import { toneStyle } from '../app/theme.ts';
 import { ROLES_LABEL } from './labels.ts';
@@ -300,7 +300,7 @@ export function FgDecisionPack({
         <SumRow label="Hợp đồng">{pack.q4_basis.contract_code ?? '—'}</SumRow>
         {pack.q4_basis.contract_value ? (
           <SumRow label="Giá trị HĐ">
-            <FgMoney value={w(pack.q4_basis.contract_value)} mode="compact" />
+            <FgMoneyStack value={w(pack.q4_basis.contract_value)} />
           </SumRow>
         ) : null}
         <SumRow label="Hóa đơn">{pack.q4_basis.invoice ?? '—'}</SumRow>
@@ -329,7 +329,7 @@ export function FgDecisionPack({
           <FgMoney value={bal} mode="full" style={{ color: pack.q6_impact.breach ? 'var(--fg-status-danger-text)' : isInflow ? 'var(--fg-status-success-text)' : undefined, fontWeight: 500 }} />
         </SumRow>
         <SumRow label="Ngưỡng tối thiểu">
-          <FgMoney value={min} mode="compact" />
+          <FgMoneyStack value={min} />
         </SumRow>
         {pack.q6_impact.breach ? (
           <div className="fg-sum-note">

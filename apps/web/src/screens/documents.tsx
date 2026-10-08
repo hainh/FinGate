@@ -23,7 +23,7 @@ import {
 } from '@fingate/shared';
 import { useDocuments, useProcessed, useQueue, type DocListFilters } from '../app/queries.ts';
 import type { QueueRow } from '../app/types.ts';
-import { FgButton, FgMoney, FgSelect, FgStatusChip, FgText } from '../components/primitives.tsx';
+import { FgButton, FgMoneyStack, FgSelect, FgStatusChip, FgText } from '../components/primitives.tsx';
 import { FgEmptyState, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import type { TableColumnsType } from 'antd';
 import { FgPageHeader } from '../components/shell.tsx';
@@ -31,7 +31,6 @@ import { FgQuery, useDebounced } from '../components/pagekit.tsx';
 import { useAuth } from '../app/store.tsx';
 import { OwnerLine } from '../components/finance.tsx';
 import { BulkApproveModal } from './approve-modal.tsx';
-import { FgTooltip } from '../components/primitives.tsx';
 
 const STATUS_OPTIONS = [
   { value: '', label: 'Mọi trạng thái' },
@@ -116,13 +115,7 @@ export function useDocColumns(sortable = false): TableColumnsType<QueueRow> {
           key: 'amount',
           align: 'right',
           sorter: (a: QueueRow, b: QueueRow) => Number(BigInt(a.amount.minor) - BigInt(b.amount.minor)),
-          render: (_v: unknown, r: QueueRow) => (
-            <FgTooltip title={formatMoney(moneyFromWire(r.amount)!, { mode: 'full' })}>
-              <span>
-                <FgMoney value={moneyFromWire(r.amount)} mode="compact" emphasis />
-              </span>
-            </FgTooltip>
-          ),
+          render: (_v: unknown, r: QueueRow) => <FgMoneyStack value={moneyFromWire(r.amount)} emphasis />,
         },
         {
           title: 'Trạng thái',

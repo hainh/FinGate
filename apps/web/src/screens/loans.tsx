@@ -9,7 +9,7 @@ import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { moneyFromWire } from '@fingate/shared';
 import { useRolloverPreparation, useRollovers } from '../app/queries.ts';
-import { FgButton, FgMoney, FgSelect, FgText } from '../components/primitives.tsx';
+import { FgButton, FgMoneyStack, FgSelect, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgMaturityCell } from '../components/finance.tsx';
@@ -61,7 +61,7 @@ export function RolloversScreen(): ReactNode {
                     Đáo hạn {String(label)}
                   </FgText>
                   <div className="fg-kpi-value" style={{ fontSize: 'var(--fg-font-number-m-size)' }}>
-                    <FgMoney value={moneyFromWire(m as never)} mode="compact" />
+                    <FgMoneyStack value={moneyFromWire(m as never)} />
                   </div>
                 </FgCard>
               ))}
@@ -79,9 +79,9 @@ export function RolloversScreen(): ReactNode {
                     { title: 'Mã khoản', dataIndex: 'contract_code', key: 'cc' },
                     { title: 'Công ty', dataIndex: 'company_name', key: 'co' },
                     { title: 'Ngân hàng', dataIndex: 'bank_name', key: 'bn' },
-                    { title: 'Dư nợ', dataIndex: 'outstanding', key: 'od', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
-                    { title: 'Lãi dự kiến', dataIndex: 'interest_to_due', key: 'int', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-                    { title: 'Cần chuẩn bị', dataIndex: 'need_prepare', key: 'np', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
+                    { title: 'Dư nợ', dataIndex: 'outstanding', key: 'od', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} emphasis /> },
+                    { title: 'Lãi dự kiến', dataIndex: 'interest_to_due', key: 'int', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
+                    { title: 'Cần chuẩn bị', dataIndex: 'need_prepare', key: 'np', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
                     {
                       title: 'Đáo hạn',
                       key: 'due',
@@ -137,7 +137,7 @@ export function RolloverPreparationScreen(): ReactNode {
                 <FgCard key={String(label)} className="fg-kpi">
                   <FgText style="caption" color="muted">{String(label)}</FgText>
                   <div className="fg-kpi-value" style={{ fontSize: 'var(--fg-font-number-m-size)' }}>
-                    <FgMoney value={moneyFromWire(m as never)} mode="compact" />
+                    <FgMoneyStack value={moneyFromWire(m as never)} />
                   </div>
                 </FgCard>
               ))}
@@ -145,7 +145,7 @@ export function RolloverPreparationScreen(): ReactNode {
             <FgCard className="fg-kpi" style={{ marginBottom: 'var(--fg-space-4)' }}>
               <FgText style="caption" color="muted">{d.breach ? 'Thiếu tiền' : 'Đủ tiền'}</FgText>
               <div className="fg-kpi-value" style={{ fontSize: 'var(--fg-font-number-m-size)', color: d.breach ? 'var(--fg-tone-danger-text)' : undefined }}>
-                <FgMoney value={moneyFromWire(d.gap)} mode="compact" emphasis />
+                <FgMoneyStack value={moneyFromWire(d.gap)} emphasis />
               </div>
             </FgCard>
             {!d.rows.length ? (
@@ -160,9 +160,9 @@ export function RolloverPreparationScreen(): ReactNode {
                   columns={[
                     { title: 'Ngày', dataIndex: 'date', key: 'date' },
                     { title: 'Khoản', dataIndex: 'label', key: 'label' },
-                    { title: 'Gốc', dataIndex: 'principal', key: 'p', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-                    { title: 'Lãi', dataIndex: 'interest', key: 'i', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-                    { title: 'Cần chuẩn bị', dataIndex: 'amount', key: 'a', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
+                    { title: 'Gốc', dataIndex: 'principal', key: 'p', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
+                    { title: 'Lãi', dataIndex: 'interest', key: 'i', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
+                    { title: 'Cần chuẩn bị', dataIndex: 'amount', key: 'a', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} emphasis /> },
                   ]}
                 />
               </div>
