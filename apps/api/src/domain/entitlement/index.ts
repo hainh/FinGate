@@ -201,6 +201,9 @@ const ROLES_FROM_CHIEF_ACCOUNTANT: readonly string[] = ['chief_accountant', 'dep
 /** Trạng thái người lập còn được xoá/sửa (kết hợp gate chưa ai KTT+ duyệt ở vòng hiện tại). */
 const MAINTAINABLE_STATUSES: readonly string[] = ['draft', 'pending.ktt', 'changes_requested', 'rejected'];
 
+/** Vai trò xoá được phiếu ở BẤT KỲ thời điểm/trạng thái, không vướng gate người lập hay "chưa ai duyệt". */
+export const UNRESTRICTED_DELETE_ROLES: readonly Role[] = ['chairman'];
+
 /**
  * Đã có ai từ Kế toán trưởng trở lên **duyệt** trong VÒNG DUYỆT HIỆN TẠI chưa?
  * Đọc từ `history[]` (nguồn sự thật) và chỉ xét các lần duyệt SAU lần `submit` gần
@@ -249,7 +252,9 @@ export function documentPermissions(
   const editable = creatorMaintainable && has('doc:create');
   // Phiếu ĐÃ BỊ TỪ CHỐI: bất kỳ ai có quyền xoá (mặc định Kế toán trưởng / Kế toán viên) đều
   // xoá được — không phụ thuộc người lập, cũng không vướng gate đã từng qua KTT trở lên.
-  const deletable = doc.status === 'rejected' || creatorMaintainable;
+  // Chủ tịch / Tổng Giám đốc: xoá được ở BẤT KỲ trạng thái nào, không vướng gate người lập
+  // hay "chưa ai từ KTT trở lên duyệt" (vẫn cần quyền doc:delete).
+  const deletable = UNRESTRICTED_DELETE_ROLES.includes(actor.role) || doc.status === 'rejected' || creatorMaintainable;
   const currentSteps = doc.steps.filter((s) => s.state === 'current' || s.state === 'waiting');
   const iAmStep = currentSteps.filter(
     (s) =>
@@ -277,7 +282,8 @@ export function documentPermissions(
     edit: editable,
     submit: (doc.status === 'draft' || doc.status === 'changes_requested' || doc.status === 'rejected') && mine && has('doc:submit'),
     // Xoá cứng phiếu: người lập khi phiếu còn nháp / bị trả về bổ sung / bị từ chối và chưa
-    // có ai từ KTT trở lên duyệt; riêng phiếu đã bị từ chối thì ai có doc:delete cũng xoá được.
+    // có ai từ KTT trở lên duyệt; riêng phiếu đã bị từ chối thì ai có doc:delete cũng xoá được;
+    // Chủ tịch / Tổng Giám đốc xoá được ở mọi trạng thái.
     delete: has('doc:delete') && deletable,
     approve: approveAllowed,
     reject: approveAllowed,

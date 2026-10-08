@@ -56,7 +56,7 @@ import {
 import { loadDoc, transition, assertStepUp } from '../domain/workflow/index.ts';
 import { detectInternalTransferTarget } from '../domain/workflow/auto-income.ts';
 import { ensureCounterpartyFromLabel } from '../domain/counterparty/index.ts';
-import { documentPermissions, approvedFromChiefAccountantUp } from '../domain/entitlement/index.ts';
+import { documentPermissions, approvedFromChiefAccountantUp, UNRESTRICTED_DELETE_ROLES } from '../domain/entitlement/index.ts';
 import { awaitingBadge, decisionPack, docHref, queryQueue } from '../domain/queries/index.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
 import { assertAccountAllowedForCompany } from '../domain/accounts.ts';
@@ -526,6 +526,8 @@ export function documentRoutes(app: FastifyInstance): void {
 
   /**
    * Xoá cứng phiếu thu/chi (yêu cầu ADM-01). Cho phép khi:
+   *  - actor là Chủ tịch / Tổng Giám đốc (`UNRESTRICTED_DELETE_ROLES`) — xoá được ở bất kỳ
+   *    thời điểm & trạng thái nào, không giới hạn phiếu phải còn nháp hay chưa ai duyệt; HOẶC
    *  - phiếu đã BỊ TỪ CHỐI — bất kỳ ai có `doc:delete` (mặc định KTT / Kế toán viên) đều xoá được; HOẶC
    *  - CHÍNH người lập xoá phiếu còn nháp / đang chờ Kế toán trưởng / bị trả về bổ sung, và
    *    chưa có ai từ Kế toán trưởng trở lên duyệt.
@@ -546,9 +548,12 @@ export function documentRoutes(app: FastifyInstance): void {
         await assertVisible(req, String(doc.company_id));
 
         const history = (doc.history ?? []) as { action?: string | null; actor?: { role?: string | null } | null }[];
+        // Chủ tịch / Tổng Giám đốc: xoá được ở bất kỳ thời điểm & trạng thái nào, không vướng
+        // gate người lập hay "chưa ai từ KTT trở lên duyệt".
         // Phiếu đã bị từ chối là trạng thái kết thúc: mọi người có `doc:delete` được xoá.
         // Các trạng thái còn lại vẫn chỉ cho người lập và khi chưa qua cấp KTT trở lên.
         const allowed =
+          UNRESTRICTED_DELETE_ROLES.includes(actor.role) ||
           doc.status === 'rejected' ||
           (String(doc.created_by) === actor.user_id &&
             ['draft', 'pending.ktt', 'changes_requested'].includes(doc.status) &&
@@ -556,7 +561,7 @@ export function documentRoutes(app: FastifyInstance): void {
         if (!allowed) {
           throw new ApiError({
             code: 'FG-RBAC-001',
-            detail: 'Phiếu đã bị từ chối thì ai có quyền xoá cũng xoá được; các trạng thái khác chỉ người lập xoá được (phiếu còn nháp / đang chờ Kế toán trưởng / bị trả về bổ sung) và chưa qua cấp Kế toán trưởng trở lên ở vòng này',
+            detail: 'Phiếu đã bị từ chối thì ai có quyền xoá cũng xoá được; các trạng thái khác chỉ người lập xoá được (phiếu còn nháp / đang chờ Kế toán trưởng / bị trả về bổ sung) và chưa qua cấp Kế toán trưởng trở lên ở vòng này — trừ tài khoản Chủ tịch / Tổng Giám đốc xoá được ở mọi trạng thái',
           });
         }
 

@@ -163,8 +163,10 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   ],
   // Tổng Giám đốc (Chủ tịch): phê duyệt + giám sát toàn hệ thống + nhân sự + cấu hình/tài khoản tập đoàn
   // + ma trận duyệt. Có `admin:settings` để tự tạo công ty con (ADM-06) — KHÔNG nhập liệu hồ sơ.
+  // Có `doc:delete` để xoá phiếu thu/chi ở bất kỳ thời điểm/trạng thái nào (xem UNRESTRICTED_DELETE_ROLES).
   chairman: [
     'doc:read',
+    'doc:delete',
     'approval:act',
     'approval:override',
     'bank:read',

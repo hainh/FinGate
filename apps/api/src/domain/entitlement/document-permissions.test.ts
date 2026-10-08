@@ -175,3 +175,65 @@ describe('documentPermissions — xoá/sửa của người lập', () => {
     expect(c.delete).toBe(false);
   });
 });
+
+describe('documentPermissions — Chủ tịch / Tổng Giám đốc xoá được ở mọi trạng thái', () => {
+  function chairmanPerms(status: string, opts: { history?: History; deletePerm?: boolean } = {}) {
+    return documentPermissions(
+      {
+        user_id: 'chair1',
+        permissions: ['doc:read', ...(opts.deletePerm === false ? [] : ['doc:delete'])],
+        amount_limit_minor: 999999999000000000n,
+        role: 'chairman',
+      },
+      {
+        status,
+        created_by: 'u1',
+        amount_minor: 1_000_000n,
+        steps: [],
+        evidence_missing: [],
+        company_id: 'A',
+        actor_companies: ['A'],
+        delegatedStepOrders: [],
+        approved_from_ktt_up: approvedFromChiefAccountantUp(opts.history ?? []),
+      },
+    );
+  }
+
+  it('không phải người lập, đã qua KTT duyệt, đang chờ TGĐ: vẫn xoá được', () => {
+    const c = chairmanPerms('pending.tgd', {
+      history: [
+        { action: 'submit', actor: { role: 'staff' } },
+        { action: 'approve', actor: { role: 'chief_accountant' } },
+        { action: 'approve', actor: { role: 'director' } },
+      ],
+    });
+    expect(c.delete).toBe(true);
+  });
+
+  it('đang approved / paid (đã duyệt xong, không còn nháp): vẫn xoá được', () => {
+    expect(chairmanPerms('approved').delete).toBe(true);
+    expect(chairmanPerms('paid').delete).toBe(true);
+  });
+
+  it('nhưng vẫn cần quyền doc:delete — thiếu quyền thì không xoá được', () => {
+    expect(chairmanPerms('approved', { deletePerm: false }).delete).toBe(false);
+  });
+
+  it('vai trò Giám đốc (director) KHÔNG được ưu tiên này — đã qua KTT thì không xoá được', () => {
+    const c = documentPermissions(
+      { user_id: 'dir1', permissions: ['doc:read', 'doc:delete'], amount_limit_minor: 0n, role: 'director' },
+      {
+        status: 'pending.tgd',
+        created_by: 'u1',
+        amount_minor: 1_000_000n,
+        steps: [],
+        evidence_missing: [],
+        company_id: 'A',
+        actor_companies: ['A'],
+        delegatedStepOrders: [],
+        approved_from_ktt_up: true,
+      },
+    );
+    expect(c.delete).toBe(false);
+  });
+});
