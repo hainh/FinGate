@@ -36,6 +36,16 @@ const SIDE_OPTIONS = [
 function minorOf(w: { minor: string }): bigint {
   return BigInt(w.minor);
 }
+function cmpBig(a: bigint, b: bigint): number {
+  return a === b ? 0 : a > b ? 1 : -1;
+}
+/** So sánh ổn định: tie-break theo due_date rồi mã phiếu để thứ tự không đổi mỗi lần render. */
+function tieBreak(a: DebtVoucherRow, b: DebtVoucherRow, primary: number): number {
+  if (primary !== 0) return primary;
+  return a.due_date.localeCompare(b.due_date) || a.code.localeCompare(b.code);
+}
+
+type SortState = { key?: string; order?: 'ascend' | 'descend' };
 
 export function DebtListScreen(): ReactNode {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -43,6 +53,7 @@ export function DebtListScreen(): ReactNode {
   const side = searchParams.get('side') ?? undefined;
   const overdueOnly = searchParams.get('overdue_only') === 'true';
   const [showSettled, setShowSettled] = useState(false);
+  const [sort, setSort] = useState<SortState>({});
 
   const setParam = (key: string, value?: string): void => {
     const next = new URLSearchParams(searchParams);
@@ -110,15 +121,15 @@ export function DebtListScreen(): ReactNode {
               </div>
             );
           }
-          const columns = [
-            { title: 'Mã', dataIndex: 'code', key: 'code', render: (v: string, r: DebtVoucherRow) => <Link className="fg-link" to={`/cong-no/phieu/${r._id}`}>{v}</Link>, sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => a.code.localeCompare(b.code) },
-            { title: 'Đối tượng', dataIndex: 'party_name', key: 'party', sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => a.party_name.localeCompare(b.party_name) },
-            { title: 'TK', dataIndex: 'account_code', key: 'acct', sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => a.account_code.localeCompare(b.account_code) },
-            { title: 'Nợ/Có', dataIndex: 'side', key: 'side', render: (v: DebtSide) => DEBT_SIDE_LABEL[v], sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => a.side.localeCompare(b.side) },
-            { title: 'Giá trị', dataIndex: 'value', key: 'value', align: 'right' as const, render: (v: MoneyWire) => <FgMoney value={moneyFromWire(v)} mode="compact" />, sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => Number(minorOf(a.value) - minorOf(b.value)) },
-            { title: 'Đã cấn trừ', dataIndex: 'settled', key: 'settled', align: 'right' as const, render: (v: MoneyWire) => <FgMoney value={moneyFromWire(v)} mode="compact" />, sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => Number(minorOf(a.settled) - minorOf(b.settled)) },
-            { title: 'Còn lại', dataIndex: 'remaining', key: 'remaining', align: 'right' as const, render: (v: MoneyWire) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis />, sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => Number(minorOf(a.remaining) - minorOf(b.remaining)) },
-            { title: 'Hạn', dataIndex: 'due_date', key: 'due', sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => a.due_date.localeCompare(b.due_date) },
+          const rawColumns = [
+            { title: 'Mã', dataIndex: 'code', key: 'code', render: (v: string, r: DebtVoucherRow) => <Link className="fg-link" to={`/cong-no/phieu/${r._id}`}>{v}</Link>, sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => tieBreak(a, b, a.code.localeCompare(b.code)) },
+            { title: 'Đối tượng', dataIndex: 'party_name', key: 'party', sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => tieBreak(a, b, a.party_name.localeCompare(b.party_name)) },
+            { title: 'TK', dataIndex: 'account_code', key: 'acct', sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => tieBreak(a, b, a.account_code.localeCompare(b.account_code)) },
+            { title: 'Nợ/Có', dataIndex: 'side', key: 'side', render: (v: DebtSide) => DEBT_SIDE_LABEL[v], sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => tieBreak(a, b, a.side.localeCompare(b.side)) },
+            { title: 'Giá trị', dataIndex: 'value', key: 'value', align: 'right' as const, render: (v: MoneyWire) => <FgMoney value={moneyFromWire(v)} mode="compact" />, sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => tieBreak(a, b, cmpBig(minorOf(a.value), minorOf(b.value))) },
+            { title: 'Đã cấn trừ', dataIndex: 'settled', key: 'settled', align: 'right' as const, render: (v: MoneyWire) => <FgMoney value={moneyFromWire(v)} mode="compact" />, sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => tieBreak(a, b, cmpBig(minorOf(a.settled), minorOf(b.settled))) },
+            { title: 'Còn lại', dataIndex: 'remaining', key: 'remaining', align: 'right' as const, render: (v: MoneyWire) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis />, sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => tieBreak(a, b, cmpBig(minorOf(a.remaining), minorOf(b.remaining))) },
+            { title: 'Hạn', dataIndex: 'due_date', key: 'due', sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => tieBreak(a, b, a.due_date.localeCompare(b.due_date)) },
             {
               title: 'Quá hạn',
               key: 'ov',
@@ -130,13 +141,18 @@ export function DebtListScreen(): ReactNode {
                 ) : (
                   <FgText style="caption" color="muted">đúng hạn</FgText>
                 ),
-              sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => a.days_overdue - b.days_overdue,
+              sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => tieBreak(a, b, a.days_overdue - b.days_overdue),
             },
           ];
+          const columns = rawColumns.map((c) => ({ ...c, sortOrder: sort.key === c.key ? sort.order : null }));
+          const onSortChange = (_p: unknown, _f: unknown, sorter: unknown): void => {
+            const s = sorter as { columnKey?: unknown; order?: 'ascend' | 'descend' | null };
+            setSort({ key: s.columnKey != null ? String(s.columnKey) : undefined, order: s.order ?? undefined });
+          };
           return (
             <>
               <div className="fg-card" style={{ padding: 0 }}>
-                <FgTable rowKey="_id" dataSource={open} columns={columns} />
+                <FgTable rowKey="_id" dataSource={open} columns={columns} onChange={onSortChange} />
               </div>
               {settled.length ? (
                 <div style={{ marginTop: 'var(--fg-space-4)' }}>
@@ -145,7 +161,7 @@ export function DebtListScreen(): ReactNode {
                   </FgButton>
                   {showSettled ? (
                     <div className="fg-card" style={{ padding: 0, marginTop: 'var(--fg-space-2)' }}>
-                      <FgTable rowKey="_id" size="small" dataSource={settled} columns={columns} />
+                      <FgTable rowKey="_id" size="small" dataSource={settled} columns={columns} onChange={onSortChange} />
                     </div>
                   ) : null}
                 </div>
