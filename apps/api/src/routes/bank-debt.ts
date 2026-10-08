@@ -57,7 +57,9 @@ function derivedOutstanding(d: BankDebtDoc, docs: Map<string, LinkedDocInfo>): {
 function derivedStatus(d: BankDebtDoc, outstanding: bigint): 'active' | 'overdue' | 'settled' | 'archived' {
   if (d.status === 'archived') return 'archived';
   if (outstanding <= 0n) return 'settled';
-  const due = String(d.next_due_date || d.maturity_date || today());
+  // Quá hạn theo HẠN THANH TOÁN hợp đồng (maturity_date) — field hiển thị cho người dùng.
+  // `next_due_date` chỉ là bản sao lúc tạo, có thể lệch sau khi sửa hạn (§bug đáo hạn).
+  const due = String(d.maturity_date || today());
   return due < today() ? 'overdue' : 'active';
 }
 
@@ -67,8 +69,8 @@ function serializeBankDebt(
 ): Record<string, unknown> {
   const { principal, repaid, outstanding } = derivedOutstanding(d, opts.docs);
   const due = String(d.maturity_date ?? today());
-  const nextDue = d.next_due_date ? String(d.next_due_date) : null;
-  const interest = simpleInterest(outstanding, parseRate(d.interest_rate), Math.max(0, daysUntil(nextDue || due)));
+  const nextDue = d.next_due_date ? String(d.next_due_date) : due;
+  const interest = simpleInterest(outstanding, parseRate(d.interest_rate), Math.max(0, daysUntil(due)));
   return {
     _id: String(d._id),
     company_id: String(d.company_id),
@@ -87,7 +89,7 @@ function serializeBankDebt(
     interest_to_maturity: wire(interest, String(d.currency ?? 'VND')),
     maturity_date: due,
     next_due_date: nextDue,
-    days_to_due: daysUntil(nextDue || due),
+    days_to_due: daysUntil(due),
     status: derivedStatus(d, outstanding),
     note: d.note ?? null,
     attachment_count: Array.isArray(d.attachments) ? d.attachments.length : 0,
@@ -316,7 +318,12 @@ export function bankDebtRoutes(app: FastifyInstance): void {
         if (body.term_months !== undefined) set.term_months = body.term_months ?? null;
         if (body.payment_frequency !== undefined) set.payment_frequency = body.payment_frequency;
         if (body.repayment_method !== undefined) set.repayment_method = body.repayment_method;
-        if (body.maturity_date !== undefined) set.maturity_date = body.maturity_date;
+        if (body.maturity_date !== undefined) {
+          set.maturity_date = body.maturity_date;
+          // Giữ `next_due_date` khớp hạn thanh toán — trước đây bị bỏ quên nên
+          // khoản đã sửa hạn vẫn giữ ngày cũ (hiển thị sai "Đang vay"/"Quá hạn").
+          set.next_due_date = body.maturity_date;
+        }
         if (body.note !== undefined) set.note = body.note || null;
         const history = buildHistoryEntry({
           action: 'update',

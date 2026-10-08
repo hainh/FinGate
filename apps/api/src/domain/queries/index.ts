@@ -590,7 +590,8 @@ export async function maturityLadder(
   const byLoan = new Map(rollovers.map((r) => [String(r.loan_id), r]));
 
   const rows: MaturityRow[] = loans.map((l) => {
-    const due = String(l.next_due_date || l.maturity_date || today());
+    // Hạn đáo hạn hợp đồng — không dùng `next_due_date` (bản sao lúc tạo, dễ lệch sau khi sửa hạn).
+    const due = String(l.maturity_date || today());
     const days = daysUntil(due);
     const band = maturity(days);
     const principal = asBigInt((l as { principal_minor?: unknown }).principal_minor);
