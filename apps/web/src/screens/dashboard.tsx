@@ -210,7 +210,7 @@ export function DashboardScreen(): ReactNode {
             {/*快捷 xem nhanh — counts */}
             <div style={{ display: 'flex', gap: 'var(--fg-space-4)', flexWrap: 'wrap', marginTop: 'var(--fg-space-4)' }}>
               {[
-                { label: 'Công nợ quá hạn', n: ov.counts.overdue_receivable, href: '/cong-no/phai-thu?overdue=true' },
+                { label: 'Công nợ quá hạn', n: ov.counts.overdue_receivable, href: '/cong-no?side=debit&overdue_only=true' },
                 { label: 'Thiếu chứng từ', n: ov.counts.missing_evidence, href: '/can-xu-ly' },
                 { label: 'Đáo hạn 7 ngày', n: ov.counts.maturity_7d_count, href: '/ngan-hang/dao-han?bucket=7d' },
               ].map((c) => (

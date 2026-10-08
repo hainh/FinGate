@@ -165,10 +165,12 @@ export function AppRoutes(): ReactNode {
       <Route path="/ngan-hang/chuyen-noi-bo" element={<Shell><InternalListScreen /></Shell>} /> {/* BANK-07 */}
       <Route path="/ngan-hang/chuyen-noi-bo/moi" element={<Shell><DocumentFormScreen kind="internal" /></Shell>} /> {/* BANK-08 */}
       <Route path="/ngan-hang/chuyen-noi-bo/:id/sua" element={<Shell><DocumentFormScreen kind="internal" /></Shell>} />
-      <Route path="/cong-no/phai-thu" element={<Shell><DebtListScreen side="debit" title="Công nợ ghi Nợ (phải thu)" /></Shell>} /> {/* DEBT-01 */}
-      <Route path="/cong-no/phai-thu/moi" element={<Shell><DebtVoucherFormScreen side="debit" /></Shell>} />
-      <Route path="/cong-no/phai-tra" element={<Shell><DebtListScreen side="credit" title="Công nợ ghi Có (phải trả)" /></Shell>} /> {/* DEBT-03 */}
-      <Route path="/cong-no/phai-tra/moi" element={<Shell><DebtVoucherFormScreen side="credit" /></Shell>} />
+      <Route path="/cong-no" element={<Shell><DebtListScreen /></Shell>} /> {/* DEBT-01/03 — gộp phải thu + phải trả */}
+      <Route path="/cong-no/moi" element={<Shell><DebtVoucherFormScreen /></Shell>} />
+      <Route path="/cong-no/phai-thu" element={<Navigate to="/cong-no?side=debit" replace />} />
+      <Route path="/cong-no/phai-tra" element={<Navigate to="/cong-no?side=credit" replace />} />
+      <Route path="/cong-no/phai-thu/moi" element={<Navigate to="/cong-no/moi?side=debit" replace />} />
+      <Route path="/cong-no/phai-tra/moi" element={<Navigate to="/cong-no/moi?side=credit" replace />} />
       <Route path="/cong-no/phieu/:id" element={<Shell><DebtDetailScreen /></Shell>} /> {/* DEBT-02/04 */}
       <Route path="/cong-no/phieu/:id/sua" element={<Shell><DebtVoucherFormScreen /></Shell>} /> {/* DEBT-02 sửa */}
       <Route path="/doi-tac" element={<Shell><CounterpartyScreen /></Shell>} /> {/* PARTNER-01 */}

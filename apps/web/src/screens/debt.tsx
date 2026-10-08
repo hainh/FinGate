@@ -4,10 +4,10 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { DatePicker } from 'antd';
 import dayjs from 'dayjs';
-import { ACCOUNT_CODE_BY_PARTY, DEBT_PARTY_LABEL, DEBT_SIDE_LABEL, formatMoney, moneyFromWire, type DebtPartyType, type DebtSide, type Money } from '@fingate/shared';
+import { ACCOUNT_CODE_BY_PARTY, DEBT_PARTY_LABEL, DEBT_SIDE_LABEL, formatMoney, moneyFromWire, type DebtPartyType, type DebtSide, type Money, type MoneyWire } from '@fingate/shared';
 import { ApiRequestError } from '../app/api.ts';
 import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
 import { useBankDebtCandidates, useCounterparties, useCreateDebtVoucher, useDebtCandidates, useDebtVoucher, useDebtVouchers, useDeleteDebtVoucher, useLinkDebt, useUnlinkDebt, useUpdateDebtVoucher } from '../app/queries.ts';
@@ -17,7 +17,7 @@ import { FgEmptyState, FgModal, FgSkeletonTable, FgTable } from '../components/u
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useToast } from '../components/pagekit.tsx';
 import { acceptOwnerFile, attachmentHref, AttachmentPreviewModal, isImage, problemText, uploadOwnerAttachment } from '../components/attachments.tsx';
-import type { OwnerAttachment } from '../app/types.ts';
+import type { DebtVoucherRow, OwnerAttachment } from '../app/types.ts';
 import { STATUS_REGISTRY, type StatusKey } from '@fingate/shared';
 
 const PARTY_OPTIONS = (Object.keys(DEBT_PARTY_LABEL) as DebtPartyType[]).map((v) => ({ value: v, label: `${DEBT_PARTY_LABEL[v]} (TK ${ACCOUNT_CODE_BY_PARTY[v]})` }));
@@ -26,70 +26,133 @@ function statusLabelVi(s: string): string {
   return STATUS_REGISTRY[s as StatusKey]?.labelVi ?? s;
 }
 
-/* ============================== DEBT-01/03 list ============================== */
+/* ============================== DEBT-01/03 list — gộp Nợ + Có ============================== */
 
-export function DebtListScreen({ side, title }: { side: 'debit' | 'credit'; title: string }): ReactNode {
-  const [partyType, setPartyType] = useState<string | undefined>();
-  const query = useDebtVouchers({ side, party_type: partyType });
+const SIDE_OPTIONS = [
+  { value: 'debit', label: 'Phải thu (ghi Nợ)' },
+  { value: 'credit', label: 'Phải trả (ghi Có)' },
+];
+
+function minorOf(w: { minor: string }): bigint {
+  return BigInt(w.minor);
+}
+
+export function DebtListScreen(): ReactNode {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const partyType = searchParams.get('party_type') ?? undefined;
+  const side = searchParams.get('side') ?? undefined;
+  const overdueOnly = searchParams.get('overdue_only') === 'true';
+  const [showSettled, setShowSettled] = useState(false);
+
+  const setParam = (key: string, value?: string): void => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setSearchParams(next, { replace: true });
+  };
+
+  const query = useDebtVouchers({
+    side,
+    party_type: partyType,
+    overdue_only: overdueOnly ? 'true' : undefined,
+    limit: '200',
+  });
+
   return (
     <>
       <FgPageHeader
-        title={title}
-        meta="Công nợ ghi Nợ/Có — đã cấn trừ tính từ các phiếu thu/chi đã thực thi"
+        title="Công nợ"
+        meta="Phiếu công nợ ghi Nợ/Có gộp chung — đã cấn trừ tính từ các phiếu thu/chi đã thực thi"
         actions={
-          <Link to={`/cong-no/${side === 'debit' ? 'phai-thu' : 'phai-tra'}/moi`}>
+          <Link to="/cong-no/moi">
             <FgButton variant="primary">+ Tạo phiếu công nợ</FgButton>
           </Link>
         }
       />
       <div className="fg-filterbar">
         <FgSelect
+          ariaLabel="Phân loại"
+          placeholder="Mọi phân loại"
+          allowClear
+          options={SIDE_OPTIONS}
+          value={side}
+          onChange={(v) => setParam('side', v)}
+          style={{ width: 200 }}
+        />
+        <FgSelect
           ariaLabel="Loại đối tượng"
           placeholder="Mọi đối tượng"
           allowClear
           options={PARTY_OPTIONS}
           value={partyType}
-          onChange={(v) => setPartyType(v)}
+          onChange={(v) => setParam('party_type', v)}
           style={{ width: 220 }}
+        />
+        <FgSelect
+          ariaLabel="Quá hạn"
+          placeholder="Mọi hạn"
+          allowClear
+          options={[{ value: 'overdue', label: 'Chỉ quá hạn còn lại' }]}
+          value={overdueOnly ? 'overdue' : undefined}
+          onChange={(v) => setParam('overdue_only', v ? 'true' : undefined)}
+          style={{ width: 200 }}
         />
       </div>
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={7} />}>
-        {(data) =>
-          !data.items.length ? (
-            <div className="fg-card">
-              <FgEmptyState glyph="◇" title="Chưa có phiếu công nợ nào" />
-            </div>
-          ) : (
-            <div className="fg-card" style={{ padding: 0 }}>
-              <FgTable
-                rowKey="_id"
-                dataSource={data.items}
-                columns={[
-                  { title: 'Mã', dataIndex: 'code', key: 'code', render: (v, r) => <Link className="fg-link" to={`/cong-no/phieu/${r._id}`}>{v}</Link> },
-                  { title: 'Đối tượng', dataIndex: 'party_name', key: 'party' },
-                  { title: 'TK', dataIndex: 'account_code', key: 'acct' },
-                  { title: 'Nợ/Có', dataIndex: 'side', key: 'side', render: (v: 'debit' | 'credit') => DEBT_SIDE_LABEL[v] },
-                  { title: 'Giá trị', dataIndex: 'value', key: 'value', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-                  { title: 'Đã cấn trừ', dataIndex: 'settled', key: 'settled', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" /> },
-                  { title: 'Còn lại', dataIndex: 'remaining', key: 'remaining', align: 'right', render: (v) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis /> },
-                  { title: 'Hạn', dataIndex: 'due_date', key: 'due' },
-                  {
-                    title: 'Quá hạn',
-                    key: 'ov',
-                    render: (_v, r) =>
-                      r.days_overdue > 0 ? (
-                        <span className="fg-chip" style={{ borderColor: 'var(--fg-status-danger-border)', color: 'var(--fg-status-danger-text)', background: 'var(--fg-status-danger-bg)' }}>
-                          ⛔ {r.days_overdue} ngày
-                        </span>
-                      ) : (
-                        <FgText style="caption" color="muted">đúng hạn</FgText>
-                      ),
-                  },
-                ]}
-              />
-            </div>
-          )
-        }
+        {(data) => {
+          const items = data.items as DebtVoucherRow[];
+          const open = items.filter((r) => minorOf(r.remaining) > 0n);
+          const settled = items.filter((r) => minorOf(r.remaining) <= 0n);
+          if (!items.length) {
+            return (
+              <div className="fg-card">
+                <FgEmptyState glyph="◇" title="Chưa có phiếu công nợ nào" />
+              </div>
+            );
+          }
+          const columns = [
+            { title: 'Mã', dataIndex: 'code', key: 'code', render: (v: string, r: DebtVoucherRow) => <Link className="fg-link" to={`/cong-no/phieu/${r._id}`}>{v}</Link>, sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => a.code.localeCompare(b.code) },
+            { title: 'Đối tượng', dataIndex: 'party_name', key: 'party', sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => a.party_name.localeCompare(b.party_name) },
+            { title: 'TK', dataIndex: 'account_code', key: 'acct', sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => a.account_code.localeCompare(b.account_code) },
+            { title: 'Nợ/Có', dataIndex: 'side', key: 'side', render: (v: DebtSide) => DEBT_SIDE_LABEL[v], sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => a.side.localeCompare(b.side) },
+            { title: 'Giá trị', dataIndex: 'value', key: 'value', align: 'right' as const, render: (v: MoneyWire) => <FgMoney value={moneyFromWire(v)} mode="compact" />, sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => Number(minorOf(a.value) - minorOf(b.value)) },
+            { title: 'Đã cấn trừ', dataIndex: 'settled', key: 'settled', align: 'right' as const, render: (v: MoneyWire) => <FgMoney value={moneyFromWire(v)} mode="compact" />, sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => Number(minorOf(a.settled) - minorOf(b.settled)) },
+            { title: 'Còn lại', dataIndex: 'remaining', key: 'remaining', align: 'right' as const, render: (v: MoneyWire) => <FgMoney value={moneyFromWire(v)} mode="compact" emphasis />, sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => Number(minorOf(a.remaining) - minorOf(b.remaining)) },
+            { title: 'Hạn', dataIndex: 'due_date', key: 'due', sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => a.due_date.localeCompare(b.due_date) },
+            {
+              title: 'Quá hạn',
+              key: 'ov',
+              render: (_v: unknown, r: DebtVoucherRow) =>
+                r.days_overdue > 0 ? (
+                  <span className="fg-chip" style={{ borderColor: 'var(--fg-status-danger-border)', color: 'var(--fg-status-danger-text)', background: 'var(--fg-status-danger-bg)' }}>
+                    ⛔ {r.days_overdue} ngày
+                  </span>
+                ) : (
+                  <FgText style="caption" color="muted">đúng hạn</FgText>
+                ),
+              sorter: (a: DebtVoucherRow, b: DebtVoucherRow) => a.days_overdue - b.days_overdue,
+            },
+          ];
+          return (
+            <>
+              <div className="fg-card" style={{ padding: 0 }}>
+                <FgTable rowKey="_id" dataSource={open} columns={columns} />
+              </div>
+              {settled.length ? (
+                <div style={{ marginTop: 'var(--fg-space-4)' }}>
+                  <FgButton size="small" onClick={() => setShowSettled((s) => !s)}>
+                    {showSettled ? '▲ Ẩn' : '▼ Hiện'} các khoản đã trả hết ({settled.length})
+                  </FgButton>
+                  {showSettled ? (
+                    <div className="fg-card" style={{ padding: 0, marginTop: 'var(--fg-space-2)' }}>
+                      <FgTable rowKey="_id" size="small" dataSource={settled} columns={columns} />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          );
+        }}
       </FgQuery>
     </>
   );
@@ -97,8 +160,9 @@ export function DebtListScreen({ side, title }: { side: 'debit' | 'credit'; titl
 
 /* ===================== DEBT-01/DEBT-02 create + edit ===================== */
 
-export function DebtVoucherFormScreen({ side }: { side?: 'debit' | 'credit' }): ReactNode {
+export function DebtVoucherFormScreen(): ReactNode {
   const { id } = useParams<{ id?: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const company = useCurrentCompanyId();
   const existing = useDebtVoucher(id);
@@ -118,7 +182,7 @@ export function DebtVoucherFormScreen({ side }: { side?: 'debit' | 'credit' }): 
     due_date: string;
     priority: string;
     note: string;
-  }>({ party_type: 'customer', party_name: '', party_bank_name: '', party_bank_account: '', side: side ?? 'debit', value: null, due_date: dayjs().add(7, 'day').format('YYYY-MM-DD'), priority: 'normal', note: '' });
+  }>({ party_type: 'customer', party_name: '', party_bank_name: '', party_bank_account: '', side: searchParams.get('side') === 'credit' ? 'credit' : 'debit', value: null, due_date: dayjs().add(7, 'day').format('YYYY-MM-DD'), priority: 'normal', note: '' });
 
   const editMode = !!id;
 
@@ -399,7 +463,7 @@ export function DebtDetailScreen(): ReactNode {
                       del.mutate(id, {
                         onSuccess: () => {
                           message.success('Đã xoá phiếu công nợ');
-                          navigate('/cong-no/phai-thu');
+                          navigate('/cong-no');
                         },
                       })
                     }

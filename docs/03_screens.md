@@ -218,10 +218,10 @@ Chuyển tiền nội bộ: tab `Tóm tắt` **bắt buộc** 2 cột đối ứ
 
 | ID | Màn hình | Route | Vai trò | Component | St | Ph | Nền |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| DEBT-01 | Phải thu | `/cong-no/phai-thu` | KT, KTT, GĐ | `FgTable` §XVI (khách hàng, giá trị HĐ, đã thu, còn phải thu, hạn, quá hạn N ngày) + aging | 0 dòng, đối chiếu lệch | P2 | D/T |
-| DEBT-02 | Chi tiết phải thu | `/cong-no/phai-thu/:id` | KT, KTT | `FgTimeline` các lần thu, HĐ liên quan, `FgProgress` thu hồi được %, `FgDebtBar` | vượt ngưỡng đôn đốc | P3 | D |
-| DEBT-03 | Phải trả | `/cong-no/phai-tra` | KT, KTT, GĐ | `FgTable` + cột **mức độ ưu tiên** (`FgSelect` inline), nhóm theo NCC | quá hạn, đang chờ duyệt thanh toán | P2 | D/T |
-| DEBT-04 | Chi tiết phải trả | `/cong-no/phai-tra/:id` | KT, CV | lịch sử thanh toán, hồ sơ chi liên quan, chứng từ | lệch số đã trả | P3 | D |
+| DEBT-01 | Công nợ (gộp phải thu + phải trả) | `/cong-no` | KT, KTT, GĐ | `FgTable` §XVI một bảng chung, cột Nợ/Có + filter Phân loại / Loại đối tượng / Chỉ quá hạn; sort mọi cột; khoản còn lại = 0 tách xuống bảng phụ "đã trả hết" | 0 dòng, đối chiếu lệch | P2 | D/T |
+| DEBT-02 | Chi tiết phiếu công nợ | `/cong-no/phieu/:id` | KT, KTT | `FgTimeline` các lần thu/chi, HĐ liên quan, `FgProgress` thu hồi được %, `FgDebtBar` | vượt ngưỡng đôn đốc | P3 | D |
+| DEBT-03 | (gộp vào DEBT-01 — lọc `?side=credit`) | — | KT, KTT, GĐ | cột **mức độ ưu tiên**, nhóm theo NCC qua filter Loại đối tượng | quá hạn, đang chờ duyệt thanh toán | P2 | D/T |
+| DEBT-04 | (dùng DEBT-02 `/cong-no/phieu/:id`) | — | KT, CV | lịch sử thanh toán, hồ sơ chi liên quan, chứng từ | lệch số đã trả | P3 | D |
 | DEBT-05 | Đối chiếu công nợ / tuổi nợ | `/cong-no/doi-chieu` | KTT | `FgTable` ma trận aging (chưa đến hạn / <30 / 30–60 / 60–90 / >90), xuất Excel | lệch giữa 2 nguồn dữ liệu | P3 | D |
 | DEBT-06 | Lập lịch thanh toán cho NCC | `/cong-no/phai-tra/ke-hoach` | KTT, GĐ | `FgTable` xếp hạng theo ưu tiên + ngày + nguồn tiền, "gợi ý phương án" (đề xuất CV) | tổng vượt số dư khả dụng → danger | P4 | D |
 

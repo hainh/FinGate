@@ -38,7 +38,7 @@ const NAV: NavItem[] = [
   { to: '/ngan-hang/taikhoan', label: 'Ngân hàng', glyph: '▤', mobile: true, perm: 'bank:read', match: ['/ngan-hang', '/ngan-hang/taikhoan', '/ngan-hang/chuyen-noi-bo', '/ho-so/noi-bo'] },
   { to: '/ngan-hang/khoan-vay', label: 'Nợ ngân hàng', glyph: '⌂', mobile: true, perm: 'loan:read', match: ['/ngan-hang/khoan-vay'] },
   { to: '/ngan-hang/dao-han', label: 'Đáo hạn', glyph: '⧗', mobile: true, perm: 'loan:read', dev: true, match: ['/ngan-hang/dao-han', '/ho-so/dao-han'] },
-  { to: '/cong-no/phai-thu', label: 'Công nợ', glyph: '≡', mobile: true, perm: 'debt:read', match: ['/cong-no'] },
+  { to: '/cong-no', label: 'Công nợ', glyph: '≡', mobile: true, perm: 'debt:read', match: ['/cong-no'] },
   { to: '/doi-tac', label: 'Đối tác/Khách hàng', glyph: '⚭', mobile: true, perm: 'partner:read', match: ['/doi-tac'] },
   { to: '/dong-tien', label: 'Dòng tiền', glyph: '∿', mobile: true, perm: 'forecast:read', match: ['/dong-tien'] },
   { to: '/baocao', label: 'Báo cáo', glyph: '☰', mobile: true, perm: 'report:view', dev: true, match: ['/baocao'] },

@@ -331,7 +331,7 @@ export function dashboardRoutes(app: FastifyInstance): void {
             title: String(d.party_name ?? ''),
             subtitle: d.side === 'debit' ? 'Ghi Nợ' : 'Ghi Có',
             amount: wire(asBigInt(d.value_minor)),
-            href: d.side === 'debit' ? '/cong-no/phai-thu' : '/cong-no/phai-tra',
+            href: `/cong-no/phieu/${String(d._id)}`,
           })),
         ];
         return ok(reply, { data: { query: q.q, hits, hidden_by_permission: 0 } }, { maxAge: 0 });
