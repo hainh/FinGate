@@ -68,6 +68,8 @@ services:
       HOST: 0.0.0.0
       STORAGE_DRIVER: fs
       UPLOAD_DIR: /data/uploads
+      # Sao lưu mongodump ghi ra đây — bind-mount ra host (deploy/backups) để truy cập trực tiếp.
+      BACKUP_DIR: /data/backups
       WEB_DIST: apps/web/dist
       # Membership của RS quảng bá `localhost:27017` (để dev trên host vẫn dùng
       # `?replicaSet=rs0`), nên app trong container kết nối thẳng thay vì đi theo topology.
@@ -76,6 +78,8 @@ services:
       - '9380:8080'
     volumes:
       - fingate-uploads:/data/uploads
+      # Bản sao lưu nằm trên đĩa host tại deploy/backups/ (đã gitignore) → mở trực tiếp được.
+      - ./backups:/data/backups
     restart: unless-stopped
     healthcheck:
       test:

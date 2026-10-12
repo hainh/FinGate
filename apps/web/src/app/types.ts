@@ -851,7 +851,6 @@ export interface TransitionResult {
 
 export interface BackupFile {
   file: string;
-  key: string;
   size: number;
   created_at: string;
 }

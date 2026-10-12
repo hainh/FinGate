@@ -137,7 +137,7 @@ pnpm infra:prod               # build + chạy app + Mongo bằng Docker (Profil
 
 `render.yaml` (build Node trực tiếp, **không Docker** — Render free không hỗ trợ Dockerfile).
 Điền secret trong dashboard: `MONGODB_URI`, `FIELD_KEY`, `TASK_TOKEN`, `R2_*`, `SMTP_URL`.
-GitOps jobs: `.github/workflows/{ci,tasks,backup}.yml`.
+GitOps jobs: `.github/workflows/{ci,tasks,data-backup}.yml`.
 
 ### 7.2 Profile O — server thật bằng Docker (VPS / VM nội bộ)
 
@@ -195,12 +195,10 @@ endpoint idempotent (arch §12.3):
 > replica set quảng bá member `localhost:27017` (để dev trên host vẫn dùng `?replicaSet=rs0`),
 > nên app kết nối thẳng thay vì đi theo topology. App không dùng transaction → an toàn.
 
-### 7.3 Backup / Restore (Profile O)
+### 7.3 Backup / Restore
 
-```bash
-deploy/backup.sh          # mongodump --gzip → deploy/backups/ (giữ 14 bản)
-# cron: 0 2 * * * /opt/fingate/deploy/backup.sh >> /var/log/fingate-backup.log 2>&1
-```
+Sao lưu do chính app tạo bằng `mongodump` (xem §7.4) và ghi ra `BACKUP_DIR`
+(Profile O: `/data/backups` trong container, bind-mount ra `deploy/backups/` trên host).
 
 Restore (drill mỗi quý — chưa test restore = coi như chưa có backup, §13):
 
@@ -215,10 +213,13 @@ Sau restore: `pnpm check:tie` + mở 5 hồ sơ ngẫu nhiên.
 
 ### 7.4 Sao lưu trong ứng dụng (mọi profile)
 
-Ngoài `mongodump` ở trên, app tự **dump logic** (EJSON canonical — giữ nguyên
-ObjectId/Date/Int64) ra `backups/fingate-YYYYMMDD-HHmmss-mmm.json.gz` qua
-`StorageAdapter`: Profile O ghi vào `UPLOAD_DIR`, cloud ghi R2/S3.
+App tự chạy `mongodump` (MongoDB Database Tools) và ghi archive gzip **thẳng ra thư mục
+ngoài app `BACKUP_DIR`** (mặc định `~/FinGateBackups`; Profile O `/data/backups` →
+bind-mount `deploy/backups/`). File: `fingate-YYYYMMDD-HHmmss.archive.gz`. KHÔNG đi qua
+`StorageAdapter`/cloud — chỉ file storage local nên mở/tải trực tiếp được.
 
+- **Yêu cầu**: `mongodump` có trên PATH máy chủ (image Docker đã cài sẵn; máy dev cài
+  MongoDB Database Tools). Thiếu → job báo lỗi `FG-SYS-001`.
 - **Job `backup` mỗi 30'**: workflow `.github/workflows/data-backup.yml`
   (`*/30 * * * *`) → `POST /api/v1/tasks/backup`; Profile O thêm cron
   `*/30 * * * * curl -fsS -X POST http://localhost:8080/api/v1/tasks/backup -H "x-task-token: $TASK_TOKEN"`.
@@ -226,7 +227,7 @@ ObjectId/Date/Int64) ra `backups/fingate-YYYYMMDD-HHmmss-mmm.json.gz` qua
 - **API (chỉ `admin:backup` — tài khoản Quản trị hệ thống)**:
   - `GET  /api/v1/system/backups` → danh sách bản còn giữ
   - `POST /api/v1/system/backups` → tạo ngay
-  - `GET  /api/v1/system/backups/:file` → tải bản (fs: bytes; s3: 302 presigned)
+  - `GET  /api/v1/system/backups/:file` → tải bản (đọc trực tiếp từ `BACKUP_DIR`)
 - **UI**: nút **“⤓ Sao lưu & tải về”** ở sidebar (chỉ hiện với `admin:backup`)
   tạo + tải ngay; màn **Quản trị → Sao lưu** (`/quantri/sao-luu`) liệt kê & tải lại bản cũ.
 

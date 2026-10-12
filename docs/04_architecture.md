@@ -46,7 +46,7 @@ Quy mô để thiết kế (không phải cam kết):
 | DB | MongoDB **Atlas M0 free** (512 MB, shared) | MongoDB Community 8.0 self-host (RS 1 node) |
 | Files | Cloudflare **R2** 10 GB free (S3-compatible) | thư mục đĩa `./data/uploads` |
 | Cron | GitHub Actions schedule → `POST /v1/tasks/:name` | `setInterval` trong app + cron hệ thống |
-| Backup | GH Actions `mongodump` → đẩy lên R2 | `mongodump` + rsync NAS |
+| Backup | app `mongodump` (job 30') → `BACKUP_DIR` local | app `mongodump` → `BACKUP_DIR` (đĩa/NAS) |
 | vào được từ | internet (có Cloudflare Access) | mạng nội bộ/VPN |
 | Dùng cho | demo, UAT, pilot 1 công ty, staging | **go-live chính thức** |
 
@@ -110,9 +110,9 @@ Kubernetes · NestJS · Next.js/SSR · Redis · Kafka/RabbitMQ · BullMQ · MinI
   │ no transactions   │   │ /v{n}_{sha8}.{ext}     │
   └───────────────────┘   └────────────────────────┘
           ▲
-          │ nightly mongodump → cùng file nén đẩy sang R2 (private)
+          │ job backup 30' → mongodump --gzip → BACKUP_DIR (ngoài app)
   ┌───────────────────────────────────────────────┐
-  │ GitHub Actions (free): cron tasks · backup ·  │
+  │ GitHub Actions (free): cron tasks ·             │
   │ CI (lint/typecheck/test/build) · restore drill│
   └───────────────────────────────────────────────┘
   SMTP công ty (nodemailer) · Email digest  ← mail đi ra ngoài, không có dịch vụ mail riêng
@@ -192,14 +192,14 @@ fingate/
 ├─ .node-version                    # 24.21.0
 ├─ .github/workflows/
 │   ├─ ci.yml                       # lint · typecheck · test · build · api:types diff
-│   ├─ tasks.yml                    # ★ cron UTC: 23:30 (=06:30 VN) bản tin · /15 sla · nightly dump
-│   └─ backup.yml                   # mongodump → gzip → upload R2 (private) + verify
+│   ├─ tasks.yml                    # ★ cron UTC: 23:30 (=06:30 VN) bản tin · /15 sla · nightly checks
+│   └─ data-backup.yml              # ★ cron */30' → POST /tasks/backup (mongodump → BACKUP_DIR)
 ├─ apps/
 │  ├─ web/   src/{app,screens,api,lib} + routes.tsx          # 1 thư mục = 1 screenId
 │  └─ api/   src/{server.ts,db,lib,domain,routes,jobs,mail,storage}
 ├─ packages/shared/src/{status,money,contracts,permissions,errors,text,api-types,ui}
 ├─ db/         models · migrations/NNNN-*.js · indexes.js · seed/ · scripts/
-├─ deploy/     compose.yml · Dockerfile · Caddyfile · backup.sh · fingate.env.example   # ★ CHỈ cho Profile O
+├─ deploy/     compose.yml · Dockerfile · Caddyfile · fingate.env.example   # ★ CHỈ cho Profile O
 └─ docs/       01→04 · adr/ · runbook.md
 ```
 
@@ -651,11 +651,11 @@ Profile O bật lại được **transaction** nhưng code vẫn đi đường C
 
 | Việc | Cách | Lịch |
 | --- | --- | --- |
-| Dump DB | GH Actions `backup.yml`: `mongodump --uri=$MONGODB_URI --gzip` (~vài trăm MB) → `aws s3 cp` lên **bucket R2 riêng** `fingate-backup` (private) | nightly |
+| Dump DB | job app `backup`: `mongodump --uri=$MONGODB_URI --gzip --archive` → **`BACKUP_DIR`** ngoài app (local/NAS, **không** cloud) | **mỗi 30'** |
 | Dump 0 | copy ra 1 nơi ngoài Cloudflare (Google Drive/OneDrive công ty hoặc NAS) | weekly |
 | Chứng từ | R2: bật **Object Lock/retention** nếu nhà cung cấp cho, hoặc replicate sang bucket thứ 2; Profile O: rsync incremental mỗi 6 giờ | liên tục/ngày |
 | Restore drill | `pnpm db:restore --from=<date>` vào DB tạm (Atlas M0 thứ 2 hoặc local) + `check:tie` + mở 5 hồ sơ ngẫu nhiên | **mỗi quý**, ghi kết quả vào runbook |
-| Retention | 14 nightly · 8 weekly · 12 monthly ( nén ≈ 60–120 MB/lần → không tốn nhiều free storage) | |
+| Retention | **30 ngày** trong `BACKUP_DIR` (`pruneBackups` dọn mỗi lần chạy job) | |
 
 **RPO ≤ 24h · RTO ≤ 4h** cho Profile C (đủ cho pilot/demo; phải ký xác nhận — §19.2 BA-7). Profile O với PITR/snapshot có thể đạt RPO 15'.
 Sự cố & cách xử lý (runbook): Render build fail (xoá cache `--frozen-lockfile`, check RAM build) · Atlas M0 **bị pause** (unpause trong 1–2 phút, thêm keep-warm) · `ReadUnauthorized`/IP allowlist Atlas (thêm `0.0.0.0/0` **không** được phép — dùng VPC peering hoặc allowlist IP Render nếu Render công bố, hoặc chấp nhận TLS + DB user mạnh) · R2 403 (rotate key) · DB > 80% (chạy archive) · lệch tie (khoá export, báo KTT) · lộ `SESSION_SECRET` (rotate + revoke mọi session + đổi `TASK_TOKEN`).
@@ -801,7 +801,7 @@ Team: **1 tech lead + 1 BE + 1 FE + 0.5 người vận hành/deploy + 1 BA kế 
 | T-7 | API khung: session + perms + scope + problem+json + OpenAPI + `api:types` | 2 |
 | T-8 | `domain/workflow` (CAS + history + mọi cạnh state machine có test) | 3 |
 | T-9 | `StorageAdapter` (s3 + fs) + presign flow + `attachments` version/key scheme | 1.5 |
-| T-10 | `tasks.yml` + `backup.yml` + restore drill đầu tiên trên staging | 1 |
+| T-10 | `tasks.yml` + `data-backup.yml` + restore drill đầu tiên trên staging | 1 |
 
 ### 19.5 Danh sách **đỏ** — những thứ không được "đơn giản hoá" tiếp
 
@@ -814,7 +814,7 @@ Team: **1 tech lead + 1 BE + 1 FE + 0.5 người vận hành/deploy + 1 BA kế 
 7. Ma trận duyệt snapshot vào phiếu → lịch sử không đổi khi đổi cấu hình (§9.1).
 8. Re-verify OTP/mật khẩu khi duyệt hoặc xuất dữ liệu tài chính (§7.2).
 9. `check:tie` hằng đêm, lệch thì **khoá export và báo người**, không tự sửa (§8.5).
-10. Backup nightly **có test restore mỗi quý**; chưa test restore = chưa có backup (§13).
+10. Backup **mỗi 30'** có test restore mỗi quý; chưa test restore = chưa có backup (§13).
 
 ---
 

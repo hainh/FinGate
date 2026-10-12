@@ -89,7 +89,7 @@ Các khoảng trống còn lại tập trung vào **kiểm thử (§15)**, **art
 | T-7 | API khung session/perms/scope/problem+json/OpenAPI/`api:types` | Xong, **`api:types` chưa sinh** |
 | T-8 | `domain/workflow` + test mọi cạnh | Code xong, **thiếu test** |
 | T-9 | `StorageAdapter` s3+fs + presign + version/key | **Xong** |
-| T-10 | `tasks.yml` + `backup.yml` + restore drill | Workflow xong, **restore drill chưa có log** |
+| T-10 | `tasks.yml` + `data-backup.yml` + restore drill | Workflow xong, **restore drill chưa có log** |
 
 ---
 

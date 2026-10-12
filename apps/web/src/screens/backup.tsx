@@ -37,7 +37,7 @@ export function BackupScreen(): ReactNode {
       <AdminNav />
       <FgPageHeader
         title="Sao lưu dữ liệu"
-        meta="Hệ thống tự sao lưu mỗi 30 phút · giữ bản trong 30 ngày · tải bất kỳ lúc nào"
+        meta="Tự sao lưu (mongodump) mỗi 30 phút · giữ 30 ngày · lưu ở thư mục BACKUP_DIR trên máy chủ"
         actions={
           <FgButton variant="primary" loading={create.isPending} onClick={() => void runNow()}>
             ⤓ Tạo &amp; tải bản sao lưu

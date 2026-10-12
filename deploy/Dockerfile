@@ -43,14 +43,24 @@ ENV NODE_ENV=production \
     PROFILE=onprem \
     STORAGE_DRIVER=fs \
     UPLOAD_DIR=/data/uploads \
+    BACKUP_DIR=/data/backups \
     WEB_DIST=apps/web/dist \
     COREPACK_HOME=/tmp/corepack
 WORKDIR /app
-# user không phải root + thư mục uploads, tạo trước phần cài đặt.
+# MongoDB Database Tools (`mongodump`/`mongorestore`) — job `backup` gọi mongodump trên PATH.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl gnupg ca-certificates \
+ && curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor \
+ && echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/8.0 main" > /etc/apt/sources.list.d/mongodb-org-8.0.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends mongodb-database-tools \
+ && apt-get purge -y --auto-remove curl gnupg \
+ && rm -rf /var/lib/apt/lists/*
+# user không phải root + thư mục uploads/backups, tạo trước phần cài đặt.
 RUN corepack enable \
  && groupadd --gid 10001 fingate \
  && useradd --uid 10001 --gid 10001 --home-dir /app --shell /usr/sbin/nologin fingate \
- && mkdir -p /data/uploads \
+ && mkdir -p /data/uploads /data/backups \
  && chown -R 10001:10001 /data /app
 
 USER 10001:10001

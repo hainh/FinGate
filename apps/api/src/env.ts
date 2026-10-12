@@ -3,6 +3,8 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { z } from 'zod';
 
 const envSchema = z.object({
@@ -30,6 +32,11 @@ const envSchema = z.object({
   PROFILE: z.enum(['cloud', 'onprem']).default('cloud'),
   STORAGE_DRIVER: z.enum(['s3', 'fs']).default('fs'),
   UPLOAD_DIR: z.string().default('./data/uploads'),
+  /**
+   * Thư mục lưu bản sao lưu MongoDB (`mongodump`) — ĐẶT NGOÀI app để truy cập trực tiếp.
+   * Mặc định `~/FinGateBackups`; đổi sang đường dẫn/share bền (vd `/srv/fingate-backups`) khi deploy.
+   */
+  BACKUP_DIR: z.string().default(join(homedir(), 'FinGateBackups')),
   R2_ACCOUNT_ID: z.string().default(''),
   R2_ACCESS_KEY_ID: z.string().default(''),
   R2_SECRET_ACCESS_KEY: z.string().default(''),
