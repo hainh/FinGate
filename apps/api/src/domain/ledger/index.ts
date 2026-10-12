@@ -299,3 +299,49 @@ export async function recomputeAccountBalances(accountIds: string[]): Promise<{ 
   }
   return { accounts: ids.length, rows };
 }
+
+/**
+ * Dọn `balances_daily` NGÀY KHÔNG CÒN bút toán (sau khi entry bị xoá hẳn). Chỉ xoá
+ * dòng do ledger materialize (`source: 'system'` và có actual ≠ 0) — giữ nguyên dòng
+ * planned-only (forecast) và dòng nhập tay (`manual`/`statement`).
+ */
+async function pruneStaleLedgerBalanceDays(accountIds: string[]): Promise<number> {
+  let pruned = 0;
+  for (const accountId of accountIds) {
+    const dates = (await Models.CashEntry.distinct('date', { account_id: oid(accountId) } as never)) as string[];
+    const res = await Models.BalanceDaily.deleteMany({
+      account_id: oid(accountId),
+      source: 'system',
+      date: { $nin: dates },
+      $or: [{ actual_in_minor: { $ne: 0n } }, { actual_out_minor: { $ne: 0n } }],
+    } as never).exec();
+    pruned += res.deletedCount ?? 0;
+  }
+  return pruned;
+}
+
+/**
+ * XOÁ CỨNG mọi bút toán gắn với hồ sơ đã bị xoá hẳn, rồi dựng lại `balances_daily`.
+ *
+ * Bắt buộc gọi khi xoá cứng một phiếu đã thực thi: xoá hồ sơ KHÔNG tự kéo theo ledger,
+ * nên entry cũ sẽ thành mồ côi và số dư vẫn tính sai (bug "xoá phiếu vẫn ảnh hưởng số dư").
+ * `dryRun` chỉ đếm, không ghi.
+ */
+export async function purgeLedgerForDocuments(
+  documentIds: string[],
+  opts: { dryRun?: boolean } = {},
+): Promise<{ entries: number; accounts: string[]; pruned_balance_days: number; rows: number }> {
+  const ids = [...new Set(documentIds.filter(Boolean))].map((id) => oid(id));
+  if (!ids.length) return { entries: 0, accounts: [], pruned_balance_days: 0, rows: 0 };
+
+  const found = await Models.CashEntry.find({ document_id: { $in: ids } } as never)
+    .select({ account_id: 1 })
+    .lean<{ account_id?: unknown }[]>();
+  const accountIds = [...new Set(found.map((e) => String(e.account_id)))];
+  if (opts.dryRun) return { entries: found.length, accounts: accountIds, pruned_balance_days: 0, rows: 0 };
+
+  const res = await Models.CashEntry.deleteMany({ document_id: { $in: ids } } as never).exec();
+  const pruned = await pruneStaleLedgerBalanceDays(accountIds);
+  const rec = accountIds.length ? await recomputeAccountBalances(accountIds) : { accounts: 0, rows: 0 };
+  return { entries: res.deletedCount ?? 0, accounts: accountIds, pruned_balance_days: pruned, rows: rec.rows };
+}

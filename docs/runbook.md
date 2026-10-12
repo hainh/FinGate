@@ -105,6 +105,7 @@ pnpm lint && pnpm typecheck && pnpm test && pnpm build   # chất lượng
 pnpm start                    # chạy API production từ apps/api/dist
 pnpm db:rebuild-balances      # dựng lại số dư tổng hợp
 pnpm db:rebuild-audit         # dựng lại audit_log từ history[]
+pnpm db:cleanup-orphan-entries # dọn bút toán mồ côi (hồ sơ đã xoá cứng) + dựng lại số dư (--dry-run để xem trước)
 pnpm db:reset                 # xoá sạch dữ liệu app (thêm --yes để xác nhận)
 pnpm db:reset-keep-users      # reset dữ liệu nghiệp vụ, giữ user + cấu hình tổ chức (số dư bank về 0)
 pnpm db:bootstrap             # tạo tài khoản quản trị đầu tiên nếu DB rỗng

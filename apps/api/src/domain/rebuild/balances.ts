@@ -8,7 +8,13 @@
  */
 
 import { Models } from '../../db/models.ts';
-import { entriesForExecutedDocument, postCashEntries, recomputeAccountBalances } from '../ledger/index.ts';
+import { entriesForExecutedDocument, postCashEntries, purgeLedgerForDocuments, recomputeAccountBalances } from '../ledger/index.ts';
+
+/** Các `document_id` mồ côi: có bút toán nhưng hồ sơ đã bị xoá hẳn. Hàm thuần, dễ test. */
+export function orphanDocumentIds(entryDocumentIds: string[], aliveDocumentIds: string[]): string[] {
+  const alive = new Set(aliveDocumentIds);
+  return [...new Set(entryDocumentIds)].filter((id) => !alive.has(id));
+}
 
 /** Backfill ledger từ hồ sơ đã thực thi. Idempotent — chạy lại không nhân đôi. */
 export async function rebuildLedger(): Promise<Record<string, unknown>> {
@@ -48,4 +54,22 @@ export async function rebuildLedgerAndBalances(): Promise<Record<string, unknown
   const ledger = await rebuildLedger();
   const balances = await rebuildBalances();
   return { ledger, balances };
+}
+
+/**
+ * Dọn bút toán MỒ CÔI — `cash_entries` trỏ tới hồ sơ KHÔNG còn tồn tại trong `documents`
+ * (hậu quả của việc xoá cứng phiếu đã thực thi mà không dọn ledger). Xoá các entry đó
+ * rồi dựng lại số dư các tài khoản bị ảnh hưởng. Chạy `pnpm db:cleanup-orphan-entries`.
+ */
+export async function purgeOrphanLedgerEntries(opts: { dryRun?: boolean } = {}): Promise<Record<string, unknown>> {
+  const entries = await Models.CashEntry.find({ document_id: { $ne: null } } as never)
+    .select({ document_id: 1 })
+    .lean<{ document_id?: unknown }[]>();
+  const docIds = [...new Set(entries.map((e) => String(e.document_id)))];
+  const alive = new Set(
+    (await Models.Document.find({ _id: { $in: docIds } } as never).select({ _id: 1 }).lean()).map((d) => String(d._id)),
+  );
+  const orphans = orphanDocumentIds(docIds, [...alive]);
+  const res = await purgeLedgerForDocuments(orphans, opts);
+  return { orphan_documents: orphans.length, ...res, at: new Date().toISOString() };
 }

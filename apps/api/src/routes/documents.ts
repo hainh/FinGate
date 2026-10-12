@@ -61,6 +61,7 @@ import { awaitingBadge, decisionPack, docHref, queryQueue } from '../domain/quer
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
 import { assertAccountAllowedForCompany, assertGroupAccountForCompany } from '../domain/accounts.ts';
 import { invalidateFor, rebuildEvidence } from '../domain/side-effects.ts';
+import { purgeLedgerForDocuments } from '../domain/ledger/index.ts';
 import { attachmentKey, detectMagic, sha256hex, storage } from '../storage/index.ts';
 import { newRequestId } from '../lib/http.ts';
 
@@ -590,6 +591,15 @@ export function documentRoutes(app: FastifyInstance): void {
         await Models.Attachment.deleteMany({ document_id: params.id } as never).exec();
         const r = await Models.Document.deleteOne({ _id: params.id } as never).exec();
         if (!r.deletedCount) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy hồ sơ' });
+        // Xoá cứng hồ sơ KHÔNG tự kéo theo sổ cái → phải dọn bút toán đã thực thi,
+        // nếu không entry mồ côi vẫn bị tính vào số dư tài khoản. Best-effort: lỗi ở
+        // đây KHÔNG làm hỏng việc xoá (đã commit); job `cleanup` + script dọn lại sau.
+        try {
+          await purgeLedgerForDocuments([params.id]);
+        } catch (err) {
+          console.warn('[ledger] dọn bút toán sau khi xoá hồ sơ thất bại (sẽ dọn lại sau):', (err as Error).message);
+        }
+        invalidateFor(String(doc.company_id));
         return ok(reply, { data: { ok: true, deleted_id: params.id } });
       },
     }),

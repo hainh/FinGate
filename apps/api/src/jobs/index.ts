@@ -16,7 +16,7 @@ import { mirrorAudit, rebuildAudit } from '../domain/audit/index.ts';
 import { sendMail } from '../mail/sender.ts';
 import { evaluateAlerts } from '../domain/alerts/index.ts';
 import { materializeRecurring } from '../domain/recurring/index.ts';
-import { rebuildLedgerAndBalances } from '../domain/rebuild/balances.ts';
+import { purgeOrphanLedgerEntries, rebuildLedgerAndBalances } from '../domain/rebuild/balances.ts';
 import type { ScopeLike } from '../domain/types.ts';
 import { checkTie } from '../domain/tie/index.ts';
 import { createBackup, pruneBackups } from '../domain/backup/index.ts';
@@ -281,7 +281,7 @@ async function archiveOldDocuments(): Promise<{ archived: number; bytes: number 
 }
 
 /** File mồ côi (prepare rồi không confirm) > 7 ngày → dọn (§8.6). */
-async function cleanupOrphans(): Promise<{ removed: number }> {
+async function cleanupOrphans(): Promise<{ removed: number; ledger: Record<string, unknown> }> {
   const cutoff = addDays(today(), -7);
   const rows = await Models.Attachment.find({ state: 'prepared', created_at: { $lt: new Date(`${cutoff}T00:00:00Z`) } } as never)
     .select({ key: 1 })
@@ -294,7 +294,9 @@ async function cleanupOrphans(): Promise<{ removed: number }> {
     await Models.Attachment.updateOne({ _id: String(r._id) } as never, { $set: { state: 'orphan' } }).exec();
     removed++;
   }
-  return { removed };
+  // Dọn bút toán mồ côi (hồ sơ đã bị xoá cứng) — lưới an toàn nếu purge inline lỗi.
+  const ledger = await purgeOrphanLedgerEntries().catch((err: Error) => ({ error: err.message }));
+  return { removed, ledger };
 }
 
 /** Giữ jobs lịch sử 30 ngày. */
