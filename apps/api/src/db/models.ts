@@ -352,6 +352,8 @@ export const DocumentSchema = new Schema(
     },
     loan_id: { type: Schema.Types.ObjectId, default: null },
     debt_code: { type: String, default: null },
+    /** Phiếu thu: tự tạo phiếu nợ ngân hàng khi được duyệt & thực thi. */
+    create_bank_debt: { type: Boolean, default: false },
     budget: {
       budget_id: { type: Schema.Types.ObjectId, default: null },
       line_id: { type: Schema.Types.ObjectId, default: null },
@@ -611,6 +613,8 @@ export const BankDebtSchema = new Schema(
     history: { type: [historyEntry], default: [] },
     note: { type: String, default: null },
     created_by: { type: Schema.Types.ObjectId, default: null },
+    /** Phiếu thu sinh tự động khoản nợ này — trỏ về phiếu thu nguồn (chống tạo trùng). */
+    auto_source_document_id: { type: Schema.Types.ObjectId, default: null },
     created_at: { type: Date, default: () => new Date() },
     updated_at: { type: Date, default: () => new Date() },
   },

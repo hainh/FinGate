@@ -318,6 +318,7 @@ export function documentRoutes(app: FastifyInstance): void {
           contract: { code: body.contract.code ?? null, value: body.contract.value ? { minor: BigInt(body.contract.value.amount_minor), currency: body.contract.value.currency, decimals: 0 } : null },
           loan_id: body.loan_id ?? null,
           debt_code: body.debt_code ?? null,
+          create_bank_debt: Boolean(body.create_bank_debt),
           budget: { budget_id: body.budget.budget_id ?? null, line_id: body.budget.line_id ?? null, in_plan: body.budget.in_plan },
           note: body.note ?? null,
           rollover: body.rollover
@@ -389,6 +390,7 @@ export function documentRoutes(app: FastifyInstance): void {
           if (body[key] !== undefined) set[key] = body[key];
         }
         if (body.planned_date !== undefined) set.planned_date = normalizePlannedDate(body.planned_date);
+        if (body.create_bank_debt !== undefined) set.create_bank_debt = body.create_bank_debt;
         if (body.payee) {
           const mergedPayee = { ...(doc.payee as Record<string, unknown>), ...body.payee };
           let isInternalPayee = Boolean(mergedPayee.is_internal);
@@ -1201,6 +1203,7 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
     target,
     rollover: doc.rollover ?? null,
     debt_code: doc.debt_code ?? null,
+    create_bank_debt: Boolean(doc.create_bank_debt),
     note: doc.note ?? null,
     approval: {
       matrix_id: (doc.approval as { matrix_id?: unknown })?.matrix_id ? String((doc.approval as { matrix_id: unknown }).matrix_id) : null,

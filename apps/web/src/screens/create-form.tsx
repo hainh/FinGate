@@ -30,6 +30,8 @@ interface FormState {
   contract_code: string;
   priority: string;
   note: string;
+  /** Phiếu thu: tự tạo phiếu nợ ngân hàng khi được duyệt & thực thi. */
+  create_bank_debt: boolean;
   /* rollover */
   plan: string;
   new_rate: string;
@@ -55,6 +57,7 @@ const initial = (): FormState => ({
   contract_code: '',
   priority: 'normal',
   note: '',
+  create_bank_debt: false,
   plan: '',
   new_rate: '',
   collateral: '',
@@ -133,6 +136,7 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
       priority: f.priority,
       contract: { code: f.contract_code || undefined },
       note: f.note || undefined,
+      create_bank_debt: kind === 'income' ? f.create_bank_debt : undefined,
     };
     if (kind === 'rollover') {
       body.rollover = {
@@ -193,6 +197,7 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
       account_id: loaded.source.account_id ?? '',
       contract_code: loaded.contract.code ?? '',
       note: loaded.note ?? '',
+      create_bank_debt: loaded.create_bank_debt ?? false,
       plan: loaded.rollover?.plan ?? '',
     });
   }
@@ -327,6 +332,26 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
                   <FgInput value={f.collateral} onChange={(e) => set('collateral', e.target.value)} disabled={!canEdit} />
                 </FgField>
               </>
+            ) : null}
+            {kind === 'income' ? (
+              <div style={{ gridColumn: '1/-1' }}>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, cursor: canEdit ? 'pointer' : 'not-allowed' }}>
+                  <input
+                    type="checkbox"
+                    checked={f.create_bank_debt}
+                    onChange={(e) => setF((s) => ({ ...s, create_bank_debt: e.target.checked }))}
+                    style={{ width: 18, height: 18, marginTop: 1 }}
+                    disabled={!canEdit}
+                  />
+                  <span>
+                    Tạo phiếu nợ ngân hàng khi phiếu thu được duyệt &amp; thực thi
+                    <br />
+                    <span style={{ color: 'var(--fg-text-muted)' }}>
+                      Số tiền vay = số tiền thu · Ngân hàng = khách hàng trả tiền · Kỳ hạn 12 tháng · Hạn thanh toán + 11 tháng
+                    </span>
+                  </span>
+                </label>
+              </div>
             ) : null}
             <div style={{ gridColumn: '1/-1' }}>
               <FgField label="Ghi chú">

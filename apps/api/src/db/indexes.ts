@@ -36,6 +36,7 @@ const INDEXES: Record<string, IndexDef[]> = {
     { key: { company_id: 1, maturity_date: 1 } },
     { key: { company_id: 1, code: 1 }, options: { unique: true } },
     { key: { 'repayment_links.document_id': 1 } },
+    { key: { auto_source_document_id: 1 } },
   ],
   debt_vouchers: [
     { key: { company_id: 1, party_type: 1, side: 1, due_date: 1 } },

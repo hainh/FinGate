@@ -40,6 +40,7 @@ import { DEFAULT_CALENDAR, slaDeadline, type WorkingCalendar } from '../calendar
 import { nextDocumentCode } from '../numbering/index.ts';
 import { notifyNextApprover, rebuildEvidence, syncBalancesForDocument } from '../side-effects.ts';
 import { createAutoIncomeForSpend } from './auto-income.ts';
+import { createAutoBankDebtForIncome } from './auto-bank-debt.ts';
 import { bookedBalance } from '../ledger/index.ts';
 import { assertAccountAllowedForCompany, assertGroupAccountForCompany } from '../accounts.ts';
 import {
@@ -116,6 +117,7 @@ export async function loadDoc(id: string) {
       priority: 1,
       contract: 1,
       loan_id: 1,
+      create_bank_debt: 1,
       budget: 1,
       rollover: 1,
       approval: 1,
@@ -821,6 +823,23 @@ export async function transition(input: {
       });
     } catch (err) {
       console.warn('[auto-income] tạo phiếu thu tự động thất bại:', (err as Error).message);
+    }
+  }
+
+  // 7c. phiếu thu vừa thực thi → nếu được lập kèm cờ "tạo phiếu nợ ngân hàng" thì tự
+  //     sinh khoản nợ tương ứng (số tiền vay = số tiền thu, ngân hàng = khách hàng trả tiền).
+  //     Best-effort: lỗi ở đây KHÔNG làm hỏng việc thu đã commit.
+  if (nextStatus === 'paid' && doc.kind === 'income' && executionPatch && doc.create_bank_debt) {
+    try {
+      await createAutoBankDebtForIncome({
+        income: doc,
+        actor,
+        amountMinor: executionPatch.actual_amount_minor,
+        requestId: body.request_id,
+        ip: input.ip,
+      });
+    } catch (err) {
+      console.warn('[auto-bank-debt] tạo phiếu nợ ngân hàng tự động thất bại:', (err as Error).message);
     }
   }
 

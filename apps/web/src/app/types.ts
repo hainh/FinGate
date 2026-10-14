@@ -255,6 +255,7 @@ export interface DocumentDetail {
   priority: string;
   contract: { code: string | null; value: MoneyWire | null; signed_at: string | null };
   loan_id: string | null;
+  create_bank_debt?: boolean;
   budget: { budget_id: string | null; line_id: string | null; in_plan: boolean };
   target: { company_id: string | null; company_name?: string; account_id: string | null } | null;
   rollover: {

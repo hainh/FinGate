@@ -98,6 +98,8 @@ export interface DomainDoc {
   priority: string;
   contract?: { code?: string | null; value?: { minor: bigint } | null } | null;
   loan_id?: string | null;
+  /** Phiếu thu: tự tạo phiếu nợ ngân hàng khi được duyệt & thực thi. */
+  create_bank_debt?: boolean;
   budget?: { budget_id?: string | null; line_id?: string | null; in_plan?: boolean } | null;
   rollover?: Record<string, unknown> | null;
   approval: { matrix_id?: string | null; matrix_version?: number; matrix_label?: string | null; steps: StepRow[] };

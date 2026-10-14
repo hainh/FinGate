@@ -103,6 +103,11 @@ const documentFields = z.object({
       .optional(),
     /** mã công nợ liên quan (§V). */
     debt_code: z.string().max(60).optional(),
+    /**
+     * Phiếu thu: khi duyệt & thực thi thì tự tạo một phiếu nợ ngân hàng tương ứng
+     * (số tiền vay = số tiền thu, tên ngân hàng = khách hàng trả tiền).
+     */
+    create_bank_debt: z.boolean().default(false),
     evidence_required: z
     .array(evidenceType)
     .optional()
@@ -360,6 +365,8 @@ export const documentDetail = z.object({
     })
     .nullable(),
   debt_code: z.string().nullable(),
+  /** Phiếu thu: đánh dấu tự tạo phiếu nợ ngân hàng khi thực thi. */
+  create_bank_debt: z.boolean().default(false),
   note: z.string().nullable(),
   approval: z.object({
     matrix_id: objectId.nullable(),
