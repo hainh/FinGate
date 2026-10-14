@@ -160,6 +160,7 @@ export const bankDebtRow = z.object({
   status: bankDebtStatus,
   attachment_count: z.number().int(),
   repayment_count: z.number().int(),
+  created_at: z.string().nullable(),
   updated_at: z.string(),
 });
 

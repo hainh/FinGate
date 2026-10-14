@@ -94,6 +94,7 @@ function serializeBankDebt(
     note: d.note ?? null,
     attachment_count: Array.isArray(d.attachments) ? d.attachments.length : 0,
     repayment_count: (d.repayment_links ?? []).length,
+    created_at: d.created_at ? new Date(String(d.created_at)).toISOString() : null,
     updated_at: d.updated_at ? new Date(String(d.updated_at)).toISOString() : null,
   };
 }

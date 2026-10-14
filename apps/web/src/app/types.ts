@@ -538,6 +538,7 @@ export interface BankDebtRow {
   status: string;
   attachment_count: number;
   repayment_count: number;
+  created_at: string | null;
   updated_at: string | null;
 }
 

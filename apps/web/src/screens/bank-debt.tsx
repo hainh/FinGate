@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { DatePicker } from 'antd';
+import type { TableColumnsType } from 'antd';
 import dayjs from 'dayjs';
 import { formatMoney, money, moneyFromWire, parseMoneyInput, type Money } from '@fingate/shared';
 import { ApiRequestError } from '../app/api.ts';
@@ -18,9 +19,83 @@ import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useToast } from '../components/pagekit.tsx';
 import { problemText } from '../components/attachments.tsx';
 import { OwnerAttachmentSection, LinkPickerModal } from './debt.tsx';
+import type { BankDebtRow } from '../app/types.ts';
 import { STATUS_REGISTRY, type StatusKey } from '@fingate/shared';
 
 const BANK_STATUS_LABEL: Record<string, string> = { active: 'Đang vay', overdue: 'Quá hạn', settled: 'Đã tất toán', archived: 'Lưu trữ' };
+
+/** So sánh 2 chuỗi số tiền (BigInt) — an toàn với giá trị lớn, không tràn số. */
+function cmpMinor(a: string, b: string): number {
+  const av = BigInt(a || '0');
+  const bv = BigInt(b || '0');
+  return av < bv ? -1 : av > bv ? 1 : 0;
+}
+
+/** Sắp xếp phiếu nợ trên bảng danh sách — mọi cột, mặc định mới tạo lên đầu. */
+function bankDebtColumns(): TableColumnsType<BankDebtRow> {
+  return [
+    {
+      title: 'Mã',
+      dataIndex: 'code',
+      key: 'code',
+      sorter: (a, b) => a.code.localeCompare(b.code),
+      render: (v: string, r: BankDebtRow) => (
+        <Link className="fg-link" to={`/ngan-hang/khoan-vay/${r._id}`}>
+          {v}
+        </Link>
+      ),
+    },
+    { title: 'Ngân hàng', dataIndex: 'bank_name', key: 'bn', sorter: (a, b) => a.bank_name.localeCompare(b.bank_name) },
+    { title: 'Công ty', dataIndex: 'company_name', key: 'co', sorter: (a, b) => (a.company_name ?? '').localeCompare(b.company_name ?? '') },
+    {
+      title: 'Số tiền vay',
+      dataIndex: 'principal',
+      key: 'principal',
+      align: 'right',
+      sorter: (a, b) => cmpMinor(a.principal.minor, b.principal.minor),
+      render: (v) => <FgMoneyStack value={moneyFromWire(v)} />,
+    },
+    {
+      title: 'Hạn mức vay',
+      dataIndex: 'credit_limit',
+      key: 'credit_limit',
+      align: 'right',
+      sorter: (a, b) => cmpMinor(a.credit_limit.minor, b.credit_limit.minor),
+      render: (v) => <FgMoneyStack value={moneyFromWire(v)} />,
+    },
+    {
+      title: 'Dư nợ',
+      dataIndex: 'outstanding',
+      key: 'os',
+      align: 'right',
+      sorter: (a, b) => cmpMinor(a.outstanding.minor, b.outstanding.minor),
+      render: (v) => <FgMoneyStack value={moneyFromWire(v)} emphasis />,
+    },
+    {
+      title: 'Lãi suất',
+      dataIndex: 'interest_rate',
+      key: 'ir',
+      sorter: (a, b) => Number(String(a.interest_rate).replace(',', '.')) - Number(String(b.interest_rate).replace(',', '.')),
+      render: (v: string) => `${v} %/năm`,
+    },
+    { title: 'Hạn trả', dataIndex: 'maturity_date', key: 'md', sorter: (a, b) => (a.maturity_date ?? '').localeCompare(b.maturity_date ?? '') },
+    {
+      title: 'Ngày tạo',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      defaultSortOrder: 'descend',
+      sorter: (a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''),
+      render: (v: string | null) => (v ? <span className="fg-num">{dayjs(v).format('DD/MM/YYYY HH:mm')}</span> : '—'),
+    },
+    {
+      title: 'Trạng thái',
+      dataIndex: 'status',
+      key: 'st',
+      sorter: (a, b) => (BANK_STATUS_LABEL[a.status] ?? a.status).localeCompare(BANK_STATUS_LABEL[b.status] ?? b.status, 'vi'),
+      render: (v: string) => BANK_STATUS_LABEL[v] ?? v,
+    },
+  ];
+}
 
 /** Bảng mẫu để nhập nợ ngân hàng theo lô (Google Sheets) — người dùng điền rồi tải .tsv. */
 const SHEETS_IMPORT_URL = 'https://docs.google.com/spreadsheets/d/1CsgfK4J17nxxWXR2NDOdrM5NzSW3ltI7jKpwYIN-UkM/edit?gid=0#gid=0';
@@ -295,21 +370,7 @@ export function BankDebtListScreen(): ReactNode {
             </div>
           ) : (
             <div className="fg-card" style={{ padding: 0 }}>
-              <FgTable
-                rowKey="_id"
-                dataSource={data.items}
-                columns={[
-                  { title: 'Mã', dataIndex: 'code', key: 'code', render: (v, r) => <Link className="fg-link" to={`/ngan-hang/khoan-vay/${r._id}`}>{v}</Link> },
-                  { title: 'Ngân hàng', dataIndex: 'bank_name', key: 'bn' },
-                  { title: 'Công ty', dataIndex: 'company_name', key: 'co' },
-                  { title: 'Số tiền vay', dataIndex: 'principal', key: 'principal', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
-                  { title: 'Hạn mức vay', dataIndex: 'credit_limit', key: 'credit_limit', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
-                  { title: 'Dư nợ', dataIndex: 'outstanding', key: 'os', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} emphasis /> },
-                  { title: 'Lãi suất', dataIndex: 'interest_rate', key: 'ir', render: (v: string) => `${v} %/năm` },
-                  { title: 'Hạn trả', dataIndex: 'maturity_date', key: 'md' },
-                  { title: 'Trạng thái', dataIndex: 'status', key: 'st', render: (v: string) => BANK_STATUS_LABEL[v] ?? v },
-                ]}
-              />
+              <FgTable rowKey="_id" dataSource={data.items} columns={bankDebtColumns()} />
             </div>
           )
         }
