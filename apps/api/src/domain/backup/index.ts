@@ -5,7 +5,8 @@
  * vận hành truy cập trực tiếp — KHÔNG đi qua StorageAdapter/chứng từ, KHÔNG lên cloud.
  * Mỗi bản là một archive gzip của `mongodump` (`fingate-YYYYMMDD-HHmmss.archive.gz`).
  *
- * Yêu cầu: `mongodump` (MongoDB Database Tools) có trên PATH của máy chủ chạy API.
+ * Ưu tiên `mongodump` trên PATH của máy chủ chạy API. Nếu dev Windows chưa cài Database Tools,
+ * tự chạy `mongodump` trong container MongoDB đang ánh xạ đúng cổng của `MONGODB_URI`.
  */
 
 import { execFile } from 'node:child_process';
@@ -49,6 +50,163 @@ function stamp(d: Date): string {
   );
 }
 
+interface SpawnError extends Error {
+  code?: string | number;
+  killed?: boolean;
+  stdout?: string;
+  stderr?: string;
+}
+
+function isCommandNotFound(err: unknown): boolean {
+  const e = err as SpawnError;
+  return e.code === 'ENOENT' || /not recognized|no such file|executable file not found/i.test(e.stderr ?? '');
+}
+
+function commandDetail(err: unknown): string {
+  const e = err as SpawnError;
+  const raw = e.stderr || e.stdout || e.message || String(err);
+  return raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? 'Lỗi không xác định';
+}
+
+async function run(cmd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return execFileAsync(cmd, args, { windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function internalMongoUri(uri: string, port: string): string {
+  try {
+    const parsed = new URL(uri);
+    parsed.hostname = '127.0.0.1';
+    parsed.port = port;
+    parsed.searchParams.delete('replicaSet');
+    parsed.searchParams.set('directConnection', 'true');
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return `mongodb://127.0.0.1:${port}/fingate?directConnection=true`;
+  }
+}
+
+interface ContainerRow {
+  name: string;
+  ports: string;
+}
+
+interface DockerTarget {
+  container: string;
+  uri: string;
+}
+
+function publishedPort(row: ContainerRow, hostPort: string): string | null {
+  const match = row.ports.match(new RegExp(`:${escapeRegExp(hostPort)}->(\\d+)/tcp`));
+  return match?.[1] ?? null;
+}
+
+async function dockerTargets(): Promise<DockerTarget[]> {
+  const env = getEnv();
+  let rows: ContainerRow[];
+  try {
+    const { stdout } = await run('docker', ['ps', '--format', '{{.Names}}\t{{.Ports}}']);
+    rows = stdout
+      .split(/\r?\n/)
+      .flatMap((line) => {
+        const [name, ports = ''] = line.split('\t');
+        return name ? [{ name, ports }] : [];
+      });
+  } catch (err) {
+    if (isCommandNotFound(err)) return [];
+    throw new ApiError({
+      code: 'FG-SYS-001',
+      detail: `Không kiểm tra được container MongoDB qua Docker: ${commandDetail(err)}`,
+    });
+  }
+
+  let mongoUri: URL;
+  try {
+    mongoUri = new URL(env.MONGODB_URI);
+  } catch {
+    return [];
+  }
+  const host = mongoUri.hostname.toLowerCase();
+  const hostPort = mongoUri.port || '27017';
+  const dbPort = hostPort === '27117' ? '27017' : hostPort;
+  const preferred = [
+    env.BACKUP_MONGO_CONTAINER.trim(),
+    'fingate-mongo',
+    'deploy-mongo-1',
+  ].filter(Boolean);
+
+  const candidates: DockerTarget[] = [];
+  const seen = new Set<string>();
+  const addCandidate = (row: ContainerRow): void => {
+    if (seen.has(row.name)) return;
+    const internalPort = publishedPort(row, hostPort) ?? (host === 'localhost' || host === '127.0.0.1' ? dbPort : '27017');
+    candidates.push({ container: row.name, uri: internalMongoUri(env.MONGODB_URI, internalPort) });
+    seen.add(row.name);
+  };
+
+  for (const name of preferred) {
+    const row = rows.find((r) => r.name === name);
+    if (row) addCandidate(row);
+  }
+  if (host === 'localhost' || host === '127.0.0.1') {
+    for (const row of rows) {
+      if (publishedPort(row, hostPort)) addCandidate(row);
+    }
+  }
+
+  const available: DockerTarget[] = [];
+  for (const candidate of candidates) {
+    try {
+      await run('docker', ['exec', candidate.container, 'sh', '-lc', 'command -v mongodump']);
+      available.push(candidate);
+    } catch {
+      /* bỏ qua container không có mongodump hoặc không exec được */
+    }
+  }
+  return available;
+}
+
+async function createBackupViaDocker(file: string, path: string, createdAt: Date): Promise<BackupFile> {
+  const targets = await dockerTargets();
+  if (!targets.length) {
+    throw new ApiError({
+      code: 'FG-SYS-001',
+      detail:
+        'Không tìm thấy `mongodump` trên máy chủ. Hãy cài MongoDB Database Tools hoặc chạy API trong container có `mongodump`.',
+    });
+  }
+
+  const tmpPath = `/tmp/${file}`;
+  let lastDetail = 'Không chạy được `mongodump` trong container MongoDB.';
+  for (const target of targets) {
+    try {
+      await run('docker', [
+        'exec',
+        target.container,
+        'mongodump',
+        `--uri=${target.uri}`,
+        '--gzip',
+        `--archive=${tmpPath}`,
+      ]);
+      await run('docker', ['cp', `${target.container}:${tmpPath}`, path]);
+      const info = await stat(path).catch(() => null);
+      if (!info?.isFile() || info.size === 0) throw new Error('File sao lưu rỗng sau khi chạy mongodump trong container.');
+      return { file, size: info.size, created_at: createdAt.toISOString() };
+    } catch (err) {
+      lastDetail = commandDetail(err);
+      await rm(path, { force: true }).catch(() => undefined);
+    } finally {
+      await run('docker', ['exec', target.container, 'rm', '-f', tmpPath]).catch(() => undefined);
+    }
+  }
+
+  throw new ApiError({ code: 'FG-SYS-001', detail: `Sao lưu qua Docker thất bại: ${lastDetail}` });
+}
+
 /** `mongodump --gzip --archive=<BACKUP_DIR>/fingate-<stamp>.archive.gz`. */
 export async function createBackup(): Promise<BackupFile> {
   const created = new Date();
@@ -58,24 +216,21 @@ export async function createBackup(): Promise<BackupFile> {
   const path = join(dir, file);
 
   try {
-    await execFileAsync(
-      'mongodump',
-      [`--uri=${getEnv().MONGODB_URI}`, '--gzip', `--archive=${path}`],
-      { windowsHide: true, maxBuffer: 64 * 1024 * 1024 },
-    );
+    await run('mongodump', [`--uri=${getEnv().MONGODB_URI}`, '--gzip', `--archive=${path}`]);
   } catch (err) {
-    if ((err as { code?: string }).code === 'ENOENT') {
-      throw new ApiError({
-        code: 'FG-SYS-001',
-        detail: 'Không tìm thấy `mongodump` trên máy chủ — cài MongoDB Database Tools để bật sao lưu.',
-      });
+    if (isCommandNotFound(err)) {
+      return createBackupViaDocker(file, path, created);
     }
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new ApiError({ code: 'FG-SYS-001', detail: `Sao lưu thất bại: ${msg}` });
+    await rm(path, { force: true }).catch(() => undefined);
+    throw new ApiError({ code: 'FG-SYS-001', detail: `Sao lưu thất bại: ${commandDetail(err)}` });
   }
 
   const info = await stat(path).catch(() => null);
-  return { file, size: info?.size ?? 0, created_at: created.toISOString() };
+  if (!info?.isFile() || info.size === 0) {
+    await rm(path, { force: true }).catch(() => undefined);
+    throw new ApiError({ code: 'FG-SYS-001', detail: 'Sao lưu thất bại: mongodump không tạo ra file archive.' });
+  }
+  return { file, size: info.size, created_at: created.toISOString() };
 }
 
 /** Danh sách bản sao lưu còn giữ (mới nhất trước). */

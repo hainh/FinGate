@@ -28,7 +28,8 @@ export function BackupScreen(): ReactNode {
       toastOk('Đã tạo bản sao lưu — đang tải về…');
       openDownload(`/system/backups/${encodeURIComponent(created.file)}`);
     } catch (e) {
-      message.error((e as { problem?: { title?: string } }).problem?.title ?? 'Không tạo được bản sao lưu');
+      const problem = (e as { problem?: { title?: string; detail?: string } }).problem;
+      message.error(problem?.detail ?? problem?.title ?? 'Không tạo được bản sao lưu');
     }
   };
 

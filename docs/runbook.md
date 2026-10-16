@@ -218,8 +218,10 @@ ngoài app `BACKUP_DIR`** (mặc định `~/FinGateBackups`; Profile O `/data/ba
 bind-mount `deploy/backups/`). File: `fingate-YYYYMMDD-HHmmss.archive.gz`. KHÔNG đi qua
 `StorageAdapter`/cloud — chỉ file storage local nên mở/tải trực tiếp được.
 
-- **Yêu cầu**: `mongodump` có trên PATH máy chủ (image Docker đã cài sẵn; máy dev cài
-  MongoDB Database Tools). Thiếu → job báo lỗi `FG-SYS-001`.
+- **Yêu cầu**: `mongodump` có trên PATH máy chủ (image Docker đã cài sẵn). Nếu host dev
+  chưa cài MongoDB Database Tools, app tự chạy `mongodump` trong container MongoDB khớp cổng
+  `MONGODB_URI` (mặc định nhận diện `fingate-mongo`; đặt `BACKUP_MONGO_CONTAINER` để ép
+  container cụ thể). Thiếu cả hai đường → job báo lỗi `FG-SYS-001` kèm thông điệp can thiệp.
 - **Job `backup` mỗi 30'**: workflow `.github/workflows/data-backup.yml`
   (`*/30 * * * *`) → `POST /api/v1/tasks/backup`; Profile O thêm cron
   `*/30 * * * * curl -fsS -X POST http://localhost:8080/api/v1/tasks/backup -H "x-task-token: $TASK_TOKEN"`.

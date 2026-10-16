@@ -37,6 +37,8 @@ const envSchema = z.object({
    * Mặc định `~/FinGateBackups`; đổi sang đường dẫn/share bền (vd `/srv/fingate-backups`) khi deploy.
    */
   BACKUP_DIR: z.string().default(join(homedir(), 'FinGateBackups')),
+  /** Container MongoDB có `mongodump` (dùng khi host không cài MongoDB Database Tools). */
+  BACKUP_MONGO_CONTAINER: z.string().default(''),
   R2_ACCOUNT_ID: z.string().default(''),
   R2_ACCESS_KEY_ID: z.string().default(''),
   R2_SECRET_ACCESS_KEY: z.string().default(''),
