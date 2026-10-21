@@ -7,9 +7,11 @@ import { dashboardRoutes } from './dashboard.ts';
 import { financeRoutes } from './finance.ts';
 import { debtRoutes } from './debt.ts';
 import { bankDebtRoutes } from './bank-debt.ts';
-import { counterpartyRoutes } from './counterparty.ts';
+import { partnerRoutes } from './partners.ts';
 import { adminRoutes } from './admin.ts';
 import { backupRoutes } from './backup.ts';
+import { tagRoutes } from './tags.ts';
+import { automationRoutes } from './automation.ts';
 
 export function apiRoutes(app: FastifyInstance): void {
   authRoutes(app);
@@ -18,7 +20,9 @@ export function apiRoutes(app: FastifyInstance): void {
   financeRoutes(app);
   debtRoutes(app);
   bankDebtRoutes(app);
-  counterpartyRoutes(app);
+  partnerRoutes(app);
   adminRoutes(app);
   backupRoutes(app);
+  tagRoutes(app);
+  automationRoutes(app);
 }

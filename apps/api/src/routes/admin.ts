@@ -75,6 +75,7 @@ import { mailTemplates, sendMail } from '../mail/sender.ts';
 import { reportPreset } from '../domain/reports/index.ts';
 import { exportRequestBody } from '@fingate/shared';
 import { getEnv } from '../env.ts';
+import { assertVoucherPartner } from '../domain/vouchers/rules.ts';
 
 export function adminRoutes(app: FastifyInstance): void {
   /* ============================ NHÂN SỰ (§XXIX) ============================ */
@@ -1479,11 +1480,17 @@ export function adminRoutes(app: FastifyInstance): void {
       config: { perms: ['doc:read'] as Permission[], screen: 'CHI-08', summary: 'Khoản chi định kỳ' },
       handler: async (req, reply) => {
         const scope = requireScope(req);
-        const rows = await Models.RecurringRule.find(withScopeFilter(scope) as never).select({ company_id: 1, title: 1, category_id: 1, amount_minor: 1, cadence: 1, day_of_period: 1, remind_days: 1, next_date: 1, last_document_id: 1, status: 1 }).lean();
+        const rows = await Models.RecurringRule.find(withScopeFilter(scope) as never).select({ company_id: 1, title: 1, category_id: 1, amount_minor: 1, cadence: 1, day_of_period: 1, remind_days: 1, next_date: 1, last_document_id: 1, status: 1, partner_id: 1, payee: 1 }).lean();
         const companies = await Models.Company.find({}).select({ name: 1 }).lean();
         const cmap = new Map(companies.map((c) => [String(c._id), String(c.name)]));
         const cats = await Models.Category.find({}).select({ name: 1 }).lean();
         const catmap = new Map(cats.map((c) => [String(c._id), String(c.name)]));
+        // v2: tên bên nhận lấy qua đối tác (cùng phạm vi công ty); v1 (chưa có đối tác) rơi về tên nhập tự do
+        const partnerIds = [...new Set(rows.map((r) => (r.partner_id ? String(r.partner_id) : '')).filter(Boolean))];
+        const partners = partnerIds.length
+          ? await Models.Partner.find({ _id: { $in: partnerIds }, ...withScopeFilter(scope) } as never).select({ name: 1 }).lean<{ _id: unknown; name?: string }[]>()
+          : [];
+        const pmap = new Map(partners.map((p) => [String(p._id), String(p.name ?? '')]));
         const items = rows.map((r) => {
           const next = nextOccurrence(r as unknown as RecurringShape);
           const days = next ? Math.ceil((new Date(`${next}T00:00:00Z`).getTime() - Date.now()) / 86_400_000) : 999;
@@ -1493,6 +1500,8 @@ export function adminRoutes(app: FastifyInstance): void {
             company_name: cmap.get(String(r.company_id)) ?? '',
             title: String(r.title),
             category_name: r.category_id ? (catmap.get(String(r.category_id)) ?? null) : null,
+            partner_id: r.partner_id ? String(r.partner_id) : null,
+            partner_name: (r.partner_id ? pmap.get(String(r.partner_id)) : undefined) ?? (r.payee?.name ? String(r.payee.name) : null),
             amount: wire(asBigInt(r.amount_minor)),
             cadence: String(r.cadence),
             cadence_label: cadenceLabel(String(r.cadence)),
@@ -1518,13 +1527,20 @@ export function adminRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const body = validate(recurringUpsertBody, req.body);
         await assertCompanyAccess(req, body.company_id);
+        // v2 (§5.2, §14.2): bên nhận = ĐỐI TÁC đã có (cùng công ty, đang hoạt động) — bắt buộc theo schema.
+        // Lưu `partner_id` để phiếu nháp định kỳ đọc tên qua đối tác và chặn xoá đối tác đang được dùng.
+        // Không nhận / không ghi tên người nhận nhập tự do (v1 đã bỏ).
+        const partner = await Models.Partner.findById(body.partner_id)
+          .select({ company_id: 1, status: 1, type: 1 })
+          .lean<{ company_id: unknown; status: string; type: string } | null>();
+        assertVoucherPartner(partner, { companyId: body.company_id, loanKind: null, requireActive: true, field: 'partner_id' });
         const payload = {
           company_id: body.company_id,
           title: body.title,
           purpose: body.purpose,
           category_id: body.category_id ?? null,
           department_id: body.department_id ?? null,
-          payee: body.payee,
+          partner_id: body.partner_id,
           amount_minor: BigInt(body.amount.amount_minor),
           currency: body.amount.currency,
           source: { fund: body.source.fund, account_id: body.source.account_id ?? null },
@@ -2004,25 +2020,27 @@ export function adminRoutes(app: FastifyInstance): void {
         const scope = requireScope(req);
         const body = validate(exportRequestBody, req.body);
         const preset = body.preset ?? 'thu-chi-ngay';
+        // lọc đối tác / tag (v2) — chỉ nhận ID dạng ObjectId, bỏ qua giá trị lạ (cùng quy ước GET /reports)
+        const isObjectIdText = (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9]{24}$/i.test(v);
+        const partnerRaw = body.query?.partner_id;
+        const tagRaw = typeof body.query?.tag_ids === 'string' ? body.query.tag_ids : '';
         const result = await reportPreset(preset, {
           scope,
           from: typeof body.query?.from === 'string' ? body.query.from : undefined,
           to: typeof body.query?.to === 'string' ? body.query.to : undefined,
           groupBy: typeof body.query?.group_by === 'string' ? body.query.group_by : undefined,
+          partnerId: isObjectIdText(partnerRaw) ? partnerRaw : null,
+          tagIds: tagRaw.split(',').map((s) => s.trim()).filter(isObjectIdText),
           limit: 50_000,
           canExport: true,
         });
         if (result.row_count > getEnv().EXPORT_ROW_LIMIT) {
-          // chạy thành job, trả link trên R2 (§6)
-          const job = await Models.Job.create({
-            name: 'export',
-            state: 'queued',
-            dedupe_key: `export:${body.request_id}`,
-            payload: { preset, query: body.query },
-            user_id: actor.user_id,
-            company_id: actor.company_id,
-          } as never);
-          return ok(reply, { data: { job_id: String(job._id), queued: true, rows: result.row_count } }, { status: 202 });
+          // Chưa có tác vụ xuất nền (không có trạng thái / link tải): từ chối rõ ràng thay vì xếp hàng mà không ai xử lý.
+          throw new ApiError({
+            code: 'FG-VAL-001',
+            detail: `Báo cáo có ${result.row_count} dòng, vượt giới hạn ${getEnv().EXPORT_ROW_LIMIT} dòng. Hãy thu hẹp kỳ báo cáo hoặc thêm bộ lọc rồi xuất lại.`,
+            errors: { to: 'Kỳ báo cáo quá rộng' },
+          });
         }
 
         const wb = new ExcelJS.stream.xlsx.WorkbookWriter({ filename: 'export.xlsx', stream: reply.raw, useSharedStrings: true });

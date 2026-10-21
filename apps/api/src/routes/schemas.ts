@@ -25,10 +25,8 @@ import {
   companyUpsertBody,
   debtListQuery,
   debtLinkBody,
-  debtVoucherUpsertBody,
   bankDebtImportBody,
   bankDebtRepayBody,
-  bankDebtUpsertBody,
   delegationBody,
   documentCreateBody,
   documentDeleteBody,
@@ -64,6 +62,9 @@ import {
   dashboardQuery,
 } from '@fingate/shared';
 import { toJsonSchema } from '@fingate/shared';
+// [v2 — đối tác] hợp đồng dùng chung + hợp đồng riêng của API đối tác (domain/partner/contracts.ts)
+import { partnerCopyBody, partnerCreateBody, partnerDuplicateCheckBody, partnerUpdateBody } from '@fingate/shared';
+import { partnerDirectoryQuery, partnerSettleBody, partnerTabQuery } from '../domain/partner/contracts.ts';
 
 const j = toJsonSchema;
 
@@ -112,12 +113,10 @@ export const delegationBodySchema = j(delegationBody);
 export const bankAccountUpsertBodySchema = j(bankAccountUpsertBody);
 export const bankAccountUpdateBodySchema = j(bankAccountUpdateBody);
 export const statementImportBodySchema = j(statementImportBody);
-export const bankDebtUpsertBodySchema = j(bankDebtUpsertBody);
 export const bankDebtImportBodySchema = j(bankDebtImportBody);
 export const bankDebtRepayBodySchema = j(bankDebtRepayBody);
 export const rolloverListQuerySchema = j(rolloverListQuery);
 export const rolloverResultBodySchema = j(rolloverResultBody);
-export const debtVoucherUpsertBodySchema = j(debtVoucherUpsertBody);
 export const debtLinkBodySchema = j(debtLinkBody);
 export const debtListQuerySchema = j(debtListQuery);
 export const internalTransferBodySchema = j(internalTransferBody);
@@ -133,3 +132,12 @@ export const exportRequestBodySchema = j(exportRequestBody);
 export const cashflowHistoryQuerySchema = j(cashflowHistoryQuery);
 export const notificationListQuerySchema = j(notificationListQuery);
 export const searchQuerySchema = j(searchQuery);
+
+// đối tác (v2 §5)
+export const partnerCreateBodySchema = j(partnerCreateBody);
+export const partnerUpdateBodySchema = j(partnerUpdateBody);
+export const partnerCopyBodySchema = j(partnerCopyBody);
+export const partnerDirectoryQuerySchema = j(partnerDirectoryQuery);
+export const partnerTabQuerySchema = j(partnerTabQuery);
+export const partnerSettleBodySchema = j(partnerSettleBody);
+export const partnerDuplicateCheckBodySchema = j(partnerDuplicateCheckBody);

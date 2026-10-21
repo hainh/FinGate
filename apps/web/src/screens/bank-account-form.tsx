@@ -126,7 +126,10 @@ export function BankAccountFormScreen(): ReactNode {
 
   return (
     <>
-      <FgPageHeader title={isEdit ? 'Sửa tài khoản tiền' : 'Thêm tài khoản tiền'} meta="Tài khoản Tập đoàn hoặc tài khoản thuộc công ty — dùng làm tài khoản nguồn (phiếu chi) hoặc tài khoản đích (phiếu thu)" />
+      <FgPageHeader
+        title={isEdit ? 'Sửa tài khoản tiền' : 'Thêm tài khoản tiền'}
+        meta="Tài khoản Tập đoàn hoặc tài khoản thuộc công ty — dùng làm tài khoản nguồn (phiếu chi) hoặc tài khoản đích (phiếu thu). Số dư lấy từ sổ cái, không nhập tay."
+      />
       <div style={{ maxWidth: 720 }}>
         <FgCard>
           <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))' }}>
@@ -172,10 +175,17 @@ export function BankAccountFormScreen(): ReactNode {
                 style={{ width: '100%' }}
               />
             </FgField>
-            <FgField label="Ngưỡng tối thiểu" help="Dưới ngưỡng sẽ cảnh báo trên danh sách/số dư">
+            <FgField label="Ngưỡng tối thiểu" help="Số dư sổ cái (hoặc dự kiến) dưới ngưỡng sẽ được cảnh báo">
               <FgMoneyInput value={minBalance} onChange={setMinBalance} ariaLabel="Ngưỡng tối thiểu" />
             </FgField>
-            <FgField label="Trạng thái" help={isEdit ? 'Khoá/đóng tài khoản sẽ chặn nếu còn hồ sơ đang tham chiếu.' : undefined}>
+            <FgField
+              label="Trạng thái"
+              help={
+                isEdit
+                  ? 'Phong toả / đóng: tài khoản không chọn được cho phiếu mới. Đóng sẽ chặn nếu còn hồ sơ đang tham chiếu.'
+                  : 'Phong toả: tài khoản không chọn được cho phiếu mới (không có số tiền "bị phong toả" nhập tay).'
+              }
+            >
               <FgSelect
                 options={[
                   { value: 'active', label: 'Đang hoạt động' },

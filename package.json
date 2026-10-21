@@ -20,6 +20,7 @@
     "typecheck": "pnpm -r typecheck",
     "e2e": "playwright test",
     "db:migrate": "node db/migrate.js",
+    "db:migrate:v2:dry-run": "node db/migrations/0004-v2-data.js --dry-run",
     "db:indexes": "node db/apply-indexes.js",
     "db:seed": "node db/seed.js",
     "db:reset": "node db/reset.js",

@@ -7,11 +7,12 @@
  */
 
 import { hashPassword } from '../lib/password.ts';
-import { ACCOUNT_CODE_BY_PARTY, DEFAULT_AMOUNT_LIMIT_MINOR } from '@fingate/shared';
+import { ACCOUNT_CODE_BY_PARTY, DEFAULT_AMOUNT_LIMIT_MINOR, TAG_COLOR_DEFAULT, normalizeNameKey } from '@fingate/shared';
 import type { FastifyBaseLogger } from 'fastify';
 import { Models } from './models.ts';
 import { resolveMatrix } from '../domain/workflow/matrix.ts';
-import { nextDocumentCode, nextSequentialCode } from '../domain/numbering/index.ts';
+import { nextDocumentCode, nextPartnerCode, nextSequentialCode } from '../domain/numbering/index.ts';
+import { ensureAutomationRules } from '../domain/automation/engine.ts';
 import { rebuildLedgerAndBalances } from '../domain/rebuild/balances.ts';
 
 const DAY = 86_400_000;
@@ -26,7 +27,9 @@ interface SeedPlan {
   categories: { name: string; group: string; kind: string; required: string[]; order: number }[];
   bank_debts: { company: string; bank: string; branch: string; amount: number; dueInDays: number; rate: string }[];
   debts: { company: string; party_type: 'customer' | 'supplier' | 'employee'; code: string; party: string; side: 'debit' | 'credit'; value: number; dueInDays: number; bank?: string }[];
-  recurring: { company: string; title: string; amount: number; cadence: string; day: number }[];
+  recurring: { company: string; title: string; payee: string; amount: number; cadence: string; day: number }[];
+  /** danh bạ tag theo công ty (v2 §6.2) */
+  tags: { company: string; name: string; color: string }[];
   /** hồ sơ mẫu phủ các trạng thái để UI có đủ 8 trạng thái (DoD §23) */
   docs: { company: string; kind: string; title: string; purpose: string; payee: string; amountTy: number; status: string; plannedOffset: number; category: string }[];
 }
@@ -98,10 +101,19 @@ const PLAN: SeedPlan = {
     { company: 'HH', party_type: 'supplier', code: 'NCC-020', party: 'Công ty Vệ sinh Công nghiệp', side: 'credit', value: 0.45, dueInDays: -41 },
   ],
   recurring: [
-    { company: 'MP', title: 'Lương bộ phận thi công', amount: 1.4, cadence: 'monthly', day: 5 },
-    { company: 'MP', title: 'Thuê văn phòng tầng 3', amount: 0.12, cadence: 'monthly', day: 10 },
-    { company: 'AP', title: 'Trả lãi vay MB', amount: 0.26, cadence: 'quarterly', day: 20 },
-    { company: 'HH', title: 'Bảo hiểm trách nhiệm dân sự', amount: 0.08, cadence: 'annual', day: 15 },
+    // payee rỗng = chưa xác định người nhận (lương) → đối tác "Chưa xác định"
+    { company: 'MP', title: 'Lương bộ phận thi công', payee: '', amount: 1.4, cadence: 'monthly', day: 5 },
+    { company: 'MP', title: 'Thuê văn phòng tầng 3', payee: 'Công ty CP Dịch vụ Văn phòng Đông Hải', amount: 0.12, cadence: 'monthly', day: 10 },
+    { company: 'AP', title: 'Trả lãi vay MB', payee: 'MB Bank – Chi nhánh Đông Sài Gòn', amount: 0.26, cadence: 'quarterly', day: 20 },
+    { company: 'HH', title: 'Bảo hiểm trách nhiệm dân sự', payee: 'Tổng Công ty Bảo hiểm Hàng Đầu', amount: 0.08, cadence: 'annual', day: 15 },
+  ],
+  tags: [
+    { company: 'MP', name: 'Dự án', color: '#2563eb' },
+    { company: 'MP', name: 'Gấp', color: '#dc2626' },
+    { company: 'MP', name: 'Thi công', color: '#16a34a' },
+    { company: 'AP', name: 'Quảng cáo', color: '#9333ea' },
+    { company: 'AP', name: 'Kinh doanh', color: '#ea580c' },
+    { company: 'HH', name: 'Vận hành', color: '#0891b2' },
   ],
   docs: [
     { company: 'MP', kind: 'spend', title: 'Thanh toán NCC Thành Trung đợt 2', purpose: 'Thanh toán giai đoạn 2 hợp đồng cung cấp vật liệu theo biên bản nghiệm thu 24/2026', payee: 'Công ty VLXD Thành Trung', amountTy: 2.5, status: 'pending.gd', plannedOffset: 1, category: 'Mua hàng / nguyên vật liệu' },
@@ -110,11 +122,11 @@ const PLAN: SeedPlan = {
     { company: 'HH', kind: 'spend', title: 'Điện nước tháng 8', purpose: 'Thanh toán hóa đơn điện nước tòa nhà VP', payee: 'EVN TP.HCM', amountTy: 0.042, status: 'pending.ktt', plannedOffset: 3, category: 'Điện nước' },
     { company: 'MP', kind: 'spend', title: 'Mua thiết bị văn phòng', purpose: 'Mua 6 máy tính cho phòng kỹ thuật theo báo giá 03/2026', payee: 'Công ty CP Tin học Hoa Sua', amountTy: 0.18, status: 'draft', plannedOffset: 7, category: 'Máy móc thiết bị' },
     { company: 'AP', kind: 'spend', title: 'Thanh toán hợp đồng quảng cáo', purpose: 'Giải ngân đợt 1 gói truyền thông ra mắt sản phẩm mới', payee: 'Công ty Media Bright', amountTy: 6.2, status: 'pending.chairman', plannedOffset: 5, category: 'Chi phí quản lý' },
-    { company: 'MP', kind: 'spend', title: 'Trả gốc vay BIDV HĐTD/2024/MP-01', purpose: 'Trả nợ gốc theo kỳ của hợp đồng tín dụng', payee: 'BIDV Chi nhánh TP.HCM', amountTy: 5, status: 'approved', plannedOffset: 0, category: 'Trả gốc vay' },
-    { company: 'AP', kind: 'spend', title: 'Phí thường niên tài khoản', purpose: 'Phí dịch vụ tài khoản doanh số', payee: 'MB Bank', amountTy: 0.002, status: 'paid', plannedOffset: -3, category: 'Phí ngân hàng' },
+    { company: 'MP', kind: 'spend', title: 'Trả gốc vay BIDV HĐTD/2024/MP-01', purpose: 'Trả nợ gốc theo kỳ của hợp đồng tín dụng', payee: 'BIDV – Chi nhánh TP.HCM', amountTy: 5, status: 'approved', plannedOffset: 0, category: 'Trả gốc vay' },
+    { company: 'AP', kind: 'spend', title: 'Phí thường niên tài khoản', purpose: 'Phí dịch vụ tài khoản doanh số', payee: 'MB Bank – Chi nhánh Đông Sài Gòn', amountTy: 0.002, status: 'paid', plannedOffset: -3, category: 'Phí ngân hàng' },
     { company: 'MP', kind: 'income', title: 'Thu tiền dự án Nhà Xanh đợt 3', purpose: 'Nghiệm thu hoàn thiện tầng 5-8 theo phụ lục hợp đồng 03', payee: 'Công ty CP Đầu tư Nhà Xanh', amountTy: 3.5, status: 'pending.ktt', plannedOffset: 2, category: 'Thu dịch vụ' },
     { company: 'AP', kind: 'income', title: 'Thu bán hàng tháng 8', purpose: 'Đối chiếu công nợ phải thu siêu thị Miền Đông', payee: 'Siêu thị Miền Đông', amountTy: 1.1, status: 'paid', plannedOffset: -1, category: 'Thu bán hàng' },
-    { company: 'MP', kind: 'rollover', title: 'Phương án đảo hạn BIDV 20 tỷ', purpose: 'Đảo hạn toàn bộ dư nợ HĐTD/2024/MP-01 đến hạn hôm nay', payee: 'BIDV Chi nhánh TP.HCM', amountTy: 20, status: 'pending.gd', plannedOffset: 0, category: 'Trả gốc vay' },
+    { company: 'MP', kind: 'rollover', title: 'Phương án đảo hạn BIDV 20 tỷ', purpose: 'Đảo hạn toàn bộ dư nợ HĐTD/2024/MP-01 đến hạn hôm nay', payee: 'BIDV – Chi nhánh TP.HCM', amountTy: 20, status: 'pending.gd', plannedOffset: 0, category: 'Trả gốc vay' },
     { company: 'AP', kind: 'internal', title: 'Chuyển vốn điều hành AP → MP', purpose: 'Tạm ứng cho công ty mẹ thanh toán lô vật liệu', payee: 'Nội bộ tập đoàn', amountTy: 5, status: 'approved', plannedOffset: 1, category: '' },
     { company: 'HH', kind: 'spend', title: 'Sửa chữa máy photocopy', purpose: 'Hồ sơ đã gửi nhưng thiếu hóa đơn nhà cung cấp', payee: 'Công ty TNHH TM DV Tân Đại Thành', amountTy: 0.014, status: 'changes_requested', plannedOffset: 4, category: 'Chi phí quản lý' },
     { company: 'MP', kind: 'spend', title: 'Đặt cọc thuê kho', purpose: 'Bị từ chối do vượt kế hoạch quý không có trong ngân sách', payee: 'Công ty CP Kho vận Sài Gòn', amountTy: 0.9, status: 'rejected', plannedOffset: -6, category: 'Thuê văn phòng' },
@@ -189,7 +201,8 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
   stats.bank_accounts = PLAN.accounts.length;
 
   /* users + assignments — mật khẩu demo chung, cố định để dev/E2E lặp lại được */
-  const demoPassword = await hashPassword('fingate-demo-2026');
+  // mật khẩu test chung của tài khoản demo (AGENTS.md: các tài khoản test đều dùng 123qweasdzxc)
+  const demoPassword = await hashPassword('123qweasdzxc');
   const userIds = new Map<string, string>();
   /** email→{role,company} đã lưu lúc tạo: tra trực tiếp, không suy từ chuỗi (địa chỉ có dấu) */
   const byRole = new Map<string, string[]>();
@@ -308,6 +321,70 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
   }
   stats.settings = settings.length;
 
+  /* đối tác (v2 §5) & tag (v2 §6.2) — danh bạ theo công ty; tạo theo nhu cầu, khoá = loại + tên chuẩn hoá + STK */
+  const partnerIdByKey = new Map<string, string>();
+  const partnerOf = async (
+    company: string,
+    type: 'bank' | 'customer' | 'supplier',
+    name: string,
+    extra: { bank_name?: string | null; account_number?: string | null; note?: string | null } = {},
+  ): Promise<string> => {
+    const nk = normalizeNameKey(name);
+    const key = `${company}|${type}|${nk}|${extra.account_number ?? ''}`;
+    const hit = partnerIdByKey.get(key);
+    if (hit) return hit;
+    const now = new Date();
+    const doc = await Models.Partner.create({
+      company_id: companyIds.get(company) as string,
+      code: await nextPartnerCode(now),
+      type,
+      status: 'active',
+      name,
+      name_key: nk,
+      bank_name: extra.bank_name ?? null,
+      account_number: extra.account_number ?? null,
+      note: extra.note ?? null,
+      history: [],
+      created_by: null,
+      created_at: now,
+      updated_at: now,
+    } as never);
+    partnerIdByKey.set(key, String(doc._id));
+    return String(doc._id);
+  };
+  const unassignedOf = (company: string): Promise<string> =>
+    partnerOf(company, 'supplier', 'Chưa xác định', { note: 'Đối tác tạm — phiếu chưa xác định đối tác (rà soát và gán đúng)' });
+  /** Đối tác của một phiếu theo tên người nhận (phiếu nội bộ / không tên → Chưa xác định). */
+  const docPartnerOf = (company: string, kind: string, payee: string): Promise<string> => {
+    if (kind === 'internal' || !payee || /Phòng Kế toán|Nội bộ/.test(payee)) return unassignedOf(company);
+    if (kind === 'rollover' || /BIDV|MB Bank|Vietcombank|VietinBank|Techcombank/i.test(payee)) return partnerOf(company, 'bank', payee);
+    return partnerOf(company, kind === 'income' ? 'customer' : 'supplier', payee);
+  };
+  const tagIds = new Map<string, string>();
+  for (const t of PLAN.tags) {
+    const doc = await Models.Tag.create({
+      company_id: companyIds.get(t.company) as string,
+      name: t.name,
+      name_key: normalizeNameKey(t.name),
+      color: t.color || TAG_COLOR_DEFAULT,
+      hidden: false,
+      created_by: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    } as never);
+    tagIds.set(`${t.company}|${t.name}`, String(doc._id));
+  }
+  stats.tags = tagIds.size;
+  /** Tag luân phiên theo công ty (demo): tag thứ n mod số tag của công ty. */
+  const tagOfIndex = (company: string, n: number): string | null => {
+    const mine = PLAN.tags.filter((t) => t.company === company);
+    if (!mine.length) return null;
+    const t = mine[n % mine.length] as { name: string };
+    return tagIds.get(`${company}|${t.name}`) ?? null;
+  };
+  const docIdByTitle = new Map<string, string>();
+  const debtIdByCode = new Map<string, string>();
+
   /* nợ ngân hàng */
   const bankDebtIds = new Map<string, string>();
   for (const l of PLAN.bank_debts) {
@@ -315,11 +392,14 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
     if (!company) continue;
     const due = iso(l.dueInDays);
     const code = await nextSequentialCode('NHD');
+    // v2: ngân hàng cho vay là ĐỐI TÁC loại Ngân hàng (tên = NH – chi nhánh), không còn nhập tự do
+    const partnerId = await partnerOf(l.company, 'bank', `${l.bank} – ${l.branch}`, { bank_name: l.bank });
     const doc = await Models.BankDebt.create({
       code,
       company_id: company,
       bank_name: l.bank,
       branch: l.branch,
+      partner_id: partnerId,
       principal_minor: moneyMinor(l.amount),
       outstanding_minor: moneyMinor(l.amount),
       amount: { minor: moneyMinor(l.amount), currency: 'VND', decimals: 0 },
@@ -328,6 +408,8 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
       maturity_date: due,
       next_due_date: due,
       status: 'active',
+      disbursed_at: new Date(Date.now() - 180 * DAY),
+      origin: { kind: 'manual', run_id: null, rule_code: null },
     } as never);
     bankDebtIds.set(`${l.company}|${l.bank}`, String(doc._id));
   }
@@ -338,7 +420,12 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
     const company = companyIds.get(d.company);
     if (!company) continue;
     const code = await nextSequentialCode('CN');
-    await Models.DebtVoucher.create({
+    // v2: KH/NCC theo ID đối tác; hướng theo bút toán (debit = phải thu, credit = phải trả); nhân viên (334) không có đối tác
+    const isEmployee = d.party_type === 'employee';
+    const partnerId = isEmployee ? null : await partnerOf(d.company, d.party_type as 'customer' | 'supplier', d.party);
+    const debtDoc = await Models.DebtVoucher.create({
+      partner_id: partnerId,
+      direction: isEmployee ? null : d.side === 'debit' ? 'receivable' : 'payable',
       code,
       company_id: company,
       party_type: d.party_type,
@@ -353,6 +440,7 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
       due_date: iso(d.dueInDays),
       priority: d.dueInDays < 0 ? 'high' : 'normal',
     } as never);
+    debtIdByCode.set(d.code, String(debtDoc._id));
   }
   stats.debt_vouchers = PLAN.debts.length;
 
@@ -360,11 +448,13 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
   for (const r of PLAN.recurring) {
     const company = companyIds.get(r.company);
     if (!company) continue;
+    const recPartner = r.payee ? await docPartnerOf(r.company, 'spend', r.payee) : await unassignedOf(r.company);
     await Models.RecurringRule.create({
       company_id: company,
       title: r.title,
       purpose: `${r.title} — khoản định kỳ`,
-      payee: { name: 'Theo hợp đồng dịch vụ' },
+      payee: { name: r.payee || 'Chưa xác định' },
+      partner_id: recPartner,
       amount_minor: moneyMinor(r.amount),
       currency: 'VND',
       source: { fund: 'bank', account_id: null },
@@ -408,6 +498,8 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
     const creator = pick('staff', d.company) ?? anyUser;
     const code = await nextDocumentCode(kind);
     const required = (PLAN.categories.find((c) => c.name === d.category)?.required as string[] | undefined) ?? [];
+    const partnerId = await docPartnerOf(d.company, d.kind, d.payee);
+    const tagId = tagOfIndex(d.company, docCount);
     const steps = matrix.steps.map((s, i) => ({
       order: s.order,
       role: s.role,
@@ -418,12 +510,16 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
       sla_deadline: new Date(Date.now() + (s.order * 12 - 6) * DAY),
     }));
 
-    await Models.Document.create({
+    const docDoc = await Models.Document.create({
       code,
       kind,
       company_id: company,
       department_id: deptIds.get(`${d.company}|Kế toán`) ?? null,
       created_by: creator,
+      /* v2: đối tác theo ID + tag + nguồn gốc thủ công (payee.* giữ tương thích v1) */
+      partner_id: partnerId,
+      tag_ids: tagId ? [tagId] : [],
+      origin: { kind: 'manual', run_id: null, rule_code: null },
       status: d.status,
       version: 1,
       title: d.title,
@@ -467,6 +563,7 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
             ]),
       ],
     } as never);
+    docIdByTitle.set(d.title, String(docDoc._id));
     docCount++;
   }
   stats.documents = docCount;
@@ -486,12 +583,17 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
     const creator = pick('staff', companyCode) ?? anyUser;
     const code = await nextDocumentCode(kind);
     const account = PLAN.accounts.find((a) => a.company === companyCode && !a.number.startsWith('CASH-'));
+    const extraPayee = parties[i % parties.length] ?? 'Đối tác';
+    const extraPartner = await docPartnerOf(companyCode, kind, extraPayee);
     await Models.Document.create({
       code,
       kind,
       company_id: company,
       department_id: deptIds.get(`${companyCode}|Kế toán`) ?? null,
       created_by: creator ?? null,
+      partner_id: extraPartner,
+      tag_ids: tagOfIndex(companyCode, i) ? [tagOfIndex(companyCode, i) as string] : [],
+      origin: { kind: 'manual', run_id: null, rule_code: null },
       status,
       version: 1,
       title: `${kind === 'income' ? 'Thu' : 'Chi'} ${parties[i % parties.length] ?? 'đối tác'} · hồ sơ ${i + 1}`,
@@ -529,6 +631,131 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
     docCount++;
   }
   stats.documents = docCount;
+
+  /* liên kết cấn trừ mẫu (v2 §11.2): phiếu thu đã thực thi cấn trừ một phần công nợ KH-010 (cùng đối tác) */
+  const offsetDocId = docIdByTitle.get('Thu bán hàng tháng 8');
+  const offsetDebtId = debtIdByCode.get('KH-010');
+  const apCompany = companyIds.get('AP');
+  if (offsetDocId && offsetDebtId && apCompany) {
+    await Models.BusinessLink.create({
+      company_id: apCompany,
+      from_type: 'document',
+      from_id: offsetDocId,
+      to_type: 'debt_voucher',
+      to_id: offsetDebtId,
+      relation: 'offset',
+      amount_minor: moneyMinor(1.1),
+      split: null,
+      origin: 'manual',
+      run_id: null,
+      rule_code: null,
+      status: 'active',
+      note: 'Cấn trừ mẫu (dữ liệu demo)',
+      created_by: null,
+      created_at: new Date(),
+    } as never);
+    stats.business_links = 1;
+  }
+
+  /* quy tắc tự động mặc định (v2 §7.4) — seed đủ R1…R6; chỉ thêm quy tắc còn thiếu */
+  const automation = await ensureAutomationRules();
+  stats.automation_rules = automation.inserted.length;
+
+  /* v2 demo (§12 Dashboard/Dự báo): khoản vay CHỜ GIẢI NGÂN — một khoản có phiếu thu hẹn ngày (liên kết disbursement),
+     một khoản chưa có ngày; và một lượt R2 lỗi để panel "Quy trình tự động lỗi" có dữ liệu. */
+  const pendingRef = PLAN.bank_debts.find((l) => companyIds.get(l.company) && bankDebtIds.has(`${l.company}|${l.bank}`));
+  if (pendingRef) {
+    const company = companyIds.get(pendingRef.company) as string;
+    const creator = pick('staff', pendingRef.company) ?? anyUser;
+    const bankPartner = await partnerOf(pendingRef.company, 'bank', `${pendingRef.bank} – ${pendingRef.branch}`, { bank_name: pendingRef.bank });
+    const pendingLoan = (principalTy: number, maturityDays: number) => ({
+      company_id: company,
+      bank_name: pendingRef.bank,
+      branch: pendingRef.branch,
+      partner_id: bankPartner,
+      principal_minor: moneyMinor(principalTy),
+      outstanding_minor: moneyMinor(principalTy),
+      amount: { minor: moneyMinor(principalTy), currency: 'VND', decimals: 0 },
+      currency: 'VND',
+      interest_rate: pendingRef.rate,
+      maturity_date: iso(maturityDays),
+      next_due_date: iso(maturityDays),
+      status: 'pending_disbursement',
+      disbursed_at: null,
+      origin: { kind: 'manual', run_id: null, rule_code: null },
+    });
+
+    // (a) có phiếu thu giải ngân hẹn ngày
+    const datedLoan = await Models.BankDebt.create({ ...pendingLoan(2, 372), code: await nextSequentialCode('NHD') } as never);
+    const receipt = await Models.Document.create({
+      code: await nextDocumentCode('income'),
+      kind: 'income',
+      company_id: company,
+      created_by: creator,
+      partner_id: bankPartner,
+      tag_ids: [],
+      origin: { kind: 'manual', run_id: null, rule_code: null },
+      status: 'approved',
+      version: 1,
+      title: 'Giải ngân vay ngân hàng (dữ liệu demo)',
+      purpose: 'Giải ngân khoản vay chờ giải ngân',
+      amount: { minor: moneyMinor(2), currency: 'VND', decimals: 0 },
+      planned_date: `${iso(12)}T09:00`,
+      business_date: iso(12),
+      options: {
+        loan: { kind: 'borrow', mode: 'existing', lender_partner_id: bankPartner, receive_account_id: null, existing_loan_id: datedLoan._id, amount_minor: null, terms: null },
+      },
+      source: { fund: 'bank', account_id: null },
+      approval: { matrix_id: null, matrix_version: 1, matrix_label: 'Demo', steps: [] },
+      evidence: { required: [], present: [], missing: [] },
+      execution: null,
+      history: [],
+      submitted_at: new Date(),
+    } as never);
+    await Models.BusinessLink.create({
+      company_id: company,
+      from_type: 'document',
+      from_id: receipt._id,
+      to_type: 'bank_debt',
+      to_id: datedLoan._id,
+      relation: 'disbursement',
+      amount_minor: moneyMinor(2),
+      split: null,
+      origin: 'manual',
+      run_id: null,
+      rule_code: null,
+      status: 'active',
+      note: 'Giải ngân (dữ liệu demo)',
+      created_by: null,
+      created_at: new Date(),
+    } as never);
+
+    // (b) chưa có ngày giải ngân
+    await Models.BankDebt.create({ ...pendingLoan(1.5, 400), code: await nextSequentialCode('NHD') } as never);
+
+    // (c) một lượt R2 lỗi (bước tạo khoản vay không hoàn tất) — chạy lại được từ màn Quy trình tự động
+    const r2 = await Models.AutomationRule.findOne({ code: 'R2' }).select({ _id: 1 }).lean<{ _id: unknown } | null>();
+    if (r2) {
+      const error = 'Không tạo được khoản vay (dữ liệu demo)';
+      await Models.AutomationRun.create({
+        rule_id: r2._id,
+        rule_code: 'R2',
+        company_id: company,
+        source_type: 'document',
+        source_id: receipt._id,
+        event_id: null,
+        event_type: 'voucher.updated',
+        idem_key: `R2:${String(receipt._id)}:voucher.updated`,
+        status: 'failed',
+        steps: [{ name: 'create_loan', status: 'failed', output_type: null, output_id: null, error, at: new Date() }],
+        error,
+        attempts: 1,
+        created_at: new Date(),
+        updated_at: new Date(),
+      } as never);
+    }
+  }
+  stats.partners = partnerIdByKey.size;
 
   /* ledger + balances ban đầu để dashboard có số */
   await rebuildLedgerAndBalances();

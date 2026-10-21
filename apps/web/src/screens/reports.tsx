@@ -9,13 +9,18 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import { downloadFile } from '../app/api.ts';
 import { useReport, useReportPresets } from '../app/queries.ts';
-import { useAuth } from '../app/store.tsx';
+import { SCOPE_ALL, useAuth } from '../app/store.tsx';
 import { FgAlert, FgButton, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
-import { FgSkeletonTable, FgTable, renderCellByType } from '../components/uitk.tsx';
+import { FgEmptyState, FgSkeletonTable, FgTable, renderCellByType } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useToast } from '../components/pagekit.tsx';
+import { PartnerPicker } from '../components/partner-picker.tsx';
+import { TagFilter } from '../components/tag-input.tsx';
 import type { ReportResult } from '../app/types.ts';
+
+/** Preset cần đối tác để có nội dung (sổ chi tiết đối tác). */
+const PARTNER_LEDGER_PRESET = 'so-chi-tiet-doi-tac';
 
 export function ReportLibraryScreen(): ReactNode {
   const query = useReportPresets();
@@ -33,7 +38,8 @@ export function ReportLibraryScreen(): ReactNode {
                   <FgCard className="fg-kpi" style={{ height: '100%' }}>
                     <FgText style="h4">{p.label}</FgText>
                     <FgText style="caption" color="muted">
-                      {p.exportable && can('report:export') ? 'Excel · PDF' : 'Chỉ xem'}
+                      {p.exportable && can('report:export') ? 'Excel' : 'Chỉ xem'}
+                      {p.needs_partner ? ' · cần chọn đối tác' : ''}
                     </FgText>
                   </FgCard>
                 </Link>
@@ -46,14 +52,30 @@ export function ReportLibraryScreen(): ReactNode {
   );
 }
 
-/** runner chung cho MỌI preset. */
+/**
+ * runner chung cho MỌI preset. Bộ lọc: kỳ · đối tác · tag (v2 §12).
+ * Lọc đối tác / tag áp dụng cho báo cáo phiếu, công nợ, vay; ô chọn theo công ty đang chọn
+ * (tag và đối tác không dùng chung giữa công ty nên "Toàn tập đoàn" khoá tag).
+ */
 export function ReportRunnerScreen(): ReactNode {
   const { preset } = useParams<{ preset: string }>();
-  const { can } = useAuth();
+  const { can, scope } = useAuth();
   const { message } = useToast();
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
-  const query = useReport(preset, { from: from || undefined, to: to || undefined });
+  const [partnerId, setPartnerId] = useState<string | null>(null);
+  const [tagIds, setTagIds] = useState<string[]>([]);
+  const companyId = scope === SCOPE_ALL ? null : scope;
+  const waitingPartner = preset === PARTNER_LEDGER_PRESET && !partnerId;
+  const filtered = !!partnerId || tagIds.length > 0;
+  // File Excel áp dụng đúng bộ lọc (đối tác, tag, kỳ) đang chọn; sổ chi tiết đối tác cần chọn đối tác trước.
+  const exportable = can('report:export') && !waitingPartner;
+  const query = useReport(waitingPartner ? undefined : preset, {
+    from: from || undefined,
+    to: to || undefined,
+    partner_id: partnerId ?? undefined,
+    tag_ids: tagIds.length ? tagIds.join(',') : undefined,
+  });
 
   return (
     <>
@@ -63,17 +85,32 @@ export function ReportRunnerScreen(): ReactNode {
         actions={
           <FgButton
             variant="primary"
-            disabled={!can('report:export')}
+            disabled={!exportable}
             onClick={async () => {
               try {
-                await downloadFile('/exports', { preset, query: { from: from || undefined, to: to || undefined } }, `${preset}.xlsx`);
+                // Server (POST /exports) bắt buộc `kind` và `format`; lọc đối tác / tag gửi kèm để file khớp màn hình.
+                await downloadFile(
+                  '/exports',
+                  {
+                    kind: 'report',
+                    preset,
+                    format: 'xlsx',
+                    query: {
+                      from: from || undefined,
+                      to: to || undefined,
+                      partner_id: partnerId ?? undefined,
+                      tag_ids: tagIds.length ? tagIds.join(',') : undefined,
+                    },
+                  },
+                  `${preset}.xlsx`,
+                );
                 message.success('Đang tải Excel…');
               } catch {
                 message.error('Không xuất được — thử lại hoặc thu hẹp phạm vi');
               }
             }}
           >
-            ⤓ Xuất Excel{can('report:export') ? '' : ' (không có quyền)'}
+            ⤓ Xuất Excel{!can('report:export') ? ' (không có quyền)' : ''}
           </FgButton>
         }
       />
@@ -85,20 +122,59 @@ export function ReportRunnerScreen(): ReactNode {
           style={{ marginBottom: 'var(--fg-space-4)' }}
         />
       ) : null}
+      {can('report:export') && filtered ? (
+        <FgAlert
+          tone="neutral"
+          title="File Excel theo đúng bộ lọc đang chọn"
+          description="Đối tác và tag đang lọc được gửi kèm khi xuất."
+          style={{ marginBottom: 'var(--fg-space-4)' }}
+        />
+      ) : null}
 
-      <div className="fg-filterbar">
+      <div className="fg-filterbar" style={{ alignItems: 'flex-end' }}>
         <FgInputDate value={from} onChange={setFrom} label="Từ ngày" />
         <FgInputDate value={to} onChange={setTo} label="Đến ngày" />
-        {(from || to) && (
-          <FgButton size="small" variant="ghost" onClick={() => { setFrom(''); setTo(''); }}>
-            Xóa lọc kỳ
+        <div style={{ minWidth: 260 }}>
+          <PartnerPicker
+            value={partnerId}
+            onChange={(id) => setPartnerId(id)}
+            allowedTypes={['bank', 'customer', 'supplier']}
+            companyId={companyId}
+            label={preset === PARTNER_LEDGER_PRESET ? 'Đối tác (bắt buộc)' : 'Đối tác'}
+            placeholder="Lọc theo đối tác"
+          />
+        </div>
+        <div style={{ minWidth: 220 }}>
+          <FgText style="caption" color="muted">Tag</FgText>
+          <TagFilter value={tagIds} onChange={setTagIds} companyId={companyId} />
+        </div>
+        {from || to || partnerId || tagIds.length ? (
+          <FgButton
+            size="small"
+            variant="ghost"
+            onClick={() => {
+              setFrom('');
+              setTo('');
+              setPartnerId(null);
+              setTagIds([]);
+            }}
+          >
+            Xóa lọc
           </FgButton>
-        )}
+        ) : null}
       </div>
 
-      <FgQuery query={query} skeleton={<FgSkeletonTable rows={10} cols={6} />}>
-        {(r) => <ReportView r={r} />}
-      </FgQuery>
+      {waitingPartner ? (
+        <FgEmptyState
+          glyph="⚭"
+          title="Chọn đối tác để xem sổ chi tiết"
+          description="Sổ chi tiết đối tác liệt kê công nợ, khoản vay và phiếu thu/chi của một đối tác, kèm dư luỹ kế."
+        />
+      ) : (
+        <FgQuery query={query} skeleton={<FgSkeletonTable rows={10} cols={6} />}>
+          {(r) => <ReportView r={r} />}
+        </FgQuery>
+      )}
     </>
   );
 }

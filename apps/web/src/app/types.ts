@@ -5,6 +5,16 @@
  * Khi backend đổi: `pnpm api:types` sinh openapi-types; file này giữ các kiểu UI cần.
  */
 
+import type {
+  AutomationRunView,
+  DocLink,
+  DocLoanView,
+  DocOrigin,
+  DocTagRef,
+  DocTransferView,
+} from './v2/documents.ts';
+import type { PartnerRef } from '@fingate/shared';
+
 export interface MoneyWire {
   minor: string;
   currency: string;
@@ -128,7 +138,8 @@ export interface DashboardOverview {
     maturity_3d: MoneyWire;
     maturity_7d: MoneyWire;
     maturity_30d: MoneyWire;
-    by_bank: { bank_name: string; outstanding: MoneyWire; share_percent: number }[];
+    /** v2: dư nợ theo ngân hàng — gộp theo ID đối tác (`bank_name` là tên đối tác). */
+    by_bank: { partner_id?: string | null; bank_name: string; outstanding: MoneyWire; share_percent: number }[];
   };
   exceptions: ExceptionItem[];
   awaiting_me_rows: AwaitingRow[];
@@ -136,6 +147,52 @@ export interface DashboardOverview {
   receivable_overdue?: MoneyWire | null;
   payable_due?: MoneyWire | null;
   counts: Record<string, number>;
+  /** v2 (§12): top đối tác phải thu / phải trả. */
+  partners?: DashboardPartnersWire | null;
+  /** v2: khoản vay "Chờ giải ngân" (không tính vào dư nợ). */
+  loans_pending?: DashboardLoansPendingWire | null;
+  /** v2: lượt quy trình tự động đang lỗi. */
+  automation?: DashboardAutomationWire | null;
+}
+
+/** Một dòng công nợ theo đối tác: còn lại, phần quá hạn, số ngày quá hạn lâu nhất. */
+export interface PartnerExposureWire {
+  partner_id: string | null;
+  partner_name: string;
+  partner_type: 'bank' | 'customer' | 'supplier' | null;
+  direction: 'receivable' | 'payable';
+  count: number;
+  remaining: MoneyWire;
+  overdue: MoneyWire;
+  max_overdue_days: number;
+}
+
+export interface DashboardPartnersWire {
+  top_receivable: PartnerExposureWire[];
+  top_payable: PartnerExposureWire[];
+  receivable_total: MoneyWire;
+  payable_total: MoneyWire;
+}
+
+export interface DashboardLoansPendingWire {
+  count: number;
+  total: MoneyWire;
+  items: { id: string; code: string; company_id: string; partner_name: string; principal: MoneyWire; created_at: string | null; href: string }[];
+}
+
+export interface DashboardAutomationWire {
+  failed_count: number;
+  items: {
+    id: string;
+    rule_code: string;
+    rule_name: string;
+    company_name: string;
+    source_id: string;
+    source_code: string | null;
+    error: string | null;
+    updated_at: string | null;
+    href: string | null;
+  }[];
 }
 
 /* ---------------- hàng chờ / danh sách hồ sơ ---------------- */
@@ -159,6 +216,10 @@ export interface QueueRow {
   fast_tracked_by: string | null;
   category_name: string | null;
   payee_name: string;
+  /** [v2] đối tác theo ID + tên hiện tại; tag gọn (cột Đối tác / Tag). */
+  partner_id?: string | null;
+  partner_name?: string | null;
+  tags?: DocTagRef[];
   amount: MoneyWire;
   compact: string;
   planned_date: string;
@@ -240,6 +301,21 @@ export interface DocumentDetail {
   category_id: string | null;
   category_name?: string | null;
   payee: { name: string; tax_code: string | null; is_internal: boolean; bank_name?: string | null; bank_account?: string | null };
+  /** [v2] đối tác theo ID (nạp sống từ danh bạ) — KHÔNG lưu bản sao trên phiếu. */
+  partner_id?: string | null;
+  partner?: PartnerRef | null;
+  tag_ids?: string[];
+  tags?: DocTagRef[];
+  /** [v2] tuỳ chọn vay: `borrow` (phiếu thu đi vay) hoặc `fund` (phiếu chi vay để chi). */
+  options?: { loan: DocLoanView | null } | null;
+  /** [v2] chuyển nội bộ theo ID (đích nhận tiền). */
+  transfer_target?: DocTransferView | null;
+  /** [v2] nguồn gốc: thủ công / tự động (quy tắc + lượt chạy). */
+  origin?: DocOrigin;
+  /** [v2] liên kết hai chiều (đã gỡ vẫn có, `status: removed`). */
+  links?: DocLink[];
+  /** [v2] lượt quy trình tự động của phiếu (mới nhất trước, tối đa 20). */
+  automation_runs?: AutomationRunView[];
   amount: MoneyWire;
   fx: { rate: string | null; at: string | null } | null;
   source: {
@@ -255,12 +331,13 @@ export interface DocumentDetail {
   priority: string;
   contract: { code: string | null; value: MoneyWire | null; signed_at: string | null };
   loan_id: string | null;
-  create_bank_debt?: boolean;
   budget: { budget_id: string | null; line_id: string | null; in_plan: boolean };
   target: { company_id: string | null; company_name?: string; account_id: string | null } | null;
   rollover: {
     need_amount?: MoneyWire | null;
     plan?: string | null;
+    /** Ngày đáo hạn mới đề xuất (YYYY-MM-DD). */
+    new_maturity_date?: string | null;
     fee_estimate: MoneyWire | null;
     new_rate: string | null;
     collateral: string | null;
@@ -268,6 +345,8 @@ export interface DocumentDetail {
     result?: {
       done_at: string | null;
       new_contract_code: string | null;
+      /** Ngày đáo hạn mới sau khi ngân hàng ký HĐ mới. */
+      new_maturity_date?: string | null;
       new_limit: MoneyWire | null;
       new_rate: string | null;
       actual_fee: MoneyWire | null;
@@ -304,6 +383,10 @@ export interface DocumentDetail {
     over_limit: boolean;
     step_order: number | null;
     reason?: string | null;
+    /** [v2] sửa tag của phiếu (xem + doc:create / tag:create). */
+    tag?: boolean;
+    /** [v2] gán / gỡ liên kết thủ công (link:manage). */
+    link?: boolean;
   };
 }
 
@@ -351,6 +434,8 @@ export interface ReportPresetMeta {
   label: string;
   href: string;
   exportable: boolean;
+  /** v2: cần chọn đối tác trước (sổ chi tiết đối tác). */
+  needs_partner?: boolean;
 }
 
 export interface MaturityRowWire {
@@ -437,11 +522,17 @@ export interface BankAccountRow {
   kind: string;
   currency: string;
   status: string;
+  /** Số dư thực tế = Σ sổ cái đến hôm nay (v2 §4.2). */
   balance: MoneyWire | null;
-  available: MoneyWire | null;
-  blocked: MoneyWire | null;
+  /** Dự kiến = thực tế + phiếu đã duyệt chờ thực thi (30 ngày). */
+  projected?: MoneyWire | null;
+  planned_in?: MoneyWire | null;
+  planned_out?: MoneyWire | null;
   min_balance: MoneyWire;
+  /** Số dư thực tế dưới ngưỡng tối thiểu. */
   breach: boolean;
+  /** Số dư dự kiến dưới ngưỡng tối thiểu. */
+  breach_projected?: boolean;
   stale: boolean;
   balance_date: string | null;
   updated_at?: string | null;
@@ -465,20 +556,6 @@ export interface BankAccountDetail {
   status: string;
   note: string | null;
   updated_at: string | null;
-}
-
-/** GET /bank-accounts/payee-options — gợi ý "Đơn vị nhận tiền" (toàn tập đoàn). */
-export interface PayeeAccountOption {
-  _id: string;
-  value: string;
-  label: string;
-  company_id: string | null;
-  company_code: string;
-  company_name: string;
-  is_group: boolean;
-  kind: string;
-  bank_name: string;
-  account_number: string;
 }
 
 /** GET /bank-accounts/:id/transactions — một dòng lịch sử giao dịch. */
@@ -516,139 +593,16 @@ export interface BankAccountTransactions {
   items: BankTransactionRow[];
 }
 
-export interface BankDebtRow {
-  _id: string;
-  company_id: string;
-  company_name: string;
-  code: string;
-  bank_name: string;
-  principal: MoneyWire;
-  credit_limit: MoneyWire;
-  outstanding: MoneyWire;
-  repaid: MoneyWire;
-  currency: string;
-  interest_rate: string;
-  term_months: number | null;
-  payment_frequency: 'monthly' | 'quarterly' | 'semiannual' | 'maturity';
-  repayment_method: 'interest_only' | 'equal_principal';
-  interest_to_maturity: MoneyWire;
-  maturity_date: string;
-  next_due_date: string | null;
-  days_to_due: number;
-  status: string;
-  attachment_count: number;
-  repayment_count: number;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-export interface LoanScheduleRow {
-  period: number;
-  due_date: string;
-  days: number;
-  principal: MoneyWire;
-  interest: MoneyWire;
-  fee: MoneyWire;
-  total: MoneyWire;
-  status: 'upcoming' | 'due' | 'overdue';
-}
-
-export interface LoanScheduleResult {
-  loan_id: string;
-  contract_code: string;
-  bank_name: string;
-  currency: string;
-  interest_rate: string;
-  term_months: number;
-  payment_frequency: 'monthly' | 'quarterly' | 'semiannual' | 'maturity';
-  repayment_method: 'interest_only' | 'equal_principal';
-  start_date: string;
-  maturity_date: string;
-  rows: LoanScheduleRow[];
-  totals: { principal: MoneyWire; interest: MoneyWire; fee: MoneyWire; total: MoneyWire };
-}
-
 export interface RolloverPreparation {
   horizon_days: number;
-  available: MoneyWire;
+  /** v2: số dư sổ cái (server không còn trả `available`). */
+  balance: MoneyWire;
   need: MoneyWire;
   maturity: MoneyWire;
   planned_spend: MoneyWire;
   gap: MoneyWire;
   breach: boolean;
   rows: { date: string; label: string; amount: MoneyWire; principal: MoneyWire; interest: MoneyWire; tone: string }[];
-}
-
-export interface BankDebtDetail extends BankDebtRow {
-  note: string | null;
-  attachments: OwnerAttachment[];
-  repayment_links: {
-    _id: string;
-    document_id: string;
-    document_code: string;
-    document_title: string;
-    document_status: string;
-    amount: MoneyWire;
-    linked_at: string | null;
-    note: string | null;
-  }[];
-  history: Record<string, unknown>[];
-}
-
-export type DebtPartyType = 'customer' | 'supplier' | 'employee';
-export type DebtSide = 'debit' | 'credit';
-
-export interface DebtVoucherRow {
-  _id: string;
-  company_id: string;
-  company_name: string;
-  code: string;
-  party_type: DebtPartyType;
-  party_name: string;
-  party_bank_name: string | null;
-  party_bank_account: string | null;
-  account_code: string;
-  side: DebtSide;
-  value: MoneyWire;
-  settled: MoneyWire;
-  remaining: MoneyWire;
-  currency: string;
-  contract_code: string | null;
-  due_date: string;
-  days_overdue: number;
-  aging_bucket: string;
-  priority: string;
-  status: 'open' | 'partial' | 'settled';
-  attachment_count: number;
-  link_count: number;
-  updated_at: string | null;
-}
-
-export interface DebtVoucherDetail extends DebtVoucherRow {
-  note: string | null;
-  attachments: OwnerAttachment[];
-  document_links: {
-    _id: string;
-    document_id: string;
-    document_code: string;
-    document_title: string;
-    document_kind: string;
-    document_status: string;
-    amount: MoneyWire;
-    linked_at: string | null;
-    note: string | null;
-  }[];
-  history: Record<string, unknown>[];
-}
-
-export interface LinkCandidate {
-  _id: string;
-  code: string;
-  title: string;
-  kind?: string;
-  status: string;
-  amount: MoneyWire;
-  already_linked: boolean;
 }
 
 export interface OwnerAttachment {
@@ -801,14 +755,18 @@ export interface NotificationRow {
   created_at: string;
 }
 
+/** GET /alerts — một sự kiện cảnh báo. Server trả `_id` và nhãn `type_label` (đã gồm loại v2 mới). */
 export interface AlertRow {
-  id: string;
+  _id: string;
   type: string;
+  type_label: string;
+  severity: number;
+  tone: string;
   text: string;
   amount?: MoneyWire | null;
-  tone: string;
+  company_id?: string | null;
   href?: string | null;
-  created_at?: string;
+  created_at?: string | null;
   acknowledged_at?: string | null;
 }
 
@@ -857,31 +815,3 @@ export interface BackupFile {
   created_at: string;
 }
 
-/* ---------------- danh bạ đối tác / khách hàng ---------------- */
-
-export interface CounterpartyBank {
-  _id: string;
-  bank_name: string;
-  account_number: string;
-  branch: string | null;
-  account_name: string | null;
-}
-
-export interface CounterpartyRow {
-  _id: string;
-  name: string;
-  banks: CounterpartyBank[];
-  note: string | null;
-  updated_at: string | null;
-}
-
-/** GET /counterparties/options — gợi ý select box "Khách hàng trả tiền"/"Đơn vị nhận tiền". */
-export interface CounterpartyOption {
-  _id: string;
-  counterparty_id: string;
-  name: string;
-  bank_name: string;
-  account_number: string;
-  value: string;
-  label: string;
-}

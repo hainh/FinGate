@@ -1,8 +1,9 @@
 /**
  * DOC-01 — Hồ sơ chi tiết (drawer desktop / trang mobile). Route /ho-so/{chi|thu|dao-han|noi-bo}/:id
  *
- * - Header: FgMoney full + FgStatusChip (bàn ai + chờ N ngày) + overdue chip.
- * - 5 tab: Tóm tắt (decision-pack) · Chứng từ · Lịch sử duyệt · Dòng tiền liên quan · Audit.
+ * - Header: FgMoney full + FgStatusChip (bàn ai + chờ N ngày) + overdue chip + badge "Tự động" (phiếu do quy tắc sinh).
+ * - Khối v2 (components/voucher-v2): quy trình tự động (lượt, đối tượng sinh ra, chạy lại), đối tác, tag, liên kết.
+ * - 6 tab: Tóm tắt (đối tác · tag · 7 câu hỏi) · Chứng từ · Liên kết · Lịch sử duyệt · Dòng tiền liên quan · Audit.
  * - Action bar CUỐI trang chứa số tiền trong nhãn nút; chỉ hiện khi `can.approve`… (server tính).
  * - 409 → modal "ai vừa duyệt lúc nào" (approve-modal). Thiếu chứng từ → FG-WF-003 alert.
  * - Keyboard-only: Tab tới nút; Alt+D duyệt · Alt+X từ chối · Ctrl+Enter gửi confirm (DS §10).
@@ -14,6 +15,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   EVIDENCE_LABEL,
   ACTION_LABEL,
+  UI,
   dateTimeLabel,
   deadlineLabel,
   formatMoney,
@@ -29,6 +31,7 @@ import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonParagraphs, FgSkeletonTable, FgTable, FgTabs } from '../components/uitk.tsx';
 import { AttachmentDeleteModal, AttachmentPreviewModal, AttachmentRow, AttachmentUploadModal, problemText } from '../components/attachments.tsx';
 import { FgApprovalTimeline, FgDecisionPack, OwnerLine, directionOf } from '../components/finance.tsx';
+import { AutomationPanel, LinksTab, LoanBanner, PartnerCard, TagsCard } from '../components/voucher-v2.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useToast } from '../components/pagekit.tsx';
 import { ApprovalConfirmModal, useTransitionRunner } from './approve-modal.tsx';
@@ -83,6 +86,7 @@ export function DocumentDetailScreen(): ReactNode {
         const canAct = d.can.approve || d.can.reject || d.can.request_changes || d.can.submit || d.can.pay || d.can.fast_track;
         const canMaintain = d.can.edit || d.can.delete;
         const showBar = canAct || canMaintain;
+        const activeLinks = (d.links ?? []).filter((l) => l.status === 'active').length;
         return (
           <>
             {back ? (
@@ -98,7 +102,15 @@ export function DocumentDetailScreen(): ReactNode {
 
             {d.override.fast_tracked ? (
               <div style={{ marginBottom: 'var(--fg-space-3)' }}>
-                <div className="fg-stripe-fast">⚡ Hồ sơ được duyệt trước (fast-track) — cấp dưới chưa duyệt đủ. Lý do: {d.override.reason ?? '—'}</div>
+                <div className="fg-stripe-fast">
+                  ⚡{' '}
+                  {(() => {
+                    // v2 §7.2: nhãn "Đã duyệt trước bởi <vai trò>" — lấy từ bước đã duyệt vượt cấp
+                    const by = (d.approval?.steps ?? []).filter((s) => s.state === 'done' && s.fast_tracked).map((s) => ROLES_LABEL[s.role] ?? s.role);
+                    return by.length ? `Đã duyệt trước bởi ${by.join(', ')}` : 'Hồ sơ được duyệt trước (vượt cấp)';
+                  })()}{' '}
+                  — cấp dưới chưa duyệt đủ. Lý do: {d.override.reason ?? '—'}
+                </div>
               </div>
             ) : null}
 
@@ -125,11 +137,16 @@ export function DocumentDetailScreen(): ReactNode {
               }
             />
 
-            {/* header hồ sơ: số tiền FULL + status + overdue chip */}
+            {/* header hồ sơ: số tiền FULL + status + overdue chip + nguồn gốc (thủ công / tự động) */}
             <FgCard style={{ marginBottom: 'var(--fg-space-4)' }}>
               <div style={{ display: 'flex', gap: 'var(--fg-space-5)', alignItems: 'center', flexWrap: 'wrap' }}>
                 <FgMoney value={amount} mode="full" emphasis style={{ fontSize: 'var(--fg-font-number-l-size)', lineHeight: 'var(--fg-font-number-l-line)' }} />
                 <FgStatusChip status={d.status} overdue={d.overdue} withOwner waitingDays={d.waiting_days} />
+                {d.origin?.kind === 'automation' ? (
+                  <span className="fg-chip" aria-label="Phiếu do quy trình tự động sinh ra">
+                    {UI.link.autoBy(d.origin.rule_code ?? 'tự động')}
+                  </span>
+                ) : null}
                 {d.priority === 'urgent' ? <span className="fg-chip" style={{ borderColor: 'var(--fg-status-danger-border)', color: 'var(--fg-status-danger-text)' }}>Khẩn</span> : null}
                 <span style={{ flex: 1 }} />
                 <FgText style="bodyS" color="muted">
@@ -137,6 +154,8 @@ export function DocumentDetailScreen(): ReactNode {
                 </FgText>
               </div>
             </FgCard>
+
+            <AutomationPanel doc={d} />
 
             {d.kind === 'rollover' ? <RolloverResultCard doc={d} onChanged={() => void query.refetch()} /> : null}
 
@@ -151,6 +170,11 @@ export function DocumentDetailScreen(): ReactNode {
                   key: 'chung-tu',
                   label: `Chứng từ (${d.attachments.length}/${d.evidence.required.length})`,
                   children: <EvidenceTab doc={d} onChanged={() => void query.refetch()} />,
+                },
+                {
+                  key: 'lien-ket',
+                  label: `Liên kết (${activeLinks})`,
+                  children: <LinksTab doc={d} />,
                 },
                 {
                   key: 'lich-su',
@@ -248,31 +272,42 @@ export function DocumentDetailScreen(): ReactNode {
 
 /* ---------------- tabs ---------------- */
 
+/** Chuyển tiền nội bộ: đích theo ID (`transfer_target`); phiếu cũ còn `target` (v1). Null nếu không có. */
+function transferInfo(doc: DocumentDetail): { name: string } | null {
+  if (!doc.transfer_target && !doc.target) return null;
+  return { name: doc.transfer_target?.company_name ?? doc.target?.company_name ?? 'công ty nhận' };
+}
+
 function SummaryTab({ doc }: { doc: DocumentDetail }): ReactNode {
   const pack = useDecisionPack(doc._id);
+  const transfer = transferInfo(doc);
+  const amountMoney = moneyFromWire(doc.amount)!;
   return (
-    <FgQuery query={pack} skeleton={<FgSkeletonTable rows={5} cols={3} />}>
-      {(p) => (
-        <>
-          {doc.kind === 'internal' && doc.target ? (
-            <FgAlert
-              tone="info"
-              title="Chuyển tiền nội bộ — KHÔNG tính vào chi phí / doanh thu"
-              description={`Đối ứng: ${doc.company_name} −${formatMoney(moneyFromWire(doc.amount)!, { mode: 'compact' })} → ${doc.target.company_name ?? 'công ty nhận'} +${formatMoney(moneyFromWire(doc.amount)!, { mode: 'compact' })}`}
-              style={{ marginBottom: 'var(--fg-space-4)' }}
-            />
-          ) : doc.kind === 'spend' && doc.payee.is_internal ? (
-            <FgAlert
-              tone="info"
-              title="Chuyển tiền nội bộ trong tập đoàn"
-              description={`Từ ${doc.company_name} → ${doc.target?.company_name ?? 'công ty nhận'}: ${formatMoney(moneyFromWire(doc.amount)!, { mode: 'full' })}. Khi phiếu chi được duyệt xong và thực thi, hệ thống tự động tạo phiếu thu tương ứng tại công ty nhận và tự duyệt — KHÔNG tính vào chi phí / doanh thu.`}
-              style={{ marginBottom: 'var(--fg-space-4)' }}
-            />
-          ) : null}
-          <FgDecisionPack pack={p} direction={directionOf(doc.kind)} />
-        </>
-      )}
-    </FgQuery>
+    <>
+      {doc.options?.loan ? <LoanBanner loan={doc.options.loan} style={{ marginBottom: 'var(--fg-space-4)' }} /> : null}
+      {doc.kind === 'internal' && transfer ? (
+        <FgAlert
+          tone="info"
+          title="Chuyển tiền nội bộ — KHÔNG tính vào chi phí / doanh thu"
+          description={`Đối ứng: ${doc.company_name} −${formatMoney(amountMoney, { mode: 'compact' })} → ${transfer.name} +${formatMoney(amountMoney, { mode: 'compact' })}`}
+          style={{ marginBottom: 'var(--fg-space-4)' }}
+        />
+      ) : doc.kind === 'spend' && transfer ? (
+        <FgAlert
+          tone="info"
+          title="Chuyển tiền nội bộ trong tập đoàn"
+          description={`Từ ${doc.company_name} → ${transfer.name}: ${formatMoney(amountMoney, { mode: 'full' })}. Khi phiếu chi được duyệt xong và thực thi, hệ thống tự động tạo phiếu thu tương ứng tại công ty nhận và tự duyệt — KHÔNG tính vào chi phí / doanh thu.`}
+          style={{ marginBottom: 'var(--fg-space-4)' }}
+        />
+      ) : null}
+      <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', marginBottom: 'var(--fg-space-4)' }}>
+        <PartnerCard doc={doc} />
+        <TagsCard doc={doc} />
+      </div>
+      <FgQuery query={pack} skeleton={<FgSkeletonTable rows={5} cols={3} />}>
+        {(p) => <FgDecisionPack pack={p} direction={directionOf(doc.kind)} />}
+      </FgQuery>
+    </>
   );
 }
 
@@ -352,10 +387,11 @@ function CashTab({ doc }: { doc: DocumentDetail }): ReactNode {
   const accounts = useBankAccounts();
   const acc = (accounts.data?.items ?? []).find((a) => a._id === (doc.source.account_id ?? ''));
   const amt = moneyFromWire(doc.amount)!;
-  // số dư khả dụng hiện tại của tài khoản nguồn/đích (từ snapshot tài khoản)
-  const available = moneyFromWire(acc?.available);
+  // số dư sổ cái hiện tại của tài khoản nguồn/đích (v2 bỏ "khả dụng" — dùng `balance`)
+  const available = moneyFromWire(acc?.balance);
   // sau giao dịch: server tính theo sổ cái (đã xử lý phiếu đã thực thi, không đếm trùng)
   const after = pack.data ? moneyFromWire(pack.data.q6_impact.balance_after) : null;
+  const transfer = transferInfo(doc);
   return (
     <FgCard>
       <FgText style="h4">Ảnh hưởng số dư</FgText>
@@ -365,7 +401,7 @@ function CashTab({ doc }: { doc: DocumentDetail }): ReactNode {
           <span>{acc?.label ?? (doc.source.fund === 'cash' ? 'Quỹ tiền mặt' : '—')}</span>
         </div>
         <div className="fg-stat-row">
-          <span className="fg-stat-label">Số dư khả dụng</span>
+          <span className="fg-stat-label">Số dư hiện có</span>
           <FgMoney value={available} mode="full" missingLabel="Chưa có số dư" />
         </div>
         <div className="fg-stat-row">
@@ -376,10 +412,10 @@ function CashTab({ doc }: { doc: DocumentDetail }): ReactNode {
             '—'
           )}
         </div>
-        {doc.target?.company_name && (doc.kind === 'internal' || (doc.kind === 'spend' && doc.payee.is_internal)) ? (
+        {transfer && (doc.kind === 'internal' || doc.kind === 'spend') ? (
           <div className="fg-stat-row">
             <span className="fg-stat-label">Công ty đối ứng</span>
-            <span>{doc.target.company_name}: +{formatMoney(amt, { mode: 'compact' })}</span>
+            <span>{transfer.name}: +{formatMoney(amt, { mode: 'compact' })}</span>
           </div>
         ) : null}
       </div>
@@ -409,10 +445,32 @@ function AuditTab({ doc }: { doc: DocumentDetail }): ReactNode {
 export { KIND_PATH };
 
 /**
+ * Tác động của việc xoá phiếu, hiển thị trong modal (server vẫn là nguồn thật, §8 & §14.3):
+ * phiếu đã thực thi ⇒ sổ cái không mất mà được ĐẢO; phiếu đối ứng / đối tượng tự động không tự xoá.
+ */
+function deleteImpactLines(doc: DocumentDetail): string[] {
+  const out: string[] = [];
+  if (doc.status === 'paid') {
+    out.push('Phiếu đã thực thi: sổ cái KHÔNG bị xoá — hệ thống thêm bút toán đảo cho từng bút toán của phiếu rồi dựng lại số dư tài khoản (sổ cái chỉ thêm, có vết).');
+  }
+  if (doc.transfer_target) {
+    out.push(`Chuyển nội bộ sang ${doc.transfer_target.company_name ?? 'công ty nhận'}: phiếu thu đối ứng ở công ty nhận (nếu đã sinh) KHÔNG tự xoá — cần xử lý riêng.`);
+  }
+  const generated = (doc.automation_runs ?? []).reduce((n, r) => n + (r.generated?.length ?? 0), 0);
+  if (generated) {
+    out.push(`Quy trình tự động đã sinh ${generated} đối tượng liên quan (phiếu / khoản vay / nợ): các đối tượng này KHÔNG tự xoá — cần xử lý riêng.`);
+  }
+  const activeLinks = (doc.links ?? []).filter((l) => l.status === 'active').length;
+  if (activeLinks) out.push(`${activeLinks} liên kết còn hiệu lực sẽ được gỡ (ghi lý do “Phiếu nguồn đã bị xoá”).`);
+  return out;
+}
+
+/**
  * Modal xoá cứng phiếu thu/chi (yêu cầu ADM-01). Bắt buộc lý do; khi server đòi
  * step-up (FG-AUTH-008) thì hiện ô mật khẩu/OTP và gửi lại kèm `verify`.
  */
 function DeleteDocumentModal({ doc, onClose, onDone }: { doc: DocumentDetail; onClose: () => void; onDone: () => void }): ReactNode {
+  const impact = deleteImpactLines(doc);
   const [reason, setReason] = useState('');
   const [needVerify, setNeedVerify] = useState(false);
   const [method, setMethod] = useState<'password' | 'otp'>('password');
@@ -471,6 +529,13 @@ function DeleteDocumentModal({ doc, onClose, onDone }: { doc: DocumentDetail; on
         title="Xoá vĩnh viễn — không thể khôi phục"
         description="Bản ghi phiếu bị xoá khỏi hệ thống; một dòng audit vẫn được lưu lại. Chủ tịch / Tổng Giám đốc xoá được ở bất kỳ trạng thái nào, không giới hạn phiếu còn nháp hay chưa ai duyệt. Phiếu đã bị từ chối thì Kế toán trưởng / Kế toán viên đều xoá được; các trạng thái khác chỉ người lập xoá được khi phiếu còn nháp, đang chờ Kế toán trưởng hoặc bị trả về bổ sung — và chưa qua cấp Kế toán trưởng trở lên ở vòng duyệt này."
       />
+      {impact.length ? (
+        <ul style={{ marginTop: 12, paddingLeft: 18, display: 'grid', gap: 6, fontSize: 13 }} aria-label="Tác động của việc xoá phiếu">
+          {impact.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      ) : null}
       <div style={{ marginTop: 16 }}>
         <FgField label="Lý do xoá (bắt buộc, vào audit)" error={reason && reason.trim().length < 5 ? 'Tối thiểu 5 ký tự' : null}>
           <FgInput autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder="VD: Nhập trùng, đã tạo phiếu thay thế" />
@@ -517,6 +582,8 @@ function RolloverResultCard({ doc, onChanged }: { doc: DocumentDetail; onChanged
   const { message } = useToast();
   const existing = doc.rollover?.result ?? null;
   const [doneAt, setDoneAt] = useState(existing?.done_at ?? '');
+  // Ngày đáo hạn mới: hạn thanh toán của khoản vay được cập nhật theo (v2 §10.3).
+  const [newMaturity, setNewMaturity] = useState(existing?.new_maturity_date ?? doc.rollover?.new_maturity_date ?? '');
   const [contract, setContract] = useState(existing?.new_contract_code ?? '');
   const [limit, setLimit] = useState<Money | null>(existing?.new_limit ? moneyFromWire(existing.new_limit) : null);
   const [rate, setRate] = useState(existing?.new_rate ?? '');
@@ -527,6 +594,10 @@ function RolloverResultCard({ doc, onChanged }: { doc: DocumentDetail; onChanged
   const submit = async (): Promise<void> => {
     if (!doneAt) {
       message.error('Nhập ngày thực hiện');
+      return;
+    }
+    if (!newMaturity) {
+      message.error('Nhập ngày đáo hạn mới');
       return;
     }
     if (!contract.trim()) {
@@ -544,6 +615,7 @@ function RolloverResultCard({ doc, onChanged }: { doc: DocumentDetail; onChanged
     try {
       await mutation.mutateAsync({
         done_at: doneAt,
+        new_maturity_date: newMaturity,
         new_contract_code: contract.trim(),
         new_limit: { amount_minor: limit.minor.toString(), currency: limit.currency },
         new_rate: rate.replace(',', '.'),
@@ -569,7 +641,8 @@ function RolloverResultCard({ doc, onChanged }: { doc: DocumentDetail; onChanged
         {existing && !canSubmit ? (
           <>
             <FgText style="bodyS">
-              ✓ Đã thực hiện {existing.done_at ?? '—'} · HĐ {existing.new_contract_code ?? '—'} · LS {existing.new_rate ?? '—'}%/năm
+              ✓ Đã thực hiện {existing.done_at ?? '—'} · đáo hạn mới {existing.new_maturity_date ?? '—'} · HĐ {existing.new_contract_code ?? '—'} · LS{' '}
+              {existing.new_rate ?? '—'}%/năm
             </FgText>
             {existing.new_limit ? (
               <FgText style="bodyS" color="muted">Hạn mức mới: {formatMoney(moneyFromWire(existing.new_limit) ?? 0n, { mode: 'full' })}</FgText>
@@ -582,6 +655,9 @@ function RolloverResultCard({ doc, onChanged }: { doc: DocumentDetail; onChanged
         <div style={{ display: 'grid', gap: 'var(--fg-space-3)', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}>
           <FgField label="Ngày thực hiện *">
             <FgInput value={doneAt} onChange={(e) => setDoneAt(e.target.value)} placeholder="YYYY-MM-DD" />
+          </FgField>
+          <FgField label="Ngày đáo hạn mới *" help="Hạn thanh toán mới của khoản vay (YYYY-MM-DD)">
+            <FgInput value={newMaturity} onChange={(e) => setNewMaturity(e.target.value)} placeholder="YYYY-MM-DD" />
           </FgField>
           <FgField label="Số hợp đồng mới *">
             <FgInput value={contract} onChange={(e) => setContract(e.target.value)} placeholder="HĐTD/2026/..." />

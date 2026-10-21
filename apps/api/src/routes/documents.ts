@@ -25,7 +25,6 @@ import {
   type StatusKey,
 } from '@fingate/shared';
 import { Models } from '../db/models.ts';
-import { scopedAggregate } from '../lib/mongo.ts';
 import { cas, alreadyProcessed } from '../db/cas.ts';
 import { defineRoute, requestCtx, requireActor, requireScope, validate } from '../lib/http.ts';
 import { ok } from '../lib/serialize.ts';
@@ -46,24 +45,52 @@ import {
   documentDeleteBody,
   documentListQuery,
   documentUpdateBody,
+  documentTagsBody,
+  documentLinkCreateBody,
+  linkRemoveBody,
   opinionBody,
   rolloverResultBody,
   transitionBody,
   attachmentPrepareBody,
   attachmentConfirmBody,
   attachmentRemoveBody,
+  toJsonSchema,
 } from '@fingate/shared';
 import { loadDoc, transition, assertStepUp } from '../domain/workflow/index.ts';
-import { detectInternalTransferTarget } from '../domain/workflow/auto-income.ts';
-import { ensureCounterpartyFromLabel } from '../domain/counterparty/index.ts';
+import { emitVoucherEvent, type VoucherEventSubject } from '../domain/events/index.ts';
 import { documentPermissions, approvedFromChiefAccountantUp, UNRESTRICTED_DELETE_ROLES } from '../domain/entitlement/index.ts';
 import { awaitingBadge, decisionPack, docHref, queryQueue } from '../domain/queries/index.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
 import { assertAccountAllowedForCompany, assertGroupAccountForCompany } from '../domain/accounts.ts';
 import { invalidateFor, rebuildEvidence } from '../domain/side-effects.ts';
-import { purgeLedgerForDocuments } from '../domain/ledger/index.ts';
 import { attachmentKey, detectMagic, sha256hex, storage } from '../storage/index.ts';
 import { newRequestId } from '../lib/http.ts';
+import { createLink, emitLoanSettledAfterPayment, removeLink } from '../domain/links/index.ts';
+import { activateLoanOnDisbursement, applyRolloverResultToLoan, assertLoanForRollover, assertRolloverResultForLoan } from '../domain/debt/loans.ts';
+import { releaseLoansOfSource } from '../domain/automation/actions/source.ts';
+import { assertDocumentLinkable, diffIds, manualLinkTargetType, parseIdList, type VoucherKind } from '../domain/vouchers/rules.ts';
+import {
+  mayChangeVoucherTags,
+  missingPaymentEvidence,
+  roundLocksEdit,
+  voucherAmountField,
+} from '../domain/vouchers/lifecycle.ts';
+import { reverseLedgerForDocument } from '../domain/vouchers/reversal.ts';
+import {
+  assertApprovalAmountEditable,
+  buildVoucherRefView,
+  planToLoanInput,
+  planToStoredLoan,
+  resolveLoanPlan,
+  resolveTransferTarget,
+  resolveVoucherPartner,
+  resolveVoucherTagIds,
+  softRemoveLinksOfDocument,
+  storedLoanToPlan,
+  storedTransferOf,
+  tagNamesOf,
+  type TransferTargetPlan,
+} from '../domain/vouchers/refs.ts';
 
 /* Nguồn/đích tiền chặn ở server theo công ty của phiếu — logic dùng chung với workflow
  * (cấp duyệt đổi tài khoản) ở `domain/accounts.ts` (§VIII). */
@@ -98,34 +125,14 @@ export function documentRoutes(app: FastifyInstance): void {
           from: q.from,
           to: q.to,
           q: q.q,
+          partnerId: q.partner_id ?? null,
+          tagIds: parseIdList(q.tag_ids),
           overdueOnly: q.overdue_only === 'true',
           missingEvidenceOnly: q.missing_evidence === 'true',
           sort: q.sort,
           limit: q.limit,
         });
         return ok(reply, { items, total, limit: q.limit }, { maxAge: 15 });
-      },
-    }),
-  );
-
-  /**
-   * CHI-02/THU-02 — gợi ý "Đơn vị nhận tiền / Khách hàng trả tiền": distinct `payee.name`
-   * của MỌI phiếu trong phạm vi để người dùng select lại thay vì gõ trùng.
-   */
-  app.route(
-    defineRoute({
-      method: 'GET',
-      url: '/documents/payees',
-      config: { perms: ['doc:read'] as Permission[], screen: 'CHI-02', summary: 'Tên người nhận/khách hàng đã dùng (payee.name distinct)' },
-      handler: async (req, reply) => {
-        const scope = requireScope(req);
-        const rows = await scopedAggregate<{ _id: string }>(Models.Document, scope, [
-          { $match: { 'payee.name': { $type: 'string', $ne: '' } } },
-          { $group: { _id: '$payee.name' } },
-          { $sort: { _id: 1 } },
-          { $limit: 500 },
-        ]);
-        return ok(reply, { items: rows.map((r) => r._id).filter((n) => Boolean(n) && n !== '—') }, { maxAge: 60 });
       },
     }),
   );
@@ -160,6 +167,8 @@ export function documentRoutes(app: FastifyInstance): void {
             kind: q.kind,
             companyId: q.company_id,
             q: q.q,
+            partnerId: q.partner_id ?? null,
+            tagIds: parseIdList(q.tag_ids),
             overdueOnly: q.overdue_only === 'true',
             sort: q.sort ?? '-waiting',
             limit: q.limit,
@@ -252,7 +261,8 @@ export function documentRoutes(app: FastifyInstance): void {
           throw new ApiError({ code: 'FG-RBAC-002' });
         }
         // Công ty nhận của chuyển nội bộ cũng phải nằm trong phạm vi (§7.5).
-        if (body.target?.company_id && scope.companyIds !== null && !scope.companyIds.includes(body.target.company_id)) {
+        const transferInput = body.transfer_target ?? body.target ?? null;
+        if (transferInput?.company_id && scope.companyIds !== null && !scope.companyIds.includes(String(transferInput.company_id))) {
           throw new ApiError({ code: 'FG-RBAC-002', detail: 'Công ty nhận không nằm trong phạm vi của bạn' });
         }
         await assertAccountAllowedForCompany(companyId, body.source.account_id);
@@ -260,22 +270,38 @@ export function documentRoutes(app: FastifyInstance): void {
 
         const kind = body.kind;
         const amountMinor = BigInt(body.amount.amount_minor);
-        // Phiếu CHI trả cho tài khoản của một công ty/tập đoàn khác → đánh dấu chuyển tiền
-        // nội bộ ngay khi lập (không chờ tới lúc thực thi); UI dùng để thông báo rõ ràng.
-        const internalTarget = kind === 'spend' ? await detectInternalTransferTarget(body.payee.name) : null;
-        const target = body.target
-          ? { company_id: body.target.company_id, account_id: body.target.account_id ?? null }
-          : internalTarget
-            ? { company_id: internalTarget.companyId, account_id: internalTarget.accountId }
-            : null;
-        const isInternal = Boolean(body.payee.is_internal) || Boolean(internalTarget);
-        // đồng bộ định danh đối tác: nhận diện payee.name dạng "Tên - Ngân hàng - STK"
-        // (bỏ qua tài khoản nội bộ của tập đoàn để không làm bẩn danh bạ).
-        const counterpartyId = isInternal
-          ? null
-          : body.payee.counterparty_id && String(body.payee.counterparty_id)
-            ? String(body.payee.counterparty_id)
-            : await ensureCounterpartyFromLabel(body.payee.name, actor.user_id);
+        // [v2] đối tác CHỌN THEO ID (không nhập tự do, không tự tạo từ chuỗi). Phiếu thu/chi bắt buộc.
+        const loanInput = body.options?.loan ?? null;
+        if (!body.partner_id && (kind === 'spend' || kind === 'income')) {
+          throw new ApiError({ code: 'FG-VAL-001', detail: 'Chọn đối tác', errors: { partner_id: 'Chọn đối tác (bắt buộc với phiếu thu/chi)' } });
+        }
+        const partner = body.partner_id
+          ? await resolveVoucherPartner({ companyId, partnerId: String(body.partner_id), requireActive: true, loanKind: loanInput?.kind ?? null })
+          : null;
+        // Phương án đảo hạn phải gắn khoản vay: cùng công ty, cùng ngân hàng (đối tác), đang vay / quá hạn (v2 §10.3).
+        if (kind === 'rollover') {
+          if (!partner) throw new ApiError({ code: 'FG-VAL-001', detail: 'Chọn ngân hàng cho vay', errors: { partner_id: 'Chọn ngân hàng cho vay' } });
+          if (!body.loan_id) throw new ApiError({ code: 'FG-VAL-001', detail: 'Chọn khoản vay đang đảo hạn', errors: { loan_id: 'Chọn khoản vay đang đảo hạn' } });
+          await assertLoanForRollover(String(body.loan_id), companyId, String(partner._id));
+        }
+        const tagIds = await resolveVoucherTagIds({ companyId, requested: body.tag_ids ?? [], previous: [] });
+        const loan = await resolveLoanPlan({
+          companyId,
+          voucherKind: kind as VoucherKind,
+          voucherPartnerId: partner ? String(partner._id) : null,
+          voucherAmountMinor: amountMinor,
+          loan: loanInput,
+          previous: null,
+        });
+        // Chuyển nội bộ theo ID (§11.6): thay cho nhận diện theo chuỗi "Tên - NH - STK" (đã bỏ).
+        const transfer = await resolveTransferTarget({
+          companyId,
+          kind: kind as VoucherKind,
+          target: transferInput ? { company_id: String(transferInput.company_id), account_id: transferInput.account_id ?? null } : null,
+          previous: null,
+        });
+        // "Vay để chi" (R3): tài khoản nguồn mặc định = tài khoản nhận giải ngân (vẫn sửa được).
+        const sourceAccountId = body.source.account_id ?? (loan?.kind === 'fund' ? loan.receive_account_id : null) ?? null;
         const evidence = await rebuildEvidence({
           kind,
           category_id: body.category_id ?? null,
@@ -295,36 +321,37 @@ export function documentRoutes(app: FastifyInstance): void {
           title: body.title,
           purpose: body.purpose,
           category_id: body.category_id ?? null,
-          payee: {
-            name: body.payee.name,
-            tax_code: body.payee.tax_code ?? null,
-            counterparty_id: counterpartyId ?? null,
-            is_internal: isInternal,
-            bank_name: body.payee.bank_name ?? null,
-            bank_account: body.payee.bank_account ?? null,
-          },
+          // [v2] không ghi payee.* (nhập tự do đã bỏ) — đối tác theo ID, tag, tuỳ chọn vay, chuyển nội bộ theo ID
+          partner_id: partner ? String(partner._id) : null,
+          tag_ids: tagIds,
+          options: { loan: planToStoredLoan(loan) },
+          transfer_target: transfer,
+          target: transfer, // v1 song song: bộ máy/ sổ cái v1 còn đọc `target` (sẽ bỏ khi migrate)
           amount: { minor: amountMinor, currency: body.amount.currency, decimals: currencyDecimals(body.amount.currency) },
           fx: body.fx ? { rate: body.fx.rate, at: body.fx.at } : null,
           source: {
             fund: body.source.fund,
-            account_id: body.source.account_id ?? null,
+            account_id: sourceAccountId,
             group_account_id: body.source.group_account_id ?? null,
             group_managed: Boolean(body.source.group_managed),
           },
-          target,
           planned_date: normalizePlannedDate(body.planned_date),
           business_date: body.business_date ?? vnDate(),
           priority: body.priority,
-          contract: { code: body.contract.code ?? null, value: body.contract.value ? { minor: BigInt(body.contract.value.amount_minor), currency: body.contract.value.currency, decimals: 0 } : null },
+          contract: {
+            code: body.contract.code ?? null,
+            value: body.contract.value ? voucherAmountField(body.contract.value.currency, BigInt(body.contract.value.amount_minor)) : null,
+            signed_at: body.contract.signed_at ?? null,
+          },
           loan_id: body.loan_id ?? null,
           debt_code: body.debt_code ?? null,
-          create_bank_debt: Boolean(body.create_bank_debt),
           budget: { budget_id: body.budget.budget_id ?? null, line_id: body.budget.line_id ?? null, in_plan: body.budget.in_plan },
           note: body.note ?? null,
           rollover: body.rollover
             ? {
                 need_amount: { minor: BigInt(body.rollover.need_amount.amount_minor), currency: body.rollover.need_amount.currency, decimals: 0 },
                 plan: body.rollover.plan,
+                new_maturity_date: body.rollover.new_maturity_date,
                 fee_estimate: body.rollover.fee_estimate ? { minor: BigInt(body.rollover.fee_estimate.amount_minor), currency: body.rollover.fee_estimate.currency, decimals: 0 } : null,
                 new_rate: body.rollover.new_rate ?? null,
                 collateral: body.rollover.collateral ?? null,
@@ -354,8 +381,15 @@ export function documentRoutes(app: FastifyInstance): void {
           ip: requestCtx(req).ip,
           ua: requestCtx(req).ua,
         });
+        // v2: sự kiện tạo phiếu (outbox, best-effort)
+        await emitVoucherEvent(
+          'voucher.created',
+          created as unknown as VoucherEventSubject,
+          { user_id: actor.user_id, name: actor.name, role: actor.role },
+          { from: null, to: 'draft', action: 'create' },
+        );
         invalidateFor(companyId, actor.user_id);
-        return ok(reply, { data: await detailOf(String(created._id), actor.user_id) }, { status: 201 });
+        return ok(reply, { data: await detailOf(String(created._id), actor.user_id, scope.companyIds) }, { status: 201 });
       },
     }),
   );
@@ -368,6 +402,7 @@ export function documentRoutes(app: FastifyInstance): void {
       schema: { tags: ['documents'], body: documentUpdateBodySchema },
       handler: async (req, reply) => {
         const actor = requireActor(req);
+        const scope = requireScope(req);
         const params = req.params as { id: string };
         const body = validate(documentUpdateBody, req.body);
         const doc = await loadDoc(params.id);
@@ -378,11 +413,12 @@ export function documentRoutes(app: FastifyInstance): void {
         if (!['draft', 'pending.ktt', 'changes_requested', 'rejected'].includes(doc.status)) {
           throw new ApiError({ code: 'FG-WF-005', detail: 'Hồ sơ đã qua cấp duyệt, chỉ thêm chứng từ được' });
         }
-        if (approvedFromChiefAccountantUp((doc.history ?? []) as { action?: string | null; actor?: { role?: string | null } | null }[])) {
+        // US-VOU-05: phiếu bị yêu cầu bổ sung được sửa lại dù cấp trên đã duyệt ở vòng trước (vòng mới bắt đầu khi gửi lại)
+        if (roundLocksEdit(String(doc.status), approvedFromChiefAccountantUp((doc.history ?? []) as { action?: string | null; actor?: { role?: string | null } | null }[]))) {
           throw new ApiError({ code: 'FG-WF-005', detail: 'Hồ sơ đã được cấp từ Kế toán trưởng trở lên duyệt ở vòng này — không sửa được nữa' });
         }
         if (doc.processed_requests?.includes(body.request_id)) {
-          return ok(reply, { data: await detailOf(params.id, actor.user_id), idempotent: true });
+          return ok(reply, { data: await detailOf(params.id, actor.user_id, requireScope(req).companyIds), idempotent: true });
         }
 
         const set: Record<string, unknown> = {};
@@ -390,32 +426,63 @@ export function documentRoutes(app: FastifyInstance): void {
           if (body[key] !== undefined) set[key] = body[key];
         }
         if (body.planned_date !== undefined) set.planned_date = normalizePlannedDate(body.planned_date);
-        if (body.create_bank_debt !== undefined) set.create_bank_debt = body.create_bank_debt;
-        if (body.payee) {
-          const mergedPayee = { ...(doc.payee as Record<string, unknown>), ...body.payee };
-          let isInternalPayee = Boolean(mergedPayee.is_internal);
-          // Phiếu CHI đổi "Đơn vị nhận tiền" sang tài khoản nội bộ → cập nhật lại dấu nội bộ/đích.
-          if (String(doc.kind) === 'spend') {
-            const internalTarget = await detectInternalTransferTarget(String(mergedPayee.name ?? ''));
-            if (internalTarget) {
-              mergedPayee.is_internal = true;
-              isInternalPayee = true;
-              set.target = { company_id: internalTarget.companyId, account_id: internalTarget.accountId };
-            } else {
-              mergedPayee.is_internal = false;
-              isInternalPayee = false;
-            }
+        // [v2] đối tác / tuỳ chọn vay / chuyển nội bộ / tag: kiểm trên trạng thái SAU KHI GỘP.
+        // Không ghi `payee.*` (nhập tự do đã bỏ), không nhận diện theo chuỗi, không tự tạo đối tác.
+        const kind = String(doc.kind) as VoucherKind;
+        const companyId = String(doc.company_id);
+        const amountMinorNext = body.amount ? BigInt(body.amount.amount_minor) : BigInt(String(doc.amount.minor));
+        const currentPartnerId = doc.partner_id ? String(doc.partner_id) : null;
+        const nextPartnerId = body.partner_id !== undefined ? body.partner_id : currentPartnerId;
+        const partnerChanged = nextPartnerId !== currentPartnerId;
+        if (!nextPartnerId && (kind === 'spend' || kind === 'income')) {
+          throw new ApiError({ code: 'FG-VAL-001', detail: 'Chọn đối tác', errors: { partner_id: 'Chọn đối tác (bắt buộc với phiếu thu/chi)' } });
+        }
+        const previousLoan = storedLoanToPlan(doc.options?.loan as unknown as Record<string, unknown> | null | undefined);
+        const loanInput = body.options !== undefined ? (body.options?.loan ?? null) : previousLoan ? planToLoanInput(previousLoan) : null;
+        if (nextPartnerId) {
+          // đối tác đã ngừng giao dịch chỉ bị chặn khi CHỌN MỚI; giữ nguyên thì dữ liệu cũ vẫn sửa được
+          await resolveVoucherPartner({ companyId, partnerId: nextPartnerId, requireActive: partnerChanged, loanKind: loanInput?.kind ?? null });
+        }
+        if (kind === 'rollover') {
+          // Phương án đảo hạn: khoản vay gắn (mới hoặc giữ nguyên) phải hợp lệ với công ty và ngân hàng đang chọn (v2 §10.3).
+          if (!nextPartnerId) throw new ApiError({ code: 'FG-VAL-001', detail: 'Chọn ngân hàng cho vay', errors: { partner_id: 'Chọn ngân hàng cho vay' } });
+          const nextLoanId = body.loan_id !== undefined ? body.loan_id : doc.loan_id ? String(doc.loan_id) : null;
+          if (!nextLoanId) throw new ApiError({ code: 'FG-VAL-001', detail: 'Chọn khoản vay đang đảo hạn', errors: { loan_id: 'Chọn khoản vay đang đảo hạn' } });
+          if (body.loan_id !== undefined || partnerChanged) await assertLoanForRollover(nextLoanId, companyId, nextPartnerId);
+        }
+        const loan = await resolveLoanPlan({
+          companyId,
+          voucherKind: kind,
+          voucherPartnerId: nextPartnerId,
+          voucherAmountMinor: amountMinorNext,
+          loan: loanInput,
+          // đổi đối tác ⇒ kiểm lại mọi tham chiếu của khoản vay (khoản vay có sẵn thuộc ngân hàng cũ không còn hợp lệ)
+          previous: partnerChanged ? null : previousLoan,
+        });
+        const transferIn = body.transfer_target !== undefined ? body.transfer_target : body.target;
+        let transfer: TransferTargetPlan | null | undefined; // undefined = không đổi
+        if (transferIn !== undefined) {
+          if (transferIn?.company_id && scope.companyIds !== null && !scope.companyIds.includes(String(transferIn.company_id))) {
+            throw new ApiError({ code: 'FG-RBAC-002', detail: 'Công ty nhận không nằm trong phạm vi của bạn' });
           }
-          // đồng bộ định danh đối tác khi đổi người nhận/khách hàng (bỏ qua tài khoản nội bộ).
-          if (isInternalPayee) {
-            mergedPayee.counterparty_id = null;
-          } else if (body.payee.counterparty_id !== undefined) {
-            mergedPayee.counterparty_id = body.payee.counterparty_id ?? null;
-          } else {
-            const ensured = await ensureCounterpartyFromLabel(String(mergedPayee.name ?? ''), actor.user_id);
-            if (ensured) mergedPayee.counterparty_id = ensured;
-          }
-          set.payee = mergedPayee;
+          transfer = await resolveTransferTarget({
+            companyId,
+            kind,
+            target: transferIn ? { company_id: String(transferIn.company_id), account_id: transferIn.account_id ?? null } : null,
+            previous: storedTransferOf(doc as unknown as Record<string, unknown>),
+          });
+        }
+        if (body.tag_ids !== undefined) {
+          set.tag_ids = await resolveVoucherTagIds({ companyId, requested: body.tag_ids, previous: (doc.tag_ids ?? []).map(String) });
+        }
+        if (body.partner_id !== undefined) set.partner_id = nextPartnerId;
+        // lãi/gốc của khoản vay dự kiến đi theo đối tác (vay đi thu: NH cho vay = đối tác phiếu) và số tiền phiếu
+        if (body.options !== undefined || partnerChanged || body.amount !== undefined) {
+          set.options = { loan: planToStoredLoan(loan) };
+        }
+        if (transfer !== undefined) {
+          set.transfer_target = transfer;
+          set.target = transfer; // v1 song song
         }
         if (body.source) {
           // validate trên BẢN MERGE để không lọt tổ hợp account_id/group_account_id
@@ -428,13 +495,23 @@ export function documentRoutes(app: FastifyInstance): void {
           await assertGroupAccountForCompany(String(doc.company_id), mergedSource.group_account_id);
           set.source = mergedSource;
         }
-        if (body.contract) set.contract = { ...doc.contract, ...body.contract };
+        if (body.contract) {
+          // giá trị HĐ: đổi sang dạng lưu (minor BigInt) — không ghi thẳng dạng wire `amount_minor`
+          const { value: contractValue, ...contractRest } = body.contract;
+          set.contract = {
+            ...doc.contract,
+            ...contractRest,
+            ...(contractValue !== undefined
+              ? { value: contractValue ? voucherAmountField(contractValue.currency, BigInt(contractValue.amount_minor)) : null }
+              : {}),
+          };
+        }
         if (body.budget) set.budget = { ...doc.budget, ...body.budget };
-        if (body.target) set.target = body.target;
         // merge (không ghi đè) để giữ `rollover.result` (RENEW-04) khi sửa lại phương án.
         if (body.rollover) set.rollover = { ...((doc.rollover ?? {}) as Record<string, unknown>), ...body.rollover };
         if (body.amount) {
-          set.amount = { minor: BigInt(body.amount.amount_minor), currency: body.amount.currency, decimals: 0 };
+          // số thập phân theo tiền tệ (USD/EUR/CNY = 2), khớp POST /documents
+          set.amount = voucherAmountField(body.amount.currency, BigInt(body.amount.amount_minor));
         }
 
         const entry = buildHistoryEntry({
@@ -468,8 +545,15 @@ export function documentRoutes(app: FastifyInstance): void {
           request_id: body.request_id,
           ip: requestCtx(req).ip,
         });
+        // v2: sự kiện sửa phiếu (outbox, best-effort) — trạng thái không đổi
+        await emitVoucherEvent(
+          'voucher.updated',
+          result.doc as unknown as VoucherEventSubject,
+          { user_id: actor.user_id, name: actor.name, role: actor.role },
+          { from: doc.status, to: doc.status, action: 'update', changed: Object.keys(set) },
+        );
         invalidateFor(String(doc.company_id), actor.user_id);
-        return ok(reply, { data: await detailOf(params.id, actor.user_id), version: result.version });
+        return ok(reply, { data: await detailOf(params.id, actor.user_id, requireScope(req).companyIds), version: result.version });
       },
     }),
   );
@@ -490,7 +574,178 @@ export function documentRoutes(app: FastifyInstance): void {
           throw new ApiError({ code: 'FG-SYS-003', detail: 'Hồ sơ lưu trữ — đang đọc từ kho' });
         }
         await assertDocVisible(req, params.id);
-        return ok(reply, { data: await detailOf(params.id, actor.user_id) }, { maxAge: 0 });
+        return ok(reply, { data: await detailOf(params.id, actor.user_id, requireScope(req).companyIds) }, { maxAge: 0 });
+      },
+    }),
+  );
+
+  /* ------------------------------ tag (v2) ------------------------------- */
+
+  /**
+   * v2 §6.2 — sửa tag của phiếu, KỂ CẢ SAU KHI DUYỆT (tag không ảnh hưởng tiền), có lịch sử `tags_update`.
+   * Quyền: xem được phiếu + `doc:create` hoặc `tag:create`. Tag phải thuộc công ty của phiếu.
+   */
+  app.route(
+    defineRoute({
+      method: 'PATCH',
+      url: '/documents/:id/tags',
+      config: {
+        perms: [] as Permission[],
+        permsAny: ['doc:create', 'tag:create'] as Permission[],
+        screen: 'DOC-01',
+        summary: 'Sửa tag của phiếu (kể cả sau khi duyệt; ghi lịch sử tags_update)',
+      },
+      schema: { tags: ['documents'], body: toJsonSchema(documentTagsBody) },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const params = req.params as { id: string };
+        const body = validate(documentTagsBody, req.body);
+        const doc = await loadDoc(params.id);
+        await assertVisible(req, String(doc.company_id));
+        // §6.2 — sửa được cả sau khi duyệt, nhưng chỉ NGƯỜI LẬP hoặc kế toán trưởng (tag:manage); KTV khác không đổi tag phiếu của người khác.
+        if (!mayChangeVoucherTags(actor, { created_by: String(doc.created_by) })) {
+          throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ người lập phiếu hoặc kế toán trưởng mới sửa được tag của phiếu này' });
+        }
+        if (doc.processed_requests?.includes(body.request_id)) {
+          return ok(reply, { data: await detailOf(params.id, actor.user_id, requireScope(req).companyIds), idempotent: true });
+        }
+        const companyId = String(doc.company_id);
+        const prev = (doc.tag_ids ?? []).map(String);
+        const next = await resolveVoucherTagIds({ companyId, requested: body.tag_ids, previous: prev });
+        const diff = diffIds(prev, next);
+        if (diff.added.length === 0 && diff.removed.length === 0) {
+          return ok(reply, { data: await detailOf(params.id, actor.user_id, requireScope(req).companyIds), version: doc.version, unchanged: true });
+        }
+        const names = await tagNamesOf([...diff.added, ...diff.removed], companyId);
+        const entry = buildHistoryEntry({
+          action: 'tags_update',
+          actor: { user_id: actor.user_id, role: actor.role, name: actor.name },
+          from: doc.status,
+          to: doc.status,
+          request_id: body.request_id,
+          ip: requestCtx(req).ip,
+          fields: {
+            added: diff.added.map((id) => ({ id, name: names.get(id) ?? '' })),
+            removed: diff.removed.map((id) => ({ id, name: names.get(id) ?? '' })),
+          },
+        });
+        const r = await cas<Record<string, unknown>>({
+          model: 'Document',
+          id: params.id,
+          ifMatch: body.if_match,
+          set: { tag_ids: next },
+          push: { history: entry },
+          addToSet: { processed_requests: body.request_id },
+        });
+        if (!r) throw new ApiError({ code: 'FG-WF-011' });
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'document.tags_update',
+          subject: { type: doc.kind, id: params.id, code: doc.code },
+          company_id: companyId,
+          document_id: params.id,
+          diff_fields: { added: diff.added, removed: diff.removed },
+          request_id: body.request_id,
+          ip: requestCtx(req).ip,
+        });
+        invalidateFor(companyId, actor.user_id);
+        return ok(reply, { data: await detailOf(params.id, actor.user_id, requireScope(req).companyIds), version: r.version });
+      },
+    }),
+  );
+
+  /* ---------------------------- liên kết (v2) ---------------------------- */
+
+  /**
+   * v2 §11.2 — gán liên kết THỦ CÔNG từ phiếu (quyền `link:manage`):
+   *  - `offset` (phiếu thu/chi → khoản công nợ): cấn trừ phải thu / phải trả;
+   *  - `repayment` (phiếu chi → khoản nợ NH): trả nợ, có thể tách gốc / lãi / phí;
+   *  - `disbursement` (phiếu thu → khoản nợ NH): tiền giải ngân.
+   * Cấu trúc, đối tác, sức chứa, trùng cặp kiểm ở domain/links (FG-LINK-*).
+   */
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/documents/:id/links',
+      config: { perms: ['link:manage'] as Permission[], screen: 'DOC-01', summary: 'Gán liên kết thủ công (cấn trừ / trả nợ / giải ngân)' },
+      schema: { tags: ['documents'], body: toJsonSchema(documentLinkCreateBody) },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const scope = requireScope(req);
+        const params = req.params as { id: string };
+        const body = validate(documentLinkCreateBody, req.body);
+        const doc = await loadDoc(params.id);
+        await assertVisible(req, String(doc.company_id));
+        assertDocumentLinkable(String(doc.status));
+        const linkActor = { user_id: actor.user_id, name: actor.name, role: actor.role };
+        await createLink({
+          from: { type: 'document', id: params.id },
+          to: { type: manualLinkTargetType(body.relation), id: body.to_id },
+          relation: body.relation,
+          amount_minor: body.amount_minor ?? null,
+          split: body.split ?? null,
+          note: body.note ?? null,
+          origin: 'manual',
+          actor: linkActor,
+          scopeCompanyIds: scope.companyIds,
+          request_id: body.request_id ?? null,
+          ip: requestCtx(req).ip,
+        });
+        // v2 §10.2 / §14.2: phiếu ĐÃ THỰC THI gán làm giải ngân ⇒ khoản vay "Đang vay" ngay; phiếu đã trả gán làm
+        // trả nợ ⇒ kiểm tất toán (loan.settled). Phiếu chưa thực thi: chuyển khi thực thi (bộ máy tự động).
+        if (doc.status === 'paid' && body.relation === 'disbursement') await activateLoanOnDisbursement(body.to_id, linkActor);
+        if (doc.status === 'paid' && body.relation === 'repayment') await emitLoanSettledAfterPayment(params.id, linkActor).catch(() => []);
+        invalidateFor(String(doc.company_id), actor.user_id);
+        return ok(reply, { data: await detailOf(params.id, actor.user_id, scope.companyIds) }, { status: 201 });
+      },
+    }),
+  );
+
+  /**
+   * v2 §11.2 — gỡ liên kết: đánh dấu `removed` (không xoá), bắt buộc lý do. Chỉ gỡ liên kết NỐI VỚI phiếu này.
+   */
+  app.route(
+    defineRoute({
+      method: 'DELETE',
+      url: '/documents/:id/links/:linkId',
+      config: { perms: ['link:manage'] as Permission[], screen: 'DOC-01', summary: 'Gỡ liên kết (đánh dấu, có lý do; không xoá)' },
+      schema: { tags: ['documents'], body: toJsonSchema(linkRemoveBody) },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const scope = requireScope(req);
+        const params = req.params as { id: string; linkId: string };
+        const body = validate(linkRemoveBody, req.body ?? {});
+        const doc = await loadDoc(params.id);
+        await assertVisible(req, String(doc.company_id));
+        const owned = /^[0-9a-f]{24}$/i.test(params.linkId)
+          ? await Models.BusinessLink.findOne({
+              _id: params.linkId,
+              company_id: doc.company_id,
+              $or: [
+                { from_type: 'document', from_id: params.id },
+                { to_type: 'document', to_id: params.id },
+              ],
+            } as never)
+              .select({ origin: 1, relation: 1 })
+              .lean<{ origin?: string | null; relation?: string | null } | null>()
+          : null;
+        if (!owned) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy liên kết của phiếu này' });
+        // v2 §11.2: liên kết do quy trình tự động tạo không gỡ tay — đổi lựa chọn vay trên phiếu để quy trình tự cập nhật.
+        // Ngoại lệ `funded_by` (§11.5): gỡ tay để giữ khoản vay cho mục đích khác khi phiếu chi bị huỷ sau khi đã có tiền.
+        if (owned.origin === 'automation' && owned.relation !== 'funded_by') {
+          throw new ApiError({ code: 'FG-WF-005', detail: 'Liên kết do quy trình tự động tạo — không gỡ tay. Đổi lựa chọn vay trên phiếu để quy trình cập nhật liên kết và khoản vay.' });
+        }
+        await removeLink({
+          link_id: params.linkId,
+          reason: body.reason,
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          scopeCompanyIds: scope.companyIds,
+          request_id: body.request_id ?? null,
+          ip: requestCtx(req).ip,
+        });
+        invalidateFor(String(doc.company_id), actor.user_id);
+        return ok(reply, { data: await detailOf(params.id, actor.user_id, scope.companyIds) });
       },
     }),
   );
@@ -567,7 +822,7 @@ export function documentRoutes(app: FastifyInstance): void {
           doc.status === 'rejected' ||
           (String(doc.created_by) === actor.user_id &&
             ['draft', 'pending.ktt', 'changes_requested'].includes(doc.status) &&
-            !approvedFromChiefAccountantUp(history));
+            !roundLocksEdit(String(doc.status), approvedFromChiefAccountantUp(history)));
         if (!allowed) {
           throw new ApiError({
             code: 'FG-RBAC-001',
@@ -578,6 +833,10 @@ export function documentRoutes(app: FastifyInstance): void {
         // Step-up (ADR-14) cho thao tác phá huỷ — bỏ qua với Chủ tịch / Tổng Giám đốc.
         if (!unrestricted) await assertStepUp(actor.user_id, body.verify);
 
+        // §8 — sổ cái CHỈ THÊM: phiếu đã thực thi được ĐẢO từng bút toán (không xoá entry cũ) rồi mới xoá hồ sơ.
+        // Làm TRƯỚC khi xoá: nếu đảo lỗi thì phiếu còn nguyên và thao tác thử lại được (đảo idempotent).
+        const reversal = await reverseLedgerForDocument(params.id, actor);
+
         await mirrorAudit({
           at: new Date(),
           actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
@@ -585,24 +844,31 @@ export function documentRoutes(app: FastifyInstance): void {
           subject: { type: doc.kind, id: params.id, code: doc.code },
           company_id: String(doc.company_id),
           document_id: params.id,
-          diff_fields: { reason: body.reason, status: doc.status, amount_minor: doc.amount.minor.toString() },
+          diff_fields: { reason: body.reason, status: doc.status, amount_minor: doc.amount.minor.toString(), reversed_entries: reversal.reversed },
           request_id: body.request_id,
           ip: requestCtx(req).ip,
         });
 
         await Models.Attachment.deleteMany({ document_id: params.id } as never).exec();
+        // [v2] khoản vay do quy trình tự động sinh từ phiếu sắp xoá: khoản CHƯA có tiền được huỷ (không để treo trong
+        // dự báo dòng tiền); khoản đã có tiền không tự huỷ (§11.5, §14.3 (6))
+        await releaseLoansOfSource({
+          sourceId: params.id,
+          reason: 'Phiếu nguồn đã bị xoá',
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          requestId: body.request_id,
+        });
+        // [v2] liên kết còn hiệu lực của phiếu sắp xoá được GỠ MỀM (có lý do) — không để sức chứa công nợ/khoản vay treo
+        await softRemoveLinksOfDocument({
+          documentId: params.id,
+          companyId: String(doc.company_id),
+          actorId: actor.user_id,
+          reason: 'Phiếu nguồn đã bị xoá',
+        });
         const r = await Models.Document.deleteOne({ _id: params.id } as never).exec();
         if (!r.deletedCount) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy hồ sơ' });
-        // Xoá cứng hồ sơ KHÔNG tự kéo theo sổ cái → phải dọn bút toán đã thực thi,
-        // nếu không entry mồ côi vẫn bị tính vào số dư tài khoản. Best-effort: lỗi ở
-        // đây KHÔNG làm hỏng việc xoá (đã commit); job `cleanup` + script dọn lại sau.
-        try {
-          await purgeLedgerForDocuments([params.id]);
-        } catch (err) {
-          console.warn('[ledger] dọn bút toán sau khi xoá hồ sơ thất bại (sẽ dọn lại sau):', (err as Error).message);
-        }
         invalidateFor(String(doc.company_id));
-        return ok(reply, { data: { ok: true, deleted_id: params.id } });
+        return ok(reply, { data: { ok: true, deleted_id: params.id, reversed_entries: reversal.reversed } });
       },
     }),
   );
@@ -624,15 +890,36 @@ export function documentRoutes(app: FastifyInstance): void {
           throw new ApiError({ code: 'FG-RBAC-001', detail: 'Bạn không có quyền gửi hồ sơ' });
         }
         if (await alreadyProcessed(params.id, body.request_id)) {
-          const fresh = await detailOf(params.id, actor.user_id);
+          const fresh = await detailOf(params.id, actor.user_id, requireScope(req).companyIds);
           return ok(reply, { data: fresh, idempotent: true });
         }
 
+        // §8 / US-EXE-01 — đánh dấu phiếu chi ĐÃ CHI cần số tham chiếu ngân hàng và chứng từ UNC (tự động không đi qua route này).
+        if (body.action === 'pay') {
+          const missing = missingPaymentEvidence({
+            kind: String(doc.kind),
+            bankRef: body.execution?.bank_ref,
+            attachmentTypes: ((doc.attachments ?? []) as { type?: unknown }[]).map((a) => String(a.type ?? '')),
+          });
+          if (missing.length) {
+            throw new ApiError({
+              code: 'FG-VAL-001',
+              detail: `Chưa đủ để đánh dấu đã chi: ${missing.map((m) => (m === 'bank_ref' ? 'số tham chiếu ngân hàng' : 'chứng từ UNC (Ủy nhiệm chi)')).join(', ')}`,
+              errors: Object.fromEntries(
+                missing.map((m) => (m === 'bank_ref' ? ['execution.bank_ref', 'Nhập số tham chiếu ngân hàng'] : ['attachments', 'Đính kèm chứng từ UNC (Ủy nhiệm chi)'])),
+              ),
+            });
+          }
+        }
+        // §11.5 — cấp duyệt đổi số tiền phiếu chi chỉ trước khi R3 đã tạo khoản vay cho phiếu này.
+        if ((body.action === 'approve' || body.action === 'approve_with_reason') && body.amount_minor !== undefined) {
+          await assertApprovalAmountEditable(params.id, BigInt(String(doc.amount.minor)), BigInt(body.amount_minor));
+        }
         const result = await transition({ doc, actor, body, ip: requestCtx(req).ip });
         // Đổi trạng thái duyệt → số "Chờ tôi duyệt" (badge) và overview đổi ngay;
         // không xoá cache thì badge giữ số cũ tới hết TTL (60s) dù danh sách đã tươi.
         invalidateFor(String(doc.company_id), actor.user_id);
-        const fresh = await detailOf(params.id, actor.user_id);
+        const fresh = await detailOf(params.id, actor.user_id, requireScope(req).companyIds);
         return ok(reply, { data: fresh, transition: result }, { etag: result.version });
       },
     }),
@@ -1010,12 +1297,19 @@ export function documentRoutes(app: FastifyInstance): void {
           throw new ApiError({ code: 'FG-WF-005', detail: 'Chỉ cập nhật kết quả sau khi phương án được duyệt' });
         }
         if (doc.processed_requests?.includes(body.request_id)) {
-          return ok(reply, { data: await detailOf(id, actor.user_id), idempotent: true });
+          return ok(reply, { data: await detailOf(id, actor.user_id, requireScope(req).companyIds), idempotent: true });
         }
+
+        // Kết quả chỉ ghi khi cập nhật được khoản vay (v2 §10.3) — kiểm TRƯỚC khi đổi trạng thái phiếu.
+        if (!doc.loan_id) {
+          throw new ApiError({ code: 'FG-VAL-001', detail: 'Phương án chưa gắn khoản vay — gắn khoản vay trước khi ghi kết quả', errors: { loan_id: 'Phương án chưa gắn khoản vay' } });
+        }
+        await assertRolloverResultForLoan(String(doc.loan_id), body.new_maturity_date);
 
         const result = {
           done_at: body.done_at,
           new_contract_code: body.new_contract_code,
+          new_maturity_date: body.new_maturity_date,
           new_limit: { minor: BigInt(body.new_limit.amount_minor), currency: body.new_limit.currency, decimals: 0 },
           new_rate: body.new_rate,
           actual_fee: { minor: BigInt(body.actual_fee.amount_minor), currency: body.actual_fee.currency, decimals: 0 },
@@ -1041,19 +1335,22 @@ export function documentRoutes(app: FastifyInstance): void {
         });
         if (!saved) throw new ApiError({ code: 'FG-WF-011', detail: 'Hồ sơ vừa được cập nhật bởi người khác' });
 
-        // Cập nhật khoản vay gốc (lãi suất mới) — KHÔNG tự tất toán/tạo khoản mới.
+        // Cập nhật khoản vay (v2 §10.3): hạn thanh toán, kỳ kế tiếp, hạn mức, lãi suất, số HĐ — KHÔNG tự tất toán / tạo khoản mới.
         if (doc.loan_id) {
-          const hist = buildHistoryEntry({
-            action: 'rollover_result',
-            actor: { user_id: actor.user_id, role: actor.role, name: actor.name },
-            to: null,
-            ip: requestCtx(req).ip,
-            fields: { document_id: id, document_code: doc.code, new_contract_code: body.new_contract_code, new_rate: body.new_rate },
-          });
-          await Models.BankDebt.updateOne(
-            { _id: String(doc.loan_id) },
-            { $set: { interest_rate: body.new_rate, updated_at: new Date() }, $push: { history: hist } },
-          ).exec();
+          await applyRolloverResultToLoan(
+            String(doc.loan_id),
+            {
+              document_id: id,
+              document_code: String(doc.code ?? ''),
+              new_maturity_date: body.new_maturity_date,
+              new_contract_code: body.new_contract_code,
+              new_limit_minor: BigInt(body.new_limit.amount_minor),
+              new_rate: body.new_rate,
+              actual_fee_minor: BigInt(body.actual_fee.amount_minor),
+            },
+            { user_id: actor.user_id, name: actor.name, role: actor.role },
+            requestCtx(req).ip,
+          );
         }
         await mirrorAudit({
           at: new Date(),
@@ -1067,7 +1364,7 @@ export function documentRoutes(app: FastifyInstance): void {
           ip: requestCtx(req).ip,
         });
         invalidateFor(String(doc.company_id), actor.user_id);
-        return ok(reply, { data: await detailOf(id, actor.user_id), version: saved.version });
+        return ok(reply, { data: await detailOf(id, actor.user_id, requireScope(req).companyIds), version: saved.version });
       },
     }),
   );
@@ -1108,7 +1405,7 @@ async function rebuildEvidenceForDoc(id: string, doc: { kind: DocKind; category_
 }
 
 /** Bản chi tiết + `can` (quền của người gọi trên CHÍNH hồ sơ này). */
-export async function detailOf(id: string, userId: string): Promise<Record<string, unknown>> {
+export async function detailOf(id: string, userId: string, scopeCompanyIds: string[] | null): Promise<Record<string, unknown>> {
   const doc = await Models.Document.findById(id).lean<Record<string, unknown> | null>();
   if (!doc) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy hồ sơ' });
 
@@ -1154,7 +1451,7 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
       company_id: String(doc.company_id),
       actor_companies: actorCompanies,
       delegatedStepOrders: delegated.map((d) => steps.find((s) => String(s.user_id) === String(d.user_id))?.order ?? -1).filter((o) => o >= 0),
-      approved_from_ktt_up: approvedFromChiefAccountantUp(history),
+      approved_from_ktt_up: roundLocksEdit(String(doc.status), approvedFromChiefAccountantUp(history)),
     },
   );
 
@@ -1170,6 +1467,8 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
     ? { ...targetRaw, company_name: targetCompany?.name ? String(targetCompany.name) : null, company_code: targetCompany?.code ? String(targetCompany.code) : null }
     : null;
 
+  // [v2] đối tác / tag / tuỳ chọn vay / chuyển nội bộ / nguồn gốc / liên kết / lượt tự động — nạp sống theo ID
+  const refs = await buildVoucherRefView(doc, scopeCompanyIds);
   return {
     _id: String(doc._id),
     code: String(doc.code),
@@ -1190,7 +1489,8 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
     title: String(doc.title ?? ''),
     purpose: String(doc.purpose ?? ''),
     category_id: doc.category_id ? String(doc.category_id) : null,
-    payee: doc.payee ?? {},
+    // [v2] dẫn xuất từ đối tác (dữ liệu v1 chưa migrate giữ nguyên `payee`)
+    payee: refs.payee,
     amount: wireAmount(doc.amount),
     fx: doc.fx ?? null,
     source: { ...(doc.source as object), account_label: null, balance_available: null },
@@ -1201,9 +1501,17 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
     loan_id: doc.loan_id ? String(doc.loan_id) : null,
     budget: doc.budget ?? { in_plan: true },
     target,
+    transfer_target: refs.transfer_target,
+    partner_id: refs.partner_id,
+    partner: refs.partner,
+    tag_ids: refs.tag_ids,
+    tags: refs.tags,
+    options: refs.options,
+    origin: refs.origin,
+    links: refs.links,
+    automation_runs: refs.automation_runs,
     rollover: doc.rollover ?? null,
     debt_code: doc.debt_code ?? null,
-    create_bank_debt: Boolean(doc.create_bank_debt),
     note: doc.note ?? null,
     approval: {
       matrix_id: (doc.approval as { matrix_id?: unknown })?.matrix_id ? String((doc.approval as { matrix_id: unknown }).matrix_id) : null,
@@ -1251,7 +1559,8 @@ export async function detailOf(id: string, userId: string): Promise<Record<strin
       fields: (h.fields as Record<string, unknown> | null) ?? null,
     })),
     href: docHref(String(doc.kind), String(doc._id)),
-    can,
+    // §6.2 — nút sửa tag chỉ hiện cho người lập / kế toán trưởng (khớp rule của PATCH /documents/:id/tags)
+    can: { ...can, tag: can.tag && mayChangeVoucherTags({ user_id: userId, permissions: [...permissions] }, { created_by: String(doc.created_by) }) },
   };
 }
 

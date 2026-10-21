@@ -121,10 +121,11 @@ export function entriesForPayment(input: {
   ];
 
   // chuyển tiền nội bộ: đối ứng công ty đích (§XXI) — KHÔNG tính doanh thu/chi phí.
-  if (doc.kind === 'internal' && doc.target?.account_id && doc.target?.company_id) {
+  const dest = doc.kind === 'internal' ? internalDestOf(doc) : null;
+  if (dest) {
     out.push({
-      company_id: String(doc.target.company_id),
-      account_id: String(doc.target.account_id),
+      company_id: dest.company_id,
+      account_id: dest.account_id,
       date: day,
       direction: 'in',
       amount_minor: input.amountMinor,
@@ -132,11 +133,24 @@ export function entriesForPayment(input: {
       reason: 'mirror',
       document_id: id,
       document_code: doc.code ?? null,
-      dedupe_key: `doc:${id}:actual:${input.installmentIndex}:mirror:${String(doc.target.account_id)}`,
+      dedupe_key: `doc:${id}:actual:${input.installmentIndex}:mirror:${dest.account_id}`,
       created_by: input.createdBy ?? null,
     });
   }
   return out;
+}
+
+/**
+ * Đích chuyển nội bộ: ưu tiên `transfer_target` (v2, theo ID), rơi về `target` (v1).
+ * Trả null nếu thiếu công ty hoặc tài khoản đích.
+ */
+export function internalDestOf(doc: { target?: unknown; transfer_target?: unknown }): { company_id: string; account_id: string } | null {
+  const pick = (v: unknown): { company_id: string; account_id: string } | null => {
+    const r = (v ?? null) as { company_id?: unknown; account_id?: unknown } | null;
+    if (!r || !r.company_id || !r.account_id) return null;
+    return { company_id: String(r.company_id), account_id: String(r.account_id) };
+  };
+  return pick(doc.transfer_target) ?? pick(doc.target);
 }
 
 /**
@@ -152,6 +166,7 @@ export function entriesForExecutedDocument(doc: {
   amount: { minor: bigint; currency?: string };
   source?: { account_id?: string | null; group_account_id?: string | null } | null;
   target?: { company_id?: string | null; account_id?: string | null } | null;
+  transfer_target?: { company_id?: string | null; account_id?: string | null } | null;
   planned_date?: string;
   status?: string;
   execution?: {
@@ -169,6 +184,7 @@ export function entriesForExecutedDocument(doc: {
   const sourceAccount = sourceAccountOf(doc);
   if (!sourceAccount) return [];
   const isIn = doc.kind === 'income';
+  const dest = doc.kind === 'internal' ? internalDestOf(doc) : null;
   const id = String(doc._id);
   const currency = doc.amount.currency ?? 'VND';
   const exec = doc.execution ?? {};
@@ -179,7 +195,7 @@ export function entriesForExecutedDocument(doc: {
   const push = (accountId: string, amountMinor: bigint, date: string, index: number, isMirror: boolean) => {
     if (amountMinor <= 0n || !date) return;
     out.push({
-      company_id: isMirror ? String(doc.target?.company_id) : String(doc.company_id),
+      company_id: isMirror ? String(dest?.company_id ?? '') : String(doc.company_id),
       account_id: accountId,
       date: datePartOf(date),
       direction: isMirror ? 'in' : isIn ? 'in' : 'out',
@@ -204,13 +220,13 @@ export function entriesForExecutedDocument(doc: {
     push(sourceAccount, amount, String(exec.paid_at ?? doc.planned_date ?? ''), 0, false);
   }
 
-  if (doc.kind === 'internal' && doc.target?.account_id && doc.target?.company_id) {
+  if (dest) {
     if (partial) {
       installments.forEach((inst, idx) => {
-        push(String(doc.target!.account_id), toBig(inst.amount_minor), String(inst.at ?? exec.paid_at ?? doc.planned_date ?? ''), idx, true);
+        push(dest.account_id, toBig(inst.amount_minor), String(inst.at ?? exec.paid_at ?? doc.planned_date ?? ''), idx, true);
       });
     } else {
-      push(String(doc.target.account_id), toBig(exec.actual_amount_minor ?? doc.amount.minor), String(exec.paid_at ?? doc.planned_date ?? ''), 0, true);
+      push(dest.account_id, toBig(exec.actual_amount_minor ?? doc.amount.minor), String(exec.paid_at ?? doc.planned_date ?? ''), 0, true);
     }
   }
   return out;
@@ -236,8 +252,8 @@ export async function bookedBalance(accountId: string, uptoDate: string): Promis
  * Materialize lại `balances_daily` cho các tài khoản bị ảnh hưởng, TỪ LEDGER.
  *
  * Vì ledger có thể nhận bút toán lùi ngày, recompute lại TOÀN BỘ chuỗi ngày của
- * tài khoản (cumulative `opening`/`closing`) — đúng và idempotent. `blocked_minor`
- * (nếu có) được giữ nguyên; `planned_*` không thuộc ledger nên chỉ đặt khi tạo mới.
+ * tài khoản (cumulative `opening`/`closing`) — đúng và idempotent. Không còn `blocked_minor`
+ * (v2 BỎ); `planned_*` không thuộc ledger nên chỉ đặt khi tạo mới (dự kiến tính khi đọc).
  */
 export async function recomputeAccountBalances(accountIds: string[]): Promise<{ accounts: number; rows: number }> {
   const ids = [...new Set(accountIds.filter(Boolean))];
@@ -271,11 +287,8 @@ export async function recomputeAccountBalances(accountIds: string[]): Promise<{ 
       const closing = opening + inMinor - outMinor;
       running = closing;
 
-      const prev = await Models.BalanceDaily.findOne({ account_id: accountId, date } as never)
-        .select({ blocked_minor: 1 })
-        .lean<{ blocked_minor?: unknown } | null>();
-      const blocked = toBig(prev?.blocked_minor);
-
+      // v2 §4.2 BỎ "tiền bị phong toả / số dư khả dụng": vi phạm = số dư SỔ CÁI cuối ngày < tối thiểu.
+      // Trường `blocked_minor` cũ không còn được đọc/ghi ở đây (chỉ giữ để đọc-chịu-được dữ liệu cũ).
       await Models.BalanceDaily.updateOne(
         { account_id: accountId, date } as never,
         {
@@ -286,11 +299,11 @@ export async function recomputeAccountBalances(accountIds: string[]): Promise<{ 
             opening_minor: opening,
             closing_minor: closing,
             min_balance_minor: min,
-            breach: closing - blocked < min,
+            breach: closing < min,
             source: 'system',
             updated_at: new Date(),
           },
-          $setOnInsert: { planned_in_minor: 0n, planned_out_minor: 0n, blocked_minor: blocked, version: 1 },
+          $setOnInsert: { planned_in_minor: 0n, planned_out_minor: 0n, version: 1 },
         },
         { upsert: true },
       ).exec();

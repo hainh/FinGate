@@ -13,19 +13,11 @@ import type {
   ApprovalThresholdResult,
   BankAccountDetail,
   BankAccountRow,
-  BankDebtDetail,
-  BankDebtRow,
   CashflowHistoryResult,
-  CounterpartyOption,
-  CounterpartyRow,
   DashboardOverview,
   DecisionPack,
-  DebtVoucherDetail,
-  DebtVoucherRow,
   DocumentDetail,
-  LinkCandidate,
   ListResult,
-  LoanScheduleResult,
   MatrixEntry,
   NeedsAttentionGroup,
   Newsletter,
@@ -66,6 +58,9 @@ export interface DocListFilters {
   status?: string | string[];
   mine?: 'created' | 'to_approve' | 'approved_by_me';
   q?: string;
+  /** [v2] lọc theo đối tác (ID) và tag (phiếu có ÍT NHẤT MỘT tag trong danh sách). */
+  partner_id?: string;
+  tag_ids?: string[];
   sort?: string;
   overdue_only?: 'true';
   missing_evidence?: 'true';
@@ -88,17 +83,6 @@ export function useDocument(id: string | undefined) {
     queryKey: ['document', scope, id],
     enabled: !!id,
     queryFn: () => apiData<DocumentDetail>(`/documents/${id}`),
-  });
-}
-
-/** Gợi ý tên người nhận/khách hàng (distinct payee.name của mọi phiếu trong phạm vi). */
-export function usePayeeNames() {
-  const { scope, can } = useAuth();
-  return useQuery({
-    queryKey: ['payee-names', scope],
-    enabled: can('doc:read'),
-    staleTime: 300_000,
-    queryFn: () => apiCall<{ items: string[] }>('/documents/payees').then((r) => r.items ?? []),
   });
 }
 
@@ -159,7 +143,7 @@ export function useBankAccounts(companyId?: string | null) {
   return useQuery({
     queryKey: ['bank-accounts', scope, companyId ?? null],
     queryFn: () =>
-      apiCall<{ items: BankAccountRow[] }>('/bank-accounts', {
+      apiCall<{ items: BankAccountRow[]; totals?: { balance: import('./types.ts').MoneyWire; projected: import('./types.ts').MoneyWire } }>('/bank-accounts', {
         query: companyId ? { scope, for_company: companyId } : { scope },
       }),
   });
@@ -180,15 +164,6 @@ export function useBalancesHistory(date?: string) {
     queryKey: ['balances-history', scope, date],
     queryFn: () =>
       apiCall<{ items: Record<string, unknown>[] }>('/bank-accounts/balances/history', { query: { scope, date } }),
-  });
-}
-
-/** CHI-02 — gợi ý "Đơn vị nhận tiền" = mọi tài khoản tiền toàn tập đoàn (server chuẩn hoá định dạng). */
-export function usePayeeAccountOptions() {
-  return useQuery({
-    queryKey: ['payee-account-options'],
-    staleTime: 300_000,
-    queryFn: () => apiCall<{ items: import('./types.ts').PayeeAccountOption[] }>('/bank-accounts/payee-options'),
   });
 }
 
@@ -217,23 +192,6 @@ export function useRollovers(bucket?: string) {
   });
 }
 
-export function useBankDebts(status?: string) {
-  const { scope } = useAuth();
-  return useQuery({
-    queryKey: ['bank-debts', scope, status],
-    queryFn: () => apiCall<{ items: BankDebtRow[] }>('/bank-debts', { query: { scope, status } }),
-  });
-}
-
-/** LOAN-04 — lịch nghĩa vụ trả nợ (gốc + lãi + phí). */
-export function useLoanSchedule(id: string | undefined) {
-  return useQuery({
-    queryKey: ['bank-debt-schedule', id],
-    enabled: !!id,
-    queryFn: () => apiData<LoanScheduleResult>(`/bank-debts/${id}/schedule`),
-  });
-}
-
 /** RENEW-05 — tiền cần chuẩn bị cho 30 ngày tới. */
 export function useRolloverPreparation() {
   const { scope } = useAuth();
@@ -252,223 +210,6 @@ export function useRolloverResult(id: string) {
       qc.invalidateQueries({ queryKey: ['document'] });
       qc.invalidateQueries({ queryKey: ['rollovers'] });
       qc.invalidateQueries({ queryKey: ['bank-debt'] });
-    },
-  });
-}
-
-export function useBankDebt(id: string | undefined) {
-  const { scope } = useAuth();
-  return useQuery({
-    queryKey: ['bank-debt', scope, id],
-    enabled: !!id,
-    queryFn: () => apiData<BankDebtDetail>(`/bank-debts/${id}`),
-  });
-}
-
-export function useBankDebtCandidates(id: string | undefined, q?: string) {
-  return useQuery({
-    queryKey: ['bank-debt-candidates', id, q],
-    enabled: !!id,
-    queryFn: () => apiCall<{ items: LinkCandidate[] }>(`/bank-debts/${id}/repayment-candidates`, { query: { q } }),
-  });
-}
-
-export function useCreateBankDebt() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: Record<string, unknown>) => apiData<{ _id: string; code: string }>('/bank-debts', { method: 'POST', body }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['bank-debts'] }),
-  });
-}
-
-/** LOAN-05 — import nợ ngân hàng theo lô từ file .tsv (đã parse ở FE). */
-export function useImportBankDebts() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: { company_id?: string; rows: Record<string, unknown>[] }) =>
-      apiData<{ inserted: number; failed: { row: number; error: string }[]; total_rows: number }>('/bank-debts/import', { method: 'POST', body }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['bank-debts'] });
-      qc.invalidateQueries({ queryKey: ['rollovers'] });
-      qc.invalidateQueries({ queryKey: ['overview'] });
-    },
-  });
-}
-
-export function useUpdateBankDebt(id: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: Record<string, unknown>) => apiData(`/bank-debts/${id}`, { method: 'PATCH', body }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['bank-debt'] });
-      qc.invalidateQueries({ queryKey: ['bank-debts'] });
-      qc.invalidateQueries({ queryKey: ['rollovers'] });
-    },
-  });
-}
-
-export function useDeleteBankDebt() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => apiData(`/bank-debts/${id}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['bank-debts'] });
-      qc.invalidateQueries({ queryKey: ['rollovers'] });
-      qc.invalidateQueries({ queryKey: ['overview'] });
-    },
-  });
-}
-
-export function useRepayBankDebt(id: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: { document_id: string; amount_minor?: string; note?: string }) =>
-      apiData(`/bank-debts/${id}/repayments`, { method: 'POST', body }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['bank-debt'] });
-      qc.invalidateQueries({ queryKey: ['bank-debts'] });
-      qc.invalidateQueries({ queryKey: ['bank-debt-candidates', id] });
-      qc.invalidateQueries({ queryKey: ['rollovers'] });
-      qc.invalidateQueries({ queryKey: ['overview'] });
-    },
-  });
-}
-
-export function useUnrepayBankDebt(id: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (linkId: string) => apiData(`/bank-debts/${id}/repayments/${linkId}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['bank-debt'] });
-      qc.invalidateQueries({ queryKey: ['bank-debts'] });
-      qc.invalidateQueries({ queryKey: ['rollovers'] });
-    },
-  });
-}
-
-export function useDebtVouchers(filter?: Record<string, string | undefined>) {
-  const { scope } = useAuth();
-  return useQuery({
-    queryKey: ['debt-vouchers', scope, filter],
-    queryFn: () => apiCall<ListResult<DebtVoucherRow>>('/debts', { query: { scope, ...filter } }),
-  });
-}
-
-export function useDebtVoucher(id: string | undefined) {
-  const { scope } = useAuth();
-  return useQuery({
-    queryKey: ['debt-voucher', scope, id],
-    enabled: !!id,
-    queryFn: () => apiData<DebtVoucherDetail>(`/debts/${id}`),
-  });
-}
-
-export function useDebtCandidates(id: string | undefined, q?: string) {
-  return useQuery({
-    queryKey: ['debt-candidates', id, q],
-    enabled: !!id,
-    queryFn: () => apiCall<{ items: LinkCandidate[] }>(`/debts/${id}/link-candidates`, { query: { q } }),
-  });
-}
-
-export function useCreateDebtVoucher() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: Record<string, unknown>) => apiData<{ _id: string; code: string }>('/debts', { method: 'POST', body }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['debt-vouchers'] }),
-  });
-}
-
-export function useUpdateDebtVoucher(id: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: Record<string, unknown>) => apiData(`/debts/${id}`, { method: 'PATCH', body }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['debt-voucher'] });
-      qc.invalidateQueries({ queryKey: ['debt-vouchers'] });
-    },
-  });
-}
-
-export function useDeleteDebtVoucher() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => apiData(`/debts/${id}`, { method: 'DELETE' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['debt-vouchers'] }),
-  });
-}
-
-/* ---------------- danh bạ đối tác / khách hàng ---------------- */
-
-export function useCounterparties(q?: string) {
-  return useQuery({
-    queryKey: ['counterparties', q ?? ''],
-    queryFn: () => apiCall<{ items: CounterpartyRow[] }>('/counterparties', { query: { q } }),
-  });
-}
-
-/** Gợi ý cho select box "Khách hàng trả tiền"/"Đơn vị nhận tiền" (đối tác + tài khoản NH). */
-export function useCounterpartyOptions() {
-  return useQuery({
-    queryKey: ['counterparty-options'],
-    staleTime: 300_000,
-    queryFn: () => apiCall<{ items: CounterpartyOption[] }>('/counterparties/options'),
-  });
-}
-
-export function useCreateCounterparty() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: Record<string, unknown>) => apiData<{ _id: string }>('/counterparties', { method: 'POST', body }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['counterparties'] });
-      qc.invalidateQueries({ queryKey: ['counterparty-options'] });
-    },
-  });
-}
-
-export function useUpdateCounterparty(id: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: Record<string, unknown>) => apiData(`/counterparties/${id}`, { method: 'PATCH', body }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['counterparties'] });
-      qc.invalidateQueries({ queryKey: ['counterparty-options'] });
-    },
-  });
-}
-
-export function useDeleteCounterparty() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => apiData(`/counterparties/${id}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['counterparties'] });
-      qc.invalidateQueries({ queryKey: ['counterparty-options'] });
-    },
-  });
-}
-
-export function useLinkDebt(id: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: { document_id: string; amount_minor?: string; note?: string }) => apiData(`/debts/${id}/links`, { method: 'POST', body }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['debt-voucher'] });
-      qc.invalidateQueries({ queryKey: ['debt-vouchers'] });
-      qc.invalidateQueries({ queryKey: ['debt-candidates', id] });
-    },
-  });
-}
-
-export function useUnlinkDebt(id: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (linkId: string) => apiData(`/debts/${id}/links/${linkId}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['debt-voucher'] });
-      qc.invalidateQueries({ queryKey: ['debt-vouchers'] });
-      qc.invalidateQueries({ queryKey: ['debt-candidates', id] });
     },
   });
 }

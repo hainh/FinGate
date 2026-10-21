@@ -15,11 +15,13 @@ import { queueFilterForSla } from './filters.ts';
 import { mirrorAudit, rebuildAudit } from '../domain/audit/index.ts';
 import { sendMail } from '../mail/sender.ts';
 import { evaluateAlerts } from '../domain/alerts/index.ts';
-import { materializeRecurring } from '../domain/recurring/index.ts';
+import { runRecurringTick } from '../domain/recurring/index.ts';
 import { purgeOrphanLedgerEntries, rebuildLedgerAndBalances } from '../domain/rebuild/balances.ts';
 import type { ScopeLike } from '../domain/types.ts';
 import { checkTie } from '../domain/tie/index.ts';
 import { createBackup, pruneBackups } from '../domain/backup/index.ts';
+import { drainAutomation } from '../domain/automation/engine.ts';
+import { dbUp } from '../lib/mongo.ts';
 
 export type TaskName =
   | 'newsletter'
@@ -33,7 +35,8 @@ export type TaskName =
   | 'check-tie'
   | 'archive'
   | 'cleanup'
-  | 'backup';
+  | 'backup'
+  | 'automation';
 
 export interface JobResult {
   task: string;
@@ -95,7 +98,7 @@ export async function runTask(name: TaskName, windowKey?: string): Promise<JobRe
  */
 function defaultWindow(name: TaskName): string {
   const now = new Date();
-  if (name === 'sla-scan' || name === 'alerts' || name === 'reconcile') {
+  if (name === 'sla-scan' || name === 'alerts' || name === 'reconcile' || name === 'automation') {
     return `${now.toISOString().slice(0, 13)}:${String(Math.floor(now.getUTCMinutes() / 15) * 10).padStart(2, '0')}`;
   }
   if (name === 'backup') {
@@ -189,8 +192,15 @@ const DISPATCH: Record<TaskName, () => Promise<Record<string, unknown>>> = {
   /** 8 loại cảnh báo §XVIII — evaluate + dedupe. */
   alerts: async () => evaluateAlerts(),
 
-  /** Khoản chi định kỳ: vật phiếu nháp + nhắc 7/3/1 ngày (§XVII). */
-  recurring: async () => materializeRecurring(),
+  /**
+   * Khoản chi định kỳ: phát sự kiện lịch cho kỳ đến hạn + nhắc 7/3/1 ngày (§XVII). R5 tạo phiếu nháp qua
+   * bộ máy tự động — xử lý ngay trong tác vụ này (không phụ thuộc chu kỳ trong tiến trình).
+   */
+  recurring: async () => {
+    const tick = await runRecurringTick();
+    const automation = await drainAutomation();
+    return { ...tick, automation: automation as unknown as Record<string, unknown> };
+  },
 
   /** CN 01:40 VN: rebuild ledger + balances + check:tie + archive (§13). */
   maintenance: async () => {
@@ -226,7 +236,24 @@ const DISPATCH: Record<TaskName, () => Promise<Record<string, unknown>>> = {
     const pruned = await pruneBackups();
     return { created: created.file, bytes: created.size, pruned: pruned.removed };
   },
+
+  /** v2: xử lý hàng sự kiện nghiệp vụ → quy tắc tự động (cũng chạy định kỳ trong tiến trình — xem startAutomationLoop). */
+  automation: async () => drainAutomation() as unknown as Promise<Record<string, unknown>>,
 };
+
+/**
+ * Chu kỳ xử lý quy tắc tự động TRONG tiến trình (v2 §11.2: "vài giây"). Không dùng claimJob
+ * (một bản ghi job mỗi lần sẽ làm phình collection `jobs`); an toàn chạy song song nhờ lease
+ * và khoá idem ở engine. Bỏ qua khi DB chưa lên. Trả về hàm dừng.
+ */
+export function startAutomationLoop(log: { error: (obj: unknown, msg?: string) => void }, intervalMs = 5_000): () => void {
+  const timer = setInterval(() => {
+    if (!dbUp()) return;
+    drainAutomation().catch((err: unknown) => log.error({ err }, 'tự động: lỗi xử lý sự kiện'));
+  }, intervalMs);
+  timer.unref();
+  return () => clearInterval(timer);
+}
 
 /** Hồ sơ đóng > 24 tháng → NDJSON sang R2 rồi mới xoá (§8.7). */
 async function archiveOldDocuments(): Promise<{ archived: number; bytes: number }> {

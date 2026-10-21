@@ -1,23 +1,24 @@
 /**
  * DASH-01 — Dashboard tổng quan tài chính, 5 tầng (blueprint §XII/§XXVIII).
  *
- * Tầng 01 Exception · 02 KPI · 03 biểu đồ thu-chi · 04 đáo hạn + dòng tiền · 05 hàng chờ của tôi.
- * Số liệu 100% từ `/dashboard/overview` — FE zero logic tiền.
+ * Tầng 01 Exception · 02 KPI · 03 biểu đồ thu-chi · 04 đáo hạn + dư nợ NH · 05 hàng chờ của tôi.
+ * v2 (v2/v2.md §12): thêm top đối tác phải thu / phải trả, khoản vay "Chờ giải ngân",
+ * lượt quy trình tự động lỗi. Số liệu 100% từ `/dashboard/overview` — FE zero logic tiền.
  */
 
 import { Link } from 'react-router';
 import type { ReactNode } from 'react';
-import { moneyFromWire } from '@fingate/shared';
+import { addDays, moneyFromWire, relativeTime, today } from '@fingate/shared';
 import { useOverview, useReport, useRollovers } from '../app/queries.ts';
 import { useAuth } from '../app/store.tsx';
-import { FgButton, FgMoney, FgMoneyStack, FgStatusChip, FgText } from '../components/primitives.tsx';
+import { automationAccess, overdueLabel, useCashflowForecast } from '../app/v2/exec.ts';
+import type { DashboardAutomationWire, DashboardLoansPendingWire, DashboardOverview, MoneyWire, PartnerExposureWire } from '../app/types.ts';
+import { FgAlert, FgButton, FgMoney, FgMoneyStack, FgStatusChip, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgSkeletonKpi, FgSkeletonTable } from '../components/uitk.tsx';
 import { FgExceptionList, FgKpiCard, OwnerLine } from '../components/finance.tsx';
-import { FgAlert } from '../components/primitives.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery } from '../components/pagekit.tsx';
-import { relativeTime } from '@fingate/shared';
 
 /* chart tối giản bằng SVG — không kéo lib plots vào initial bundle (budget 350KB) */
 function MiniBarChart({ chart }: { chart: NonNullable<import('../app/types.ts').ReportResult['chart']> }): ReactNode {
@@ -45,11 +46,190 @@ function MiniBarChart({ chart }: { chart: NonNullable<import('../app/types.ts').
   );
 }
 
+/** Top đối tác phải thu / phải trả (v2 §12) — bấm tên để mở hồ sơ đối tác. */
+function PartnerExposureCard({
+  title,
+  rows,
+  total,
+  overdue,
+  empty,
+}: {
+  title: string;
+  rows: PartnerExposureWire[];
+  total?: MoneyWire | null;
+  overdue?: MoneyWire | null;
+  empty: string;
+}): ReactNode {
+  const overdueMoney = moneyFromWire(overdue);
+  return (
+    <FgCard title={title} extra={<Link to="/doi-tac" className="fg-link" style={{ fontSize: 12 }}>Danh bạ đối tác</Link>}>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 8 }}>
+        <FgText style="caption" color="muted">
+          Còn lại <FgMoney value={moneyFromWire(total)} mode="compact" />
+        </FgText>
+        {overdueMoney && overdueMoney.minor > 0n ? (
+          <FgText style="caption" color="danger">
+            Quá hạn <FgMoney value={overdueMoney} mode="compact" />
+          </FgText>
+        ) : null}
+      </div>
+      {!rows.length ? (
+        <FgText style="bodyS" color="muted">
+          {empty}
+        </FgText>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {rows.map((r) => (
+            <div key={`${r.direction}-${r.partner_id ?? r.partner_name}`} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                {r.partner_id ? (
+                  <Link to={`/doi-tac/${r.partner_id}`} className="fg-link" style={{ fontWeight: 500 }}>
+                    {r.partner_name}
+                  </Link>
+                ) : (
+                  <FgText style="bodyS">{r.partner_name}</FgText>
+                )}
+                <br />
+                <FgText style="caption" color="muted">
+                  {r.count} khoản{BigInt(r.overdue.minor) > 0n ? ` · ${overdueLabel(r.max_overdue_days)}` : ''}
+                </FgText>
+              </div>
+              <FgMoneyStack value={moneyFromWire(r.remaining)} />
+            </div>
+          ))}
+        </div>
+      )}
+    </FgCard>
+  );
+}
+
+/** Dư nợ theo ngân hàng — gộp theo đối tác Ngân hàng (v2: theo ID, không theo tên chữ). */
+function BankDebtCard({ bank }: { bank: DashboardOverview['bank'] }): ReactNode {
+  const rows = bank.by_bank.slice(0, 5);
+  return (
+    <FgCard title="Dư nợ theo ngân hàng" extra={<Link to="/ngan-hang/khoan-vay" className="fg-link" style={{ fontSize: 12 }}>Khoản vay</Link>}>
+      <FgText style="caption" color="muted">
+        Tổng dư nợ <FgMoney value={moneyFromWire(bank.debt_total)} mode="compact" />
+      </FgText>
+      {!rows.length ? (
+        <div style={{ marginTop: 8 }}>
+          <FgEmptyState glyph="✓" tone="success" title="Không có dư nợ ngân hàng" />
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+          {rows.map((b) => (
+            <div key={b.partner_id ?? b.bank_name} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                {b.partner_id ? (
+                  <Link to={`/doi-tac/${b.partner_id}`} className="fg-link" style={{ fontWeight: 500 }}>
+                    {b.bank_name}
+                  </Link>
+                ) : (
+                  <FgText style="bodyS">{b.bank_name}</FgText>
+                )}
+                <br />
+                <FgText style="caption" color="muted">
+                  {b.share_percent}% tổng dư nợ
+                </FgText>
+              </div>
+              <FgMoneyStack value={moneyFromWire(b.outstanding)} />
+            </div>
+          ))}
+        </div>
+      )}
+    </FgCard>
+  );
+}
+
+/** Khoản vay "Chờ giải ngân" — không vào dư nợ, chờ phiếu thu giải ngân thực thi (v2 §10.2). */
+function LoansPendingCard({ data }: { data: DashboardLoansPendingWire | null | undefined }): ReactNode {
+  const count = data?.count ?? 0;
+  return (
+    <FgCard title={`Khoản vay chờ giải ngân${count ? ` (${count})` : ''}`} extra={<Link to="/ngan-hang/khoan-vay" className="fg-link" style={{ fontSize: 12 }}>Tất cả khoản vay</Link>}>
+      {!data || !data.items.length ? (
+        <FgEmptyState glyph="✓" tone="success" title="Không có khoản vay chờ giải ngân" />
+      ) : (
+        <>
+          <FgText style="caption" color="muted">
+            Gốc chờ về <FgMoney value={moneyFromWire(data.total)} mode="compact" /> · không tính vào dư nợ
+          </FgText>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+            {data.items.slice(0, 5).map((l) => (
+              <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <Link to={l.href} className="fg-link" style={{ fontWeight: 500 }}>
+                    {l.code}
+                  </Link>
+                  <br />
+                  <FgText style="caption" color="muted">
+                    {l.partner_name}
+                  </FgText>
+                </div>
+                <FgMoneyStack value={moneyFromWire(l.principal)} />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </FgCard>
+  );
+}
+
+/** Lượt quy trình tự động đang lỗi (v2 §11.2) — KTT xử lý và chạy lại ở màn Tự động hoá. */
+function AutomationFailedCard({ data, canOpen }: { data: DashboardAutomationWire | null | undefined; canOpen: boolean }): ReactNode {
+  const count = data?.failed_count ?? 0;
+  return (
+    <FgCard
+      title={`Quy trình tự động lỗi${count ? ` (${count})` : ''}`}
+      extra={canOpen ? <Link to="/quantri/tu-dong?status=failed" className="fg-link" style={{ fontSize: 12 }}>Lượt chạy</Link> : null}
+    >
+      {!data || !data.items.length ? (
+        <FgEmptyState glyph="✓" tone="success" title="Không có lượt tự động lỗi" description="Các quy tắc đang chạy bình thường." />
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {data.items.slice(0, 5).map((a) => (
+            <div key={a.id} style={{ minWidth: 0 }}>
+              <FgText style="bodyS" strong>
+                {a.rule_code} · {a.rule_name}
+              </FgText>
+              <br />
+              <FgText style="caption" color="muted">
+                {a.company_name}
+                {a.source_code ? ` · ${a.source_code}` : ''}
+                {a.updated_at ? ` · ${relativeTime(a.updated_at)}` : ''}
+              </FgText>
+              {a.error ? (
+                <>
+                  <br />
+                  <FgText style="caption" color="danger">
+                    {a.error}
+                  </FgText>
+                </>
+              ) : null}
+              {a.href ? (
+                <>
+                  {' '}
+                  <Link to={a.href} className="fg-link" style={{ fontSize: 12 }}>
+                    Mở phiếu nguồn
+                  </Link>
+                </>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </FgCard>
+  );
+}
+
 export function DashboardScreen(): ReactNode {
   const { me, can } = useAuth();
   const overview = useOverview();
-  const report = useReport('thu-chi-ngay');
+  // cửa sổ đúng 30 ngày (hôm nay → +29), khớp tiêu đề thẻ
+  const report = useReport('thu-chi-ngay', { from: today(), to: addDays(today(), 29) });
+  const forecast = useCashflowForecast(30);
   const rollovers = useRollovers('30d');
+  const access = automationAccess(can, me?.entitlements.role);
 
   return (
     <FgQuery
@@ -79,11 +259,16 @@ export function DashboardScreen(): ReactNode {
                 </>
               }
               actions={
-                can('approval:act') ? (
-                  <Link to="/cho-toi-duyet">
-                    <FgButton variant="primary">Mở hàng chờ của tôi ({ov.counts.awaiting_me})</FgButton>
+                <>
+                  <Link to="/dong-tien?view=forecast">
+                    <FgButton>Dự báo dòng tiền</FgButton>
                   </Link>
-                ) : null
+                  {can('approval:act') ? (
+                    <Link to="/cho-toi-duyet">
+                      <FgButton variant="primary">Mở hàng chờ của tôi ({ov.counts.awaiting_me})</FgButton>
+                    </Link>
+                  ) : null}
+                </>
               }
             />
 
@@ -132,6 +317,32 @@ export function DashboardScreen(): ReactNode {
                 </FgQuery>
               </FgCard>
 
+              {/* tầng 03b — tóm tắt dự báo 30 ngày (chi tiết ở /dong-tien?view=forecast) */}
+              <FgCard title="Dự báo 30 ngày" extra={<Link to="/dong-tien?view=forecast" className="fg-link" style={{ fontSize: 12 }}>Chi tiết</Link>}>
+                <FgQuery query={forecast} skeleton={<FgSkeletonTable rows={3} cols={2} />}>
+                  {(f) => (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+                      <div>
+                        <FgText style="caption" color="muted">Thu – chi thuần</FgText>
+                        <div><FgMoney value={moneyFromWire(f.totals.net)} mode="compact" /></div>
+                      </div>
+                      <div>
+                        <FgText style="caption" color="muted">Số dư cuối kỳ dự kiến</FgText>
+                        <div><FgMoney value={moneyFromWire(f.totals.end_closing)} mode="compact" /></div>
+                      </div>
+                      <div>
+                        <FgText style="caption" color="muted">Thấp nhất trong kỳ</FgText>
+                        <div><FgMoney value={moneyFromWire(f.totals.min_closing)} mode="compact" /></div>
+                      </div>
+                      <div>
+                        <FgText style="caption" color="muted">Dưới ngưỡng từ</FgText>
+                        <div>{f.first_breach_date ?? 'Không có'}</div>
+                      </div>
+                    </div>
+                  )}
+                </FgQuery>
+              </FgCard>
+
               {/* tầng 04 — đáo hạn 30 ngày */}
               <FgCard
                 title="Đáo hạn 30 ngày tới"
@@ -169,6 +380,22 @@ export function DashboardScreen(): ReactNode {
                   }
                 </FgQuery>
               </FgCard>
+
+              <BankDebtCard bank={ov.bank} />
+            </div>
+
+            {/* tầng 04b — đối tác, khoản vay chờ giải ngân, lượt tự động lỗi (v2 §12) */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 'var(--fg-space-4)', marginTop: 'var(--fg-space-4)' }}>
+              <PartnerExposureCard
+                title="Phải thu theo đối tác"
+                rows={ov.partners?.top_receivable ?? []}
+                total={ov.partners?.receivable_total}
+                overdue={ov.receivable_overdue}
+                empty="Không có khoản phải thu còn dư"
+              />
+              <PartnerExposureCard title="Phải trả theo đối tác" rows={ov.partners?.top_payable ?? []} total={ov.partners?.payable_total} empty="Không có khoản phải trả còn dư" />
+              <LoansPendingCard data={ov.loans_pending} />
+              <AutomationFailedCard data={ov.automation} canOpen={access.view} />
             </div>
 
             {/* tầng 05 — chờ tôi duyệt */}
@@ -210,7 +437,7 @@ export function DashboardScreen(): ReactNode {
             {/*快捷 xem nhanh — counts */}
             <div style={{ display: 'flex', gap: 'var(--fg-space-4)', flexWrap: 'wrap', marginTop: 'var(--fg-space-4)' }}>
               {[
-                { label: 'Công nợ quá hạn', n: ov.counts.overdue_receivable, href: '/cong-no?side=debit&overdue_only=true' },
+                { label: 'Công nợ quá hạn', n: ov.counts.overdue_receivable, href: '/cong-no?direction=receivable&overdue_only=true' },
                 { label: 'Thiếu chứng từ', n: ov.counts.missing_evidence, href: '/can-xu-ly' },
                 { label: 'Đáo hạn 7 ngày', n: ov.counts.maturity_7d_count, href: '/ngan-hang/dao-han?bucket=7d' },
               ].map((c) => (
@@ -225,5 +452,3 @@ export function DashboardScreen(): ReactNode {
     </FgQuery>
   );
 }
-
-/** DASH-05 — xem screens/attention.tsx */

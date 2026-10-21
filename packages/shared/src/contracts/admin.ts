@@ -153,6 +153,9 @@ export const REPORT_PRESETS = [
   'theo-cong-ty',
   'cho-duyet',
   'hs-ketoan',
+  'theo-doi-tac',
+  'theo-tag',
+  'so-chi-tiet-doi-tac',
 ] as const;
 export type ReportPreset = (typeof REPORT_PRESETS)[number];
 
@@ -170,6 +173,9 @@ export const REPORT_LABEL: Record<ReportPreset, string> = {
   'theo-cong-ty': 'So sánh theo công ty',
   'cho-duyet': 'Khoản chờ duyệt',
   'hs-ketoan': 'Hiệu suất phòng kế toán',
+  'theo-doi-tac': 'Theo đối tác',
+  'theo-tag': 'Theo tag',
+  'so-chi-tiet-doi-tac': 'Sổ chi tiết đối tác',
 };
 
 export const reportQuery = z.object({
@@ -180,6 +186,10 @@ export const reportQuery = z.object({
   period: z.enum(['day', 'week', 'month', 'quarter', 'year']).optional(),
   group_by: z.enum(['company', 'department', 'category', 'bank', 'status', 'creator']).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
+  /** v2: lọc theo đối tác (ID) — bắt buộc với `so-chi-tiet-doi-tac`. */
+  partner_id: objectId.optional(),
+  /** v2: lọc theo tag — danh sách ID ngăn cách bằng dấu phẩy. */
+  tag_ids: z.string().max(1000).optional(),
 });
 
 export const reportColumn = z.object({
@@ -291,6 +301,8 @@ export const ALERT_TYPES = [
   'missing_evidence',
   'payment_due',
   'negative_cashflow',
+  'automation_run_failed',
+  'source_cancelled_with_money',
 ] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
 
@@ -303,6 +315,8 @@ export const ALERT_LABEL: Record<AlertType, string> = {
   missing_evidence: 'Hồ sơ thiếu chứng từ',
   payment_due: 'Khoản thanh toán đến hạn',
   negative_cashflow: 'Dòng tiền âm',
+  automation_run_failed: 'Quy trình tự động lỗi',
+  source_cancelled_with_money: 'Phiếu nguồn đã huỷ, đối tượng sinh đã phát sinh tiền',
 };
 
 export const alertRuleUpsertBody = z.object({
@@ -467,6 +481,8 @@ export const TASK_NAMES = [
   'archive',
   'cleanup',
   'backup',
+  /** v2: xử lý hàng sự kiện nghiệp vụ (outbox) → quy tắc tự động. */
+  'automation',
 ] as const;
 export type TaskName = (typeof TASK_NAMES)[number];
 
@@ -480,24 +496,29 @@ export const healthResult = z.object({
 });
 
 /** CHI-08/09 — khoản chi định kỳ (§XVII). */
-export const recurringUpsertBody = z.object({
-  company_id: objectId,
-  title: z.string().min(3).max(200),
-  purpose: z.string().min(3).max(1000),
-  category_id: objectId.nullable().optional(),
-  department_id: objectId.nullable().optional(),
-  payee: z.object({ name: z.string().min(2).max(200), tax_code: z.string().max(20).optional() }),
-  amount: z.object({ amount_minor: z.string().regex(/^\d+$/), currency: z.string().length(3).default('VND') }),
-  source: z.object({ fund: z.enum(['bank', 'cash']), account_id: objectId.nullable() }),
-  cadence: z.enum(['monthly', 'quarterly', 'semi_annual', 'annual', 'weekly']),
-  day_of_period: z.number().int().min(1).max(31).default(1),
-  /** nhắc trước 7/3/1 ngày (§XVII). */
-  remind_days: z.array(z.number().int().min(1).max(60)).default([7, 3, 1]),
-  effective_from: businessDate,
-  effective_to: businessDate.nullable().optional(),
-  auto_create_draft: z.boolean().default(true),
-  status: z.enum(['active', 'paused']).default('active'),
-});
+export const recurringUpsertBody = z
+  .object({
+    company_id: objectId,
+    title: z.string().min(3).max(200),
+    purpose: z.string().min(3).max(1000),
+    category_id: objectId.nullable().optional(),
+    department_id: objectId.nullable().optional(),
+    /**
+     * ★ v2 — BẮT BUỘC: bên nhận là ĐỐI TÁC đã có (v2 §5.2, bỏ nhập tự do). Server kiểm đối tác và lưu `partner_id`.
+     * Trường `payee` của v1 không còn được nhận (zod bỏ qua khoá lạ).
+     */
+    partner_id: objectId,
+    amount: z.object({ amount_minor: z.string().regex(/^\d+$/), currency: z.string().length(3).default('VND') }),
+    source: z.object({ fund: z.enum(['bank', 'cash']), account_id: objectId.nullable() }),
+    cadence: z.enum(['monthly', 'quarterly', 'semi_annual', 'annual', 'weekly']),
+    day_of_period: z.number().int().min(1).max(31).default(1),
+    /** nhắc trước 7/3/1 ngày (§XVII). */
+    remind_days: z.array(z.number().int().min(1).max(60)).default([7, 3, 1]),
+    effective_from: businessDate,
+    effective_to: businessDate.nullable().optional(),
+    auto_create_draft: z.boolean().default(true),
+    status: z.enum(['active', 'paused']).default('active'),
+  });
 
 export const recurringRow = z.object({
   _id: objectId,

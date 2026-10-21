@@ -39,10 +39,14 @@ import { resolveMatrix, type MatrixStep } from './matrix.ts';
 import { DEFAULT_CALENDAR, slaDeadline, type WorkingCalendar } from '../calendar/index.ts';
 import { nextDocumentCode } from '../numbering/index.ts';
 import { notifyNextApprover, rebuildEvidence, syncBalancesForDocument } from '../side-effects.ts';
-import { createAutoIncomeForSpend } from './auto-income.ts';
-import { createAutoBankDebtForIncome } from './auto-bank-debt.ts';
+import { amountLockedByAutomation } from '../automation/locks.ts';
+import { loanExceedsSpend } from '../automation/policy.ts';
+import { AUTOMATION_SESSION_ID } from '../automation/actions/common.ts';
 import { bookedBalance } from '../ledger/index.ts';
+import { actualAmountProblem } from '../vouchers/lifecycle.ts';
 import { assertAccountAllowedForCompany, assertGroupAccountForCompany } from '../accounts.ts';
+import { emitVoucherEvent, type VoucherEventSubject } from '../events/index.ts';
+import { emitLoanSettledAfterPayment } from '../links/index.ts';
 import {
   applyDecision,
   canTransition,
@@ -117,7 +121,12 @@ export async function loadDoc(id: string) {
       priority: 1,
       contract: 1,
       loan_id: 1,
-      create_bank_debt: 1,
+      /* v2 */
+      partner_id: 1,
+      tag_ids: 1,
+      options: 1,
+      transfer_target: 1,
+      origin: 1,
       budget: 1,
       rollover: 1,
       approval: 1,
@@ -279,6 +288,13 @@ export async function submitDocument(input: {
 
   const updated = (result.doc as unknown as DomainDoc).approval.steps;
   void updated;
+  // v2: sự kiện sau khi ghi thành công (outbox, best-effort)
+  await emitVoucherEvent(
+    'voucher.submitted',
+    eventSubjectOf(doc, status, doc.amount.minor),
+    { user_id: actor.user_id, name: actor.name, role: actor.role },
+    { from: doc.status, to: status, action: 'submit', step_order: first?.order ?? null, next_role: first?.role ?? null },
+  );
   await mirrorAudit({
     at: now,
     actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
@@ -315,13 +331,14 @@ function requiredFieldsMissing(doc: DomainDoc): string[] {
   const missing: string[] = [];
   if (!doc.title || doc.title.trim().length < 3) missing.push('title');
   if (!doc.purpose || doc.purpose.trim().length < 3) missing.push('purpose');
-  if (!doc.payee?.name) missing.push('payee');
+  // v2: đối tác theo ID (thu/chi); chuyển nội bộ dùng đích `transfer_target` (không còn `payee` nhập tự do)
+  if ((doc.kind === 'spend' || doc.kind === 'income') && !doc.partner_id) missing.push('partner_id');
   if (!doc.amount?.minor) missing.push('amount');
   if (!doc.planned_date) missing.push('planned_date');
   if (doc.kind !== 'internal' && !doc.source?.account_id && !doc.source?.group_account_id) missing.push('source');
   if (doc.source?.group_managed && !doc.source.group_account_id) missing.push('source.group_account_id');
   if (doc.kind === 'rollover' && !doc.rollover) missing.push('rollover');
-  if (doc.kind === 'internal' && !doc.target?.company_id) missing.push('target');
+  if (doc.kind === 'internal' && !doc.transfer_target?.company_id) missing.push('transfer_target');
   return missing;
 }
 
@@ -417,15 +434,12 @@ async function applyDelegations<T extends StepRow>(steps: T[], companyId: string
   return steps;
 }
 
-/** Số dư khả dụng = Σ sổ cái tính đến hôm nay (closing âm/không) − phong tỏa. */
-async function availableBalanceOf(accountId: string): Promise<bigint> {
-  const rec = await Models.BalanceDaily.findOne({ account_id: accountId, date: { $lte: today() } })
-    .sort({ date: -1 })
-    .select({ blocked_minor: 1 })
-    .lean();
-  const blocked = BigInt((rec?.blocked_minor as bigint | undefined) ?? 0n);
-  const booked = await bookedBalance(accountId, today());
-  return booked - blocked;
+/**
+ * Số dư kiểm soát khi chi = Σ sổ cái tính đến hôm nay.
+ * v2 BỎ "tiền bị phong toả" và "số dư khả dụng" (v2/v2.md — mục số dư): không trừ `blocked_minor` nữa.
+ */
+async function balanceForPaymentOf(accountId: string): Promise<bigint> {
+  return bookedBalance(accountId, today());
 }
 
 async function calendarFor(companyId: string): Promise<WorkingCalendar> {
@@ -489,6 +503,10 @@ export async function transition(input: {
   if (action === 'pay' && !actor.permissions.includes('payment:mark')) {
     throw new ApiError({ code: 'FG-RBAC-001', detail: 'Bạn không có quyền ghi nhận thanh toán' });
   }
+  // v2 §7.2 — đưa phiếu đã duyệt vào hàng thanh toán là việc của kế toán (cùng quyền với thực thi)
+  if (action === 'queue_payment' && !actor.permissions.includes('payment:mark')) {
+    throw new ApiError({ code: 'FG-RBAC-001', detail: 'Bạn không có quyền đưa phiếu vào hàng thanh toán' });
+  }
   if (action === 'cancel' && String(doc.created_by) !== actor.user_id && !actor.permissions.includes('approval:override')) {
     throw new ApiError({ code: 'FG-RBAC-001' });
   }
@@ -514,9 +532,33 @@ export async function transition(input: {
       throw new ApiError({ code: 'FG-VAL-001', detail: 'Số tiền phải lớn hơn 0', errors: { amount_minor: 'Số tiền phải lớn hơn 0' } });
     }
   }
+  // v2 §11.5: R3 (vay ngân hàng để chi) đã chạy ⇒ số tiền phiếu chi đã khoá theo khoản vay/phiếu thu sinh ra.
+  const changesAmount =
+    requestedAmountMinor != null ||
+    (action === 'pay' && body.execution?.actual_amount_minor != null && BigInt(body.execution.actual_amount_minor) !== BigInt(doc.amount.minor));
+  if (doc.kind === 'spend' && changesAmount && (await amountLockedByAutomation(String(doc._id)))) {
+    throw new ApiError({
+      code: 'FG-VAL-001',
+      detail: 'Phiếu chi đã được quy trình vay ngân hàng xử lý — không còn sửa được số tiền',
+      errors: { amount_minor: 'Số tiền đã khoá theo khoản vay' },
+    });
+  }
   const originalAmountMinor = BigInt(doc.amount.minor);
   const resolvedAmount = resolveApprovalAmount(originalAmountMinor, requestedAmountMinor);
   const effectiveAmountMinor = resolvedAmount.amount;
+  // v2 §6.3 / §11.5: phiếu chi vay để chi có SỐ TIỀN VAY RIÊNG (vay một phần) — cấp duyệt không được hạ số tiền chi
+  // xuống dưới số tiền vay (R3 không thể giải ngân quá số đã chi). Muốn hạ thì trả về để KTV hạ số tiền vay trước.
+  const partialLoanMinor = doc.kind === 'spend' && doc.options?.loan?.kind === 'fund' && doc.options.loan.amount_minor != null ? BigInt(String(doc.options.loan.amount_minor)) : null;
+  if (resolvedAmount.changed && isApproval && loanExceedsSpend({ loanMinor: partialLoanMinor, spendMinor: effectiveAmountMinor })) {
+    throw new ApiError({
+      code: 'FG-VAL-001',
+      detail: `Số tiền chi sau duyệt (${formatMoney(money(effectiveAmountMinor, doc.amount.currency), { mode: 'compact' })}) nhỏ hơn số tiền vay (${formatMoney(
+        money(partialLoanMinor ?? 0n, doc.amount.currency),
+        { mode: 'compact' },
+      )}) — trả về để kế toán viên hạ số tiền vay, hoặc giữ nguyên số tiền chi`,
+      errors: { amount_minor: 'Số tiền chi không được nhỏ hơn số tiền vay' },
+    });
+  }
   if (resolvedAmount.increased && body.confirm_amount_minor !== effectiveAmountMinor.toString()) {
     throw new ApiError({
       code: 'FG-WF-007',
@@ -529,7 +571,8 @@ export async function transition(input: {
   }
 
   // 2. step-up verify cho hành động nhạy cảm (§7.2) — mặc định TẮT (APPROVAL_STEP_UP=false)
-  if (requiresStepUp(action) && getEnv().APPROVAL_STEP_UP === 'true') {
+  // phiên của bộ máy tự động không có mật khẩu/OTP để xác thực lại — hành động do quy tắc thực hiện được miễn
+  if (requiresStepUp(action) && getEnv().APPROVAL_STEP_UP === 'true' && actor.session_id !== AUTOMATION_SESSION_ID) {
     await assertStepUp(actor.user_id, body.verify);
   }
 
@@ -555,6 +598,16 @@ export async function transition(input: {
       detail: holder
         ? `Hồ sơ đang ở bước ${holder.order} · ${ROLE_LABEL[holder.role] ?? holder.role}`
         : 'Hồ sơ không còn ở bước nào chờ bạn duyệt',
+    });
+  }
+  // v2 §7.2 — DUYỆT VƯỢT CẤP: bước của mình còn `waiting` trong khi cấp thấp hơn đang `current`.
+  // Chỉ "Duyệt trước" (approve_with_reason, lý do ≥ 5 ký tự do contract kiểm) mới được; `approve` thường chỉ cho bước `current`.
+  const holderStep = steps.find((s) => s.state === 'current');
+  const fastTrack = isDecision && !!myStep && myStep.state !== 'current' && !!holderStep;
+  if (fastTrack && action === 'approve') {
+    throw new ApiError({
+      code: 'FG-WF-002',
+      detail: `Chưa tới lượt cấp của bạn — hồ sơ đang ở bước ${holderStep!.order} · ${ROLE_LABEL[holderStep!.role] ?? holderStep!.role}. Muốn duyệt trước (vượt cấp) hãy chọn "Duyệt trước" và nêu lý do`,
     });
   }
 
@@ -600,18 +653,19 @@ export async function transition(input: {
       steps.map((s) => ({ ...s })),
       myStep.order,
       decision,
+      { fastTrack },
     );
     nextSteps = applied.steps as unknown as StepRow[];
     finished = applied.finished;
     skipped = nextSteps.filter((s) => s.state === 'skipped');
 
-    if (action === 'approve_with_reason') {
-      // fast-track: cấp cao hơn duyệt trước — status vẫn theo cấp thấp nhất chưa duyệt
-      nextStatus = recalcStatusFromSteps(nextSteps as StepState[]);
-      const s = nextSteps.find((x) => x.order === myStep.order);
-      if (s) s.fast_tracked = true;
-    } else if (decision === 'approve') {
+    if (decision === 'approve') {
       nextStatus = finished ? 'approved' : recalcStatusFromSteps(nextSteps as StepState[]);
+      if (fastTrack) {
+        // fast-track: cấp cao hơn duyệt trước — đánh dấu để nhãn "Đã duyệt trước bởi …" hiện đúng
+        const s = nextSteps.find((x) => x.order === myStep.order);
+        if (s) s.fast_tracked = true;
+      }
     } else if (decision === 'reject') {
       nextStatus = 'rejected';
     } else {
@@ -636,22 +690,38 @@ export async function transition(input: {
     const requested = body.execution?.actual_amount_minor ? BigInt(body.execution.actual_amount_minor) : null;
     const accountId = body.execution?.account_id ?? nextAccountId ?? oldAccountId;
     const actual = requested ?? total;
+    // §6.3 / §8 — số thực chi KHÔNG vượt số đã chốt khi duyệt; thấp hơn thì bắt buộc nêu lý do (ghi vào lịch sử)
+    const actualProblem = actualAmountProblem(total, actual, body.reason);
+    if (actualProblem === 'over_approved') {
+      throw new ApiError({
+        code: 'FG-VAL-001',
+        detail: 'Số thực chi không được lớn hơn số tiền đã duyệt',
+        errors: { 'execution.actual_amount_minor': 'Không được chi nhiều hơn số đã duyệt' },
+      });
+    }
+    if (actualProblem === 'short_needs_reason') {
+      throw new ApiError({
+        code: 'FG-WF-004',
+        detail: 'Số thực chi nhỏ hơn số đã duyệt — cần nêu lý do (≥ 5 ký tự)',
+        errors: { reason: 'Cần nêu lý do' },
+      });
+    }
 
     // 4b. số dư tài khoản nguồn — CHỈ chặn ở bước THỰC THI, không chặn khi duyệt.
     if (doc.kind === 'spend' && accountId) {
-      const available = await availableBalanceOf(accountId);
-      if (actual > available) {
+      const balance = await balanceForPaymentOf(accountId);
+      if (actual > balance) {
         const account = await Models.BankAccount.findById(accountId)
           .select({ bank_name: 1, account_number: 1 })
           .lean();
         const label = account ? `${account.bank_name} ${account.account_number ?? ''}`.trim() : 'tài khoản nguồn';
         throw new ApiError({
           code: 'FG-WF-010',
-          detail: `Số dư ${label} không đủ — khả dụng ${formatMoney(money(available, doc.amount.currency), { mode: 'compact' })}, cần ${formatMoney(
+          detail: `Số dư ${label} không đủ — hiện có ${formatMoney(money(balance, doc.amount.currency), { mode: 'compact' })}, cần ${formatMoney(
             money(actual, doc.amount.currency),
             { mode: 'compact' },
           )}`,
-          data: { account_id: accountId, available_minor: available.toString(), amount_minor: actual.toString() },
+          data: { account_id: accountId, balance_minor: balance.toString(), amount_minor: actual.toString() },
         });
       }
     }
@@ -753,8 +823,9 @@ export async function transition(input: {
   if (isDecision) set.sla_deadline = nextStepAfter
     ? nextSteps.find((s) => s.order === nextStepAfter.order)?.sla_deadline ?? null
     : null;
-  if (overriding) set.override = { fast_tracked: doc.override?.fast_tracked ?? action === 'approve_with_reason', reason: body.reason ?? null, by: actor.user_id };
-  else if (action === 'approve_with_reason') set['override.fast_tracked'] = true;
+  const fastApproval = fastTrack && action === 'approve_with_reason';
+  if (overriding) set.override = { fast_tracked: doc.override?.fast_tracked === true || fastApproval, reason: body.reason ?? null, by: actor.user_id };
+  else if (fastApproval) set['override.fast_tracked'] = true;
   if (executionPatch) {
     set.execution = executionPatch;
     if (body.execution?.account_id) set['source.account_id'] = body.execution.account_id;
@@ -772,6 +843,17 @@ export async function transition(input: {
     addToSet: { processed_requests: body.request_id },
   });
   if (!result) throw new ApiError({ code: 'FG-WF-011', detail: 'Hồ sơ vừa được cập nhật bởi người khác' });
+
+  // 6b. v2: sự kiện nghiệp vụ theo chuyển trạng thái (outbox) — sau CAS; không bao giờ làm hỏng nghiệp vụ
+  await emitTransitionEvents({
+    doc,
+    actor,
+    action,
+    to: nextStatus,
+    amountMinor: effectiveAmountMinor,
+    stepOrder: myStep?.order ?? null,
+    nextRole: (nextStepAfter?.role as Role) ?? null,
+  });
 
   // 7. best-effort side effects — lỗi ở đây KHÔNG làm hỏng nghiệp vụ đã commit
   await mirrorAudit({
@@ -808,40 +890,8 @@ export async function transition(input: {
     installmentIndex: 0,
   });
 
-  // 7b. phiếu chi vừa thực thi → nếu "Đơn vị nhận tiền" khớp một tài khoản tiền trong hệ
-  //     thống thì tự sinh phiếu thu tương ứng (đã duyệt bởi người duyệt phiếu chi, tự thực thi).
-  //     Best-effort: lỗi ở đây KHÔNG làm hỏng việc chi đã commit.
-  if (action === 'pay' && doc.kind === 'spend' && executionPatch) {
-    try {
-      await createAutoIncomeForSpend({
-        spend: doc,
-        actor,
-        paidAt: executionPatch.paid_at,
-        amountMinor: executionPatch.actual_amount_minor,
-        requestId: body.request_id,
-        ip: input.ip,
-      });
-    } catch (err) {
-      console.warn('[auto-income] tạo phiếu thu tự động thất bại:', (err as Error).message);
-    }
-  }
-
-  // 7c. phiếu thu vừa thực thi → nếu được lập kèm cờ "tạo phiếu nợ ngân hàng" thì tự
-  //     sinh khoản nợ tương ứng (số tiền vay = số tiền thu, ngân hàng = khách hàng trả tiền).
-  //     Best-effort: lỗi ở đây KHÔNG làm hỏng việc thu đã commit.
-  if (nextStatus === 'paid' && doc.kind === 'income' && executionPatch && doc.create_bank_debt) {
-    try {
-      await createAutoBankDebtForIncome({
-        income: doc,
-        actor,
-        amountMinor: executionPatch.actual_amount_minor,
-        requestId: body.request_id,
-        ip: input.ip,
-      });
-    } catch (err) {
-      console.warn('[auto-bank-debt] tạo phiếu nợ ngân hàng tự động thất bại:', (err as Error).message);
-    }
-  }
+  // 7b/7c (v1: tự sinh phiếu thu khi chuyển nội bộ; tự sinh khoản nợ từ phiếu thu cờ vay) đã chuyển sang
+  //      quy tắc R1 và R2 của bộ máy tự động — được xử lý từ sự kiện `voucher.paid` (sau CAS, best-effort).
 
   // 8. thông báo cho cấp kế tiếp (email không await — arch §6)
   if (isDecision || action === 'pay' || action === 'queue_payment') {
@@ -865,6 +915,75 @@ export async function transition(input: {
     next_user_ids: nextStepAfter?.user_id ? [nextStepAfter.user_id] : [],
     skipped: false,
   };
+}
+
+/* ================================================================== *
+ * Sự kiện nghiệp vụ (outbox) — v2/v2.md §11.2. Không bao giờ ném lỗi.
+ * ================================================================== */
+
+/** Đối tượng phiếu để phát sự kiện: trạng thái + số tiền SAU khi ghi. */
+function eventSubjectOf(doc: DomainDoc, status: StatusKey, amountMinor: bigint): VoucherEventSubject {
+  return {
+    _id: doc._id,
+    company_id: doc.company_id,
+    kind: doc.kind,
+    code: doc.code,
+    status,
+    partner_id: doc.partner_id ?? null,
+    amount: { minor: amountMinor, currency: doc.amount.currency },
+    options: doc.options ?? null,
+  };
+}
+
+/**
+ * Phát sự kiện theo hành động đã ghi thành công:
+ *  - duyệt cuối (`approved`) ⇒ `voucher.approved`; phiếu thu tự thực thi ⇒ thêm `voucher.paid`;
+ *  - duyệt trung gian ⇒ `voucher.step_approved`;
+ *  - từ chối / yêu cầu bổ sung / đưa vào thanh toán / thực thi / huỷ / hết hạn ⇒ sự kiện tương ứng.
+ * Phiếu chi đã thực thi ⇒ kiểm tra khoản vay tất toán (`loan.settled`, best-effort).
+ */
+async function emitTransitionEvents(input: {
+  doc: DomainDoc;
+  actor: ActorInfo;
+  action: Action;
+  to: StatusKey;
+  amountMinor: bigint;
+  stepOrder: number | null;
+  nextRole: Role | null;
+}): Promise<void> {
+  const { doc, actor, action, to } = input;
+  const subject = eventSubjectOf(doc, to, input.amountMinor);
+  const who = { user_id: actor.user_id, name: actor.name, role: actor.role };
+  const extra = { from: doc.status, to, action, step_order: input.stepOrder, next_role: input.nextRole };
+
+  if (action === 'approve' || action === 'approve_with_reason') {
+    if (to === 'approved' || to === 'paid') {
+      await emitVoucherEvent('voucher.approved', subject, who, extra);
+      if (to === 'paid') await emitVoucherEvent('voucher.paid', subject, who, { ...extra, auto_executed: true });
+    } else {
+      await emitVoucherEvent('voucher.step_approved', subject, who, extra);
+    }
+  } else if (action === 'reject') {
+    await emitVoucherEvent('voucher.rejected', subject, who, extra);
+  } else if (action === 'request_changes') {
+    await emitVoucherEvent('voucher.changes_requested', subject, who, extra);
+  } else if (action === 'queue_payment') {
+    await emitVoucherEvent('voucher.queued', subject, who, extra);
+  } else if (action === 'pay') {
+    await emitVoucherEvent('voucher.paid', subject, who, extra);
+  } else if (action === 'cancel') {
+    await emitVoucherEvent('voucher.cancelled', subject, who, extra);
+  } else if (action === 'expire') {
+    await emitVoucherEvent('voucher.expired', subject, who, extra);
+  }
+
+  if (action === 'pay' && doc.kind === 'spend') {
+    try {
+      await emitLoanSettledAfterPayment(String(doc._id), who);
+    } catch (err) {
+      console.warn('[events] không kiểm tra được khoản vay tất toán:', (err as Error).message);
+    }
+  }
 }
 
 /** Re-verify mật khẩu hoặc OTP trước hành động nhạy cảm (ADR-14). */

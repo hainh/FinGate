@@ -31,24 +31,26 @@ export const toastOk = (msg: string): void => {
 /* ---------------- cold-start subscribe ---------------- */
 
 export function useColdStart(): boolean {
-  const [, force] = useState(0);
-  useEffect(() => {
-    const l = () => force((n) => n + 1);
-    coldStart.listeners.add(l);
-    return () => {
-      coldStart.listeners.delete(l);
-    };
-  }, []);
-  // chỉ hiện thông điệp "đang thức dậy" sau 3s thật
   const [slow, setSlow] = useState(false);
   useEffect(() => {
-    if (!coldStart.waking) {
-      setSlow(false);
-      return;
-    }
-    const t = setTimeout(() => setSlow(true), 3000);
-    return () => clearTimeout(t);
-  }, [coldStart.waking, coldStart.startedAt]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // mỗi lần trạng thái đánh thức đổi (coldStart.set ⇒ listeners) thì đặt lại đồng hồ
+    const sync = (): void => {
+      clearTimeout(timer);
+      if (!coldStart.waking) {
+        setSlow(false);
+        return;
+      }
+      // chỉ hiện thông điệp "đang thức dậy" sau 3s thật
+      timer = setTimeout(() => setSlow(true), 3000);
+    };
+    sync();
+    coldStart.listeners.add(sync);
+    return () => {
+      clearTimeout(timer);
+      coldStart.listeners.delete(sync);
+    };
+  }, []);
   return slow;
 }
 

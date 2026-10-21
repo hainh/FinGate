@@ -4,7 +4,10 @@
 
 import { z } from 'zod';
 import { DOC_KINDS, ROLES } from '../status/index.js';
-import { actionEnum, businessDate, businessDateTime, docKind, docVersion, evidenceType, moneyField, moneyWire, objectId, roleEnum, statusKey, uuid } from './common.js';
+import { actionEnum, businessDate, businessDateTime, docKind, docVersion, evidenceType, minorNonNeg, moneyField, moneyWire, objectId, roleEnum, statusKey, uuid } from './common.js';
+import { automationRuleCode, automationRunRow } from './automation.js';
+import { partnerRef } from './partners.js';
+import { linkObjectType, linkRow, linkSplit } from './links.js';
 
 export const priority = z.enum(['low', 'normal', 'high', 'urgent']);
 export type Priority = z.infer<typeof priority>;
@@ -41,6 +44,83 @@ export const budgetField = z.object({
   in_plan: z.boolean().default(true),
 });
 
+/* ------------------------------------------------------------------ *
+ * v2 — đối tác, tag, tuỳ chọn vay, chuyển nội bộ, nguồn gốc (v2/v2.md §5.2, §6.2, §11.4–11.6)
+ * ------------------------------------------------------------------ */
+
+/** Thông tin khoản vay dự kiến gắn trên phiếu (R2 phiếu thu đi vay / R3 phiếu chi vay để chi). */
+export const loanTerms = z.object({
+  contract_no: z.string().max(80).nullable().optional().describe('Số HĐ tín dụng'),
+  interest_rate: z.string().regex(/^\d+([.,]\d{1,4})?$/, 'Lãi suất dạng số').nullable().optional(),
+  term_months: z.coerce.number().int().min(1).max(600).nullable().optional().describe('Kỳ hạn (tháng) — mặc định 12'),
+  due_date: businessDate.nullable().optional().describe('Hạn thanh toán — mặc định giải ngân + 11 tháng'),
+  repayment_period: z.enum(['monthly', 'quarterly', 'semiannual', 'maturity']).nullable().optional(),
+  repayment_method: z.enum(['interest_only', 'equal_principal']).nullable().optional(),
+  collateral: z.string().max(1000).nullable().optional().describe('Tài sản bảo đảm'),
+});
+export type LoanTerms = z.infer<typeof loanTerms>;
+
+/**
+ * `options.loan` — cờ "đi vay" (kind `borrow`, phiếu thu) hoặc "vay để chi" (kind `fund`, phiếu chi).
+ * `mode`: `new` tạo khoản vay mới · `existing` gắn khoản có sẵn · `later` gán sau.
+ */
+export const loanOptions = z
+  .object({
+    kind: z.enum(['borrow', 'fund']),
+    mode: z.enum(['new', 'existing', 'later']).default('later'),
+    lender_partner_id: objectId.nullable().optional().describe('Ngân hàng cho vay — loại Ngân hàng'),
+    receive_account_id: objectId.nullable().optional().describe('TK tiền loại ngân hàng nhận giải ngân'),
+    amount_minor: minorNonNeg.nullable().optional().describe('Số tiền vay — mặc định = số tiền phiếu'),
+    existing_loan_id: objectId.nullable().optional(),
+    terms: loanTerms.nullable().optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.mode !== 'later' && !v.lender_partner_id) {
+      ctx.addIssue({ code: 'custom', path: ['lender_partner_id'], message: 'Chọn ngân hàng cho vay' });
+    }
+    if (v.kind === 'fund' && !v.receive_account_id) {
+      ctx.addIssue({ code: 'custom', path: ['receive_account_id'], message: 'Chọn tài khoản nhận giải ngân của công ty' });
+    }
+    if (v.mode === 'existing' && !v.existing_loan_id) {
+      ctx.addIssue({ code: 'custom', path: ['existing_loan_id'], message: 'Chọn khoản vay đã có' });
+    }
+  });
+export type LoanOptions = z.infer<typeof loanOptions>;
+
+/** Chuyển tiền nội bộ: công ty / tài khoản đích theo ID (v2 §11.6 — không nhận diện theo chuỗi). */
+export const transferTarget = z.object({
+  company_id: objectId,
+  account_id: objectId.nullable().optional(),
+});
+export type TransferTarget = z.infer<typeof transferTarget>;
+
+/** Nguồn gốc hồ sơ: thủ công, hoặc tự động (lượt chạy + quy tắc đã sinh ra). Server ghi, không nhận từ client. */
+export const documentOrigin = z.object({
+  kind: z.enum(['manual', 'automation']),
+  run_id: objectId.nullable().optional(),
+  rule_code: automationRuleCode.nullable().optional(),
+});
+export type DocumentOrigin = z.infer<typeof documentOrigin>;
+
+/**
+ * Liên kết của phiếu (đọc): `direction` cho biết phiếu là đầu nguồn (`out`) hay đầu đích (`in`);
+ * `counterpart` là đối tượng bên kia. Ngoài phạm vi công ty của người xem ⇒ `visible: false`, không lộ mã/số tiền.
+ */
+export const documentLinkItem = linkRow.extend({
+  direction: z.enum(['out', 'in']),
+  counterpart: z.object({
+    type: linkObjectType,
+    id: objectId,
+    code: z.string().nullable(),
+    status: z.string().nullable(),
+    total_minor: minorNonNeg.nullable(),
+    partner_id: objectId.nullable(),
+    partner_name: z.string().nullable(),
+    visible: z.boolean(),
+  }),
+});
+export type DocumentLinkItem = z.infer<typeof documentLinkItem>;
+
 /** Phần tử attachment — bản nhúng trong documents.attachments[] là nguồn sự thật (§8.2). */
 export const attachmentRef = z.object({
   id: objectId,
@@ -64,7 +144,8 @@ const documentFields = z.object({
     title: z.string().min(3).max(200),
     purpose: z.string().min(3).max(2000).describe('Nội dung chi / thu — câu hỏi 3 của 7'),
     category_id: objectId.nullable().optional(),
-    payee: payeeField,
+    /** [v2] KHÔNG còn ghi — đối tác lấy qua `partner_id`; giữ tuỳ chọn để client v1 không vỡ (bị bỏ qua). */
+    payee: payeeField.optional(),
     amount: moneyField,
     fx: z
       .object({
@@ -94,6 +175,8 @@ const documentFields = z.object({
       .object({
         need_amount: moneyField,
         plan: z.string().min(3).max(2000),
+        /** v2 §7.3/§10.3: ngày đáo hạn mới đề xuất (YYYY-MM-DD). */
+        new_maturity_date: businessDate,
         fee_estimate: moneyField.optional(),
         new_rate: z.string().max(20).optional(),
         collateral: z.string().max(1000).optional(),
@@ -103,11 +186,14 @@ const documentFields = z.object({
       .optional(),
     /** mã công nợ liên quan (§V). */
     debt_code: z.string().max(60).optional(),
-    /**
-     * Phiếu thu: khi duyệt & thực thi thì tự tạo một phiếu nợ ngân hàng tương ứng
-     * (số tiền vay = số tiền thu, tên ngân hàng = khách hàng trả tiền).
-     */
-    create_bank_debt: z.boolean().default(false),
+    /** ★ v2 [MỚI]: đối tác theo ID (bắt buộc từ bước migrate M2; tạm tuỳ chọn để không vỡ v1). */
+    partner_id: objectId.nullable().optional().describe('Đối tác (danh bạ công ty) — v2'),
+    /** ★ v2 [MỚI]: tag gắn phiếu (tối đa 50). */
+    tag_ids: z.array(objectId).max(50).optional(),
+    /** ★ v2 [MỚI]: tuỳ chọn tự động — `options.loan`. */
+    options: z.object({ loan: loanOptions.nullable().optional() }).nullable().optional(),
+    /** ★ v2 [MỚI]: chuyển tiền nội bộ theo ID — thay dần `target` (v1). */
+    transfer_target: transferTarget.nullable().optional(),
     evidence_required: z
     .array(evidenceType)
     .optional()
@@ -115,6 +201,10 @@ const documentFields = z.object({
 });
 
 export const documentCreateBody = documentFields.superRefine((v, ctx) => {
+  // [v2] đối tác là trường bắt buộc của phiếu thu/chi (chọn theo ID, không nhập tự do).
+  if ((v.kind === 'spend' || v.kind === 'income') && !v.partner_id) {
+    ctx.addIssue({ code: 'custom', path: ['partner_id'], message: 'Chọn đối tác (bắt buộc với phiếu thu/chi)' });
+  }
   if (v.source.group_managed && !v.source.group_account_id) {
     ctx.addIssue({
       code: 'custom',
@@ -122,8 +212,8 @@ export const documentCreateBody = documentFields.superRefine((v, ctx) => {
       message: 'Giao dịch qua tài khoản Tập đoàn — bắt buộc chọn tài khoản phụ trách',
     });
   }
-  if (v.kind === 'internal' && !v.target) {
-    ctx.addIssue({ code: 'custom', path: ['target'], message: 'Chuyển tiền nội bộ cần chỉ định công ty nhận' });
+  if (v.kind === 'internal' && !v.target && !v.transfer_target) {
+    ctx.addIssue({ code: 'custom', path: ['transfer_target'], message: 'Chuyển tiền nội bộ cần chỉ định công ty nhận' });
   }
   if (v.kind === 'rollover' && !v.rollover) {
     ctx.addIssue({ code: 'custom', path: ['rollover'], message: 'Phương án đảo hạn thiếu thông tin phương án' });
@@ -156,7 +246,11 @@ export const documentListQuery = z.object({
   amount_max: z.string().regex(/^\d+$/).optional(),
   overdue_only: z.enum(['true', 'false']).optional(),
   missing_evidence: z.enum(['true', 'false']).optional(),
-  q: z.string().max(200).optional(),
+  q: z.string().max(200).optional().describe('Tìm theo mã, tiêu đề, tên đối tác (và STK/MST), tên tag'),
+  /** [v2] lọc theo đối tác (ID). */
+  partner_id: objectId.optional(),
+  /** [v2] lọc theo tag: phiếu có ÍT NHẤT MỘT trong các tag — tách bằng dấu phẩy hoặc lặp tham số `tag_ids`. */
+  tag_ids: z.union([z.string().max(1000), z.array(z.string().max(64)).max(50)]).optional(),
   sort: z
     .string()
     .max(60)
@@ -347,6 +441,7 @@ export const documentDetail = z.object({
     .object({
       need_amount: moneyWire,
       plan: z.string(),
+      new_maturity_date: businessDate.nullable().optional(),
       fee_estimate: moneyWire.nullable(),
       new_rate: z.string().nullable(),
       collateral: z.string().nullable(),
@@ -355,6 +450,7 @@ export const documentDetail = z.object({
         .object({
           done_at: businessDate.nullable(),
           new_contract_code: z.string().nullable(),
+          new_maturity_date: businessDate.nullable().optional(),
           new_limit: moneyWire.nullable(),
           new_rate: z.string().nullable(),
           actual_fee: moneyWire.nullable(),
@@ -365,8 +461,22 @@ export const documentDetail = z.object({
     })
     .nullable(),
   debt_code: z.string().nullable(),
-  /** Phiếu thu: đánh dấu tự tạo phiếu nợ ngân hàng khi thực thi. */
-  create_bank_debt: z.boolean().default(false),
+  /** ★ v2: đối tác (chỉ đọc qua ID) + tham chiếu gọn để hiển thị. */
+  partner_id: objectId.nullable().optional(),
+  partner: partnerRef.nullable().optional(),
+  /** ★ v2: tag gắn phiếu. */
+  tag_ids: z.array(objectId).default([]),
+  tags: z.array(z.object({ _id: objectId, name: z.string(), color: z.string() })).optional(),
+  /** ★ v2: tuỳ chọn tự động (vay). */
+  options: z.object({ loan: loanOptions.nullable().optional() }).nullable().optional(),
+  /** ★ v2: chuyển nội bộ theo ID. */
+  transfer_target: transferTarget.nullable().optional(),
+  /** ★ v2: nguồn gốc — thủ công / tự động (quy tắc + lượt chạy). */
+  origin: documentOrigin.optional(),
+  /** ★ v2: liên kết nghiệp vụ hai chiều (đã gỡ vẫn trả về với `status: removed`). */
+  links: z.array(documentLinkItem).optional(),
+  /** ★ v2: lượt quy trình tự động đã chạy cho phiếu này (mới nhất trước). */
+  automation_runs: z.array(automationRunRow).optional(),
   note: z.string().nullable(),
   approval: z.object({
     matrix_id: objectId.nullable(),
@@ -414,6 +524,10 @@ export const documentRow = z.object({
   version: docVersion,
   updated_at: z.string(),
   missing_evidence_count: z.number().int().default(0),
+  /** [v2] đối tác theo ID + tên hiển thị, và tag gọn. */
+  partner_id: objectId.nullable().optional(),
+  partner_name: z.string().nullable().optional(),
+  tags: z.array(z.object({ _id: objectId, name: z.string(), color: z.string() })).optional(),
 });
 
 export type DocumentRow = z.infer<typeof documentRow>;
@@ -513,5 +627,56 @@ export const attachmentRemoveBody = z.object({
   request_id: uuid,
   reason: z.string().trim().max(500).optional(),
 });
+
+/* ------------------------------------------------------------------ *
+ * v2 — tag & liên kết thủ công từ phiếu (v2/v2.md §6.2, §11.2)
+ * ------------------------------------------------------------------ */
+
+/** PATCH /documents/{id}/tags — sửa tag được cả sau khi duyệt (không ảnh hưởng tiền), ghi lịch sử `tags_update`. */
+export const documentTagsBody = z.object({
+  tag_ids: z.array(objectId).max(50),
+  if_match: docVersion,
+  request_id: uuid,
+});
+export type DocumentTagsBody = z.infer<typeof documentTagsBody>;
+
+/**
+ * POST /documents/{id}/links — gán liên kết thủ công từ PHIẾU (quyền `link:manage`):
+ * `offset` → khoản công nợ · `repayment` (phiếu chi) / `disbursement` (phiếu thu) → khoản nợ ngân hàng.
+ * Tách gốc/lãi/phí chỉ dùng cho trả nợ (`repayment`). Quy tắc cấu trúc & sức chứa nằm ở domain/links.
+ */
+export const documentLinkCreateBody = z
+  .object({
+    relation: z.enum(['offset', 'repayment', 'disbursement']),
+    to_type: linkObjectType.optional().describe('Bỏ trống → suy ra từ quan hệ'),
+    to_id: objectId,
+    amount_minor: minorNonNeg.nullable().optional().describe('Số tiền phân bổ; bỏ trống nếu có `split`'),
+    split: linkSplit.nullable().optional(),
+    note: z.string().max(500).nullable().optional(),
+    request_id: uuid.optional(),
+  })
+  .superRefine((v, ctx) => {
+    const expected = v.relation === 'offset' ? 'debt_voucher' : 'bank_debt';
+    if (v.to_type && v.to_type !== expected) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['to_type'],
+        message: v.relation === 'offset' ? 'Cấn trừ chỉ nối tới khoản công nợ' : 'Quan hệ này chỉ nối tới khoản nợ ngân hàng',
+      });
+    }
+    if (v.split && v.relation !== 'repayment') {
+      ctx.addIssue({ code: 'custom', path: ['split'], message: 'Chỉ tách gốc/lãi/phí khi trả nợ ngân hàng' });
+    }
+    if (v.split && v.amount_minor != null) {
+      const sum = BigInt(v.split.principal) + BigInt(v.split.interest) + BigInt(v.split.fee);
+      if (sum !== BigInt(v.amount_minor)) {
+        ctx.addIssue({ code: 'custom', path: ['amount_minor'], message: 'Tổng gốc + lãi + phí phải bằng số tiền phân bổ' });
+      }
+    }
+    if (!v.split && v.amount_minor == null) {
+      ctx.addIssue({ code: 'custom', path: ['amount_minor'], message: 'Nhập số tiền phân bổ' });
+    }
+  });
+export type DocumentLinkCreateBody = z.infer<typeof documentLinkCreateBody>;
 
 export const DOC_KIND_VALUES = DOC_KINDS;

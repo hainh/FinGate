@@ -5,12 +5,14 @@
 
 import { useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { dateTimeLabel, formatMoney, money, moneyFromWire, relativeTime } from '@fingate/shared';
+import { ALERT_LABEL, ALERT_TYPES, dateTimeLabel, formatMoney, moneyFromWire, relativeTime } from '@fingate/shared';
 import { useAlerts, useNeedsAttention, useNewsletter, useNotifications, useSearch, useMarkRead, useUnreadCount } from '../app/queries.ts';
-import type { MoneyWire } from '../app/types.ts';
-import { FgAlert, FgButton, FgText, FgMoneyStack } from '../components/primitives.tsx';
+import { useAuth } from '../app/store.tsx';
+import { useAckAlert } from '../app/v2/exec.ts';
+import type { AlertRow, MoneyWire } from '../app/types.ts';
+import { FgAlert, FgButton, FgSelect, FgText, FgMoneyStack } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
-import { FgEmptyState, FgSkeletonTable } from '../components/uitk.tsx';
+import { FgEmptyState, FgSegmented, FgSkeletonTable } from '../components/uitk.tsx';
 import { FgExceptionList } from '../components/finance.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, toastOk } from '../components/pagekit.tsx';
@@ -272,27 +274,85 @@ export function SearchScreen(): ReactNode {
   );
 }
 
-/* ================= phụ trợ: cảnh báo (alerts → cùng trang Cần xử lý) ================= */
+/* ================= cảnh báo (v2 §12): sự kiện gần nhất, lọc theo loại, đánh dấu đã xử lý ================= */
+
+const alertTone = (t: string): 'danger' | 'warning' | 'attention' => (t === 'danger' || t === 'warning' ? t : 'attention');
 
 export function AlertsScreen(): ReactNode {
+  const { can } = useAuth();
   const query = useAlerts();
+  const ack = useAckAlert();
+  const [state, setState] = useState<'open' | 'all'>('open');
+  const [typeFilter, setTypeFilter] = useState('');
+  // Đánh dấu đã xử lý cần alert:config (server kiểm lại).
+  const canAck = can('alert:config');
   return (
     <>
-      <FgPageHeader title="Cảnh báo hệ thống" />
+      <FgPageHeader title="Cảnh báo" meta="Sự kiện cảnh báo gần nhất (tối đa 50). Loại mới: quy trình tự động lỗi, phiếu nguồn đã huỷ khi đối tượng sinh đã có tiền." />
+      <div className="fg-filterbar" style={{ alignItems: 'center' }}>
+        <FgSegmented value={state} onChange={(v) => setState(v as 'open' | 'all')} options={[{ label: 'Chưa xử lý', value: 'open' }, { label: 'Tất cả', value: 'all' }]} />
+        <div style={{ minWidth: 280 }}>
+          <FgSelect
+            options={[{ value: '', label: 'Tất cả loại cảnh báo' }, ...ALERT_TYPES.map((t) => ({ value: t, label: ALERT_LABEL[t] }))]}
+            value={typeFilter}
+            onChange={(v) => setTypeFilter(v ?? '')}
+            style={{ width: '100%' }}
+            ariaLabel="Lọc theo loại cảnh báo"
+          />
+        </div>
+      </div>
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={3} cols={2} />}>
-        {(data) =>
-          !data.items.length ? (
-            <div className="fg-card">
-              <FgEmptyState glyph="✓" tone="success" title="Không có cảnh báo đang mở" />
-            </div>
-          ) : (
+        {(data) => {
+          const rows: AlertRow[] = data.items.filter((a) => (state === 'open' ? !a.acknowledged_at : true) && (!typeFilter || a.type === typeFilter));
+          if (!rows.length)
+            return (
+              <div className="fg-card">
+                <FgEmptyState glyph="✓" tone="success" title="Không có cảnh báo" description={state === 'open' ? 'Mọi cảnh báo đã được xử lý hoặc không có cảnh báo nào.' : undefined} />
+              </div>
+            );
+          return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {data.items.map((a) => (
-                <FgAlert key={a.id} tone={a.tone as 'danger'} title={a.text} description={a.amount ? formatMoney(money(a.amount as { minor: string }), { mode: 'compact' }) : undefined} />
-              ))}
+              {rows.map((a) => {
+                const amount = a.amount ? moneyFromWire(a.amount) : null;
+                return (
+                  <FgAlert
+                    key={a._id}
+                    tone={alertTone(a.tone)}
+                    title={a.text}
+                    description={
+                      <span>
+                        <FgText style="caption" color="muted">
+                          {a.type_label}
+                          {amount ? ` · ${formatMoney(amount, { mode: 'compact' })}` : ''}
+                          {a.created_at ? ` · ${relativeTime(a.created_at)}` : ''}
+                          {a.acknowledged_at ? ' · đã xử lý' : ''}
+                        </FgText>
+                      </span>
+                    }
+                    action={
+                      <span style={{ display: 'flex', gap: 8 }}>
+                        {a.href ? (
+                          <Link to={a.href}>
+                            <FgButton size="small">Mở</FgButton>
+                          </Link>
+                        ) : null}
+                        {canAck && !a.acknowledged_at ? (
+                          <FgButton
+                            size="small"
+                            loading={ack.isPending && ack.variables === a._id}
+                            onClick={() => ack.mutate(a._id, { onSuccess: () => toastOk('Đã đánh dấu đã xử lý') })}
+                          >
+                            Đã xử lý
+                          </FgButton>
+                        ) : null}
+                      </span>
+                    }
+                  />
+                );
+              })}
             </div>
-          )
-        }
+          );
+        }}
       </FgQuery>
     </>
   );

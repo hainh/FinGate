@@ -171,6 +171,58 @@ export const UI = {
       `${company} có khả năng thiếu ${amount} vào ngày ${date}`,
   },
 
+  /** v2 — đối tác (v2/v2.md §5). Không dùng "nhập tự do" / "chuỗi Tên - NH - STK" nữa. */
+  partner: {
+    title: 'Đối tác',
+    create: 'Tạo đối tác',
+    edit: 'Sửa đối tác',
+    pick: 'Chọn đối tác',
+    pickPlaceholder: 'Tìm theo tên, số tài khoản, MST…',
+    addNew: (name: string) => `+ Tạo đối tác "${name}"`,
+    none: 'Chưa chọn đối tác',
+    duplicateWarning: (what: string) => `Trùng ${what} với đối tác khác trong công ty — vẫn có thể lưu`,
+    duplicateName: 'tên',
+    duplicateBankAccount: 'ngân hàng và số tài khoản',
+    stopHint: 'Đối tác đã có phát sinh nên không xoá được — chỉ ngừng giao dịch',
+    bankOnly: 'Chỉ chọn được đối tác Ngân hàng',
+    copyFrom: 'Sao chép từ công ty khác',
+    historyTitle: 'Lịch sử đối tác',
+  },
+
+  /** v2 — tag (v2/v2.md §6.2). */
+  tag: {
+    title: 'Tag',
+    create: (name: string) => `+ Tạo tag "${name}"`,
+    merge: 'Gộp tag',
+    hide: 'Ẩn tag',
+    hiddenNote: 'Tag đã ẩn không hiện khi gõ tìm, phiếu cũ vẫn giữ tag',
+    separateFromCategory: 'Tag là nhãn tự do (dự án, công trình, đợt…); danh mục quyết định chứng từ và duyệt',
+  },
+
+  /** v2 — liên kết nghiệp vụ (v2/v2.md §11.2). */
+  link: {
+    title: 'Liên kết nghiệp vụ',
+    removed: 'Đã gỡ liên kết',
+    allocated: (amount: string) => `Đã phân bổ ${amount}`,
+    remaining: (amount: string) => `Còn lại ${amount}`,
+    autoBy: (rule: string) => `Tự động · ${rule}`,
+    removeReason: 'Lý do gỡ liên kết',
+    effectiveOnlyWhenPaid: 'Chỉ tính khi phiếu đã thực thi',
+  },
+
+  /** v2 — quy trình tự động (v2/v2.md §11.2, §11.5). */
+  automation: {
+    title: 'Quy trình tự động',
+    rerun: 'Chạy lại',
+    rerunHint: 'Chỉ chạy các bước chưa xong, không tạo trùng',
+    ok: (code: string) => `${code} ✔`,
+    failed: 'Lỗi — cần chạy lại',
+    alertTitle: 'Quy trình tự động lỗi',
+    empty: 'Chưa có quy trình tự động nào cho phiếu này',
+    created: (what: string) => `Đã tạo ${what}`,
+    cancelledWarning: (code: string) => `Đối tượng ${code} đã sinh từ phiếu đã huỷ — cần xử lý thủ công`,
+  },
+
   auth: {
     login: 'Đăng nhập',
     email: 'Email công việc',

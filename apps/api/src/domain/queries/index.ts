@@ -32,6 +32,10 @@ import { oid, scopedAggregate, scopedCount, withScope, type Scope } from '../../
 import { waitingDays } from '../calendar/index.ts';
 import { parseRate, simpleInterest } from '../loan-schedule/index.ts';
 import type { ScopeLike } from '../types.ts';
+import { bookedBalance } from '../ledger/index.ts';
+import { PLANNED_FLOW_STATUSES } from '../ledger/planned.ts';
+import { executedSum } from '../reports/aggregate.ts';
+import { groupSettlements, loadDebtSettlements, loadLoanSettlements } from '../reports/refs.ts';
 
 /** Tiền trên wire: minor là STRING (arch §6). */
 export interface WireAmount {
@@ -106,7 +110,12 @@ export interface QueueRow {
   owner_name: string | null;
   fast_tracked_by: string | null;
   category_name: string | null;
+  /** Tên hiển thị bên nhận/nộp tiền: tên đối tác (v2), hoặc `payee.name` cũ nếu phiếu chưa có đối tác. */
   payee_name: string;
+  /** [v2] đối tác theo ID + tên hiện tại, và tag gọn. */
+  partner_id: string | null;
+  partner_name: string | null;
+  tags: { _id: string; name: string; color: string }[];
   amount: WireAmount;
   compact: string;
   planned_date: string;
@@ -132,6 +141,13 @@ export interface QueueQuery {
   from?: string;
   to?: string;
   q?: string;
+  /** [v2] lọc theo đối tác (ID). */
+  partnerId?: string | null;
+  /** [v2] lọc theo tag: phiếu có ÍT NHẤT MỘT trong các tag. */
+  tagIds?: string[];
+  /** Nội bộ: đối tác / tag khớp ô tìm kiếm `q` (do `queryQueue` nạp trước). */
+  qPartnerIds?: string[];
+  qTagIds?: string[];
   overdueOnly?: boolean;
   missingEvidenceOnly?: boolean;
   sort?: string;
@@ -149,6 +165,8 @@ const LIST_PROJECTION = {
   title: 1,
   category_id: 1,
   payee: 1,
+  partner_id: 1,
+  tag_ids: 1,
   amount: 1,
   planned_date: 1,
   version: 1,
@@ -245,11 +263,36 @@ export function queueFilter(input: QueueQuery): Record<string, unknown> {
       ...(input.to ? { $lte: dayEndOf(input.to) } : {}),
     };
   }
+  if (input.partnerId) filter.partner_id = input.partnerId;
+  if (input.tagIds && input.tagIds.length) filter.tag_ids = { $in: input.tagIds };
   if (input.q) {
     const rx = { $regex: escapeRegex(input.q), $options: 'i' };
-    filter.$or = [{ code: rx }, { title: rx }, { 'payee.name': rx }];
+    // tìm theo mã/tiêu đề; tên đối tác và tên tag đi qua ID khớp (không tìm text `payee.*` nhập tự do nữa)
+    const or: Record<string, unknown>[] = [{ code: rx }, { title: rx }];
+    if (input.qPartnerIds && input.qPartnerIds.length) or.push({ partner_id: { $in: input.qPartnerIds } });
+    if (input.qTagIds && input.qTagIds.length) or.push({ tag_ids: { $in: input.qTagIds } });
+    filter.$or = or;
   }
   return filter;
+}
+
+/**
+ * Đối tác (tên / STK / MST) và tag (tên) khớp ô tìm kiếm, trong phạm vi công ty — để lọc phiếu
+ * theo đối tác/tag mà không cần join. Giới hạn 200 bản ghi mỗi loại.
+ */
+async function searchRefIds(q: string, scope: Scope): Promise<{ qPartnerIds: string[]; qTagIds: string[] }> {
+  const rx = { $regex: escapeRegex(q), $options: 'i' };
+  const [partners, tags] = await Promise.all([
+    Models.Partner.find(withScope(scope, { $or: [{ name: rx }, { account_number: rx }, { tax_code: rx }] }) as never)
+      .select({ _id: 1 })
+      .limit(200)
+      .lean<{ _id: unknown }[]>(),
+    Models.Tag.find(withScope(scope, { name: rx }) as never)
+      .select({ _id: 1 })
+      .limit(200)
+      .lean<{ _id: unknown }[]>(),
+  ]);
+  return { qPartnerIds: partners.map((p) => String(p._id)), qTagIds: tags.map((t) => String(t._id)) };
 }
 
 export function escapeRegex(s: string): string {
@@ -278,7 +321,9 @@ export function sortForQueue(sort?: string): Record<string, 1 | -1> {
 }
 
 export async function queryQueue(input: QueueQuery): Promise<{ items: QueueRow[]; total: number }> {
-  const f = withScope(scopeOf(input.scope), queueFilter(input));
+  const scope = scopeOf(input.scope);
+  const search = input.q ? await searchRefIds(input.q, scope) : {};
+  const f = withScope(scope, queueFilter({ ...input, ...search }));
   const skip = ((input.page ?? 1) - 1) * input.limit;
   const [rows, total] = await Promise.all([
     Models.Document.find(f as never).select(LIST_PROJECTION as never).sort(sortForQueue(input.sort)).skip(skip).limit(input.limit).lean(),
@@ -304,13 +349,25 @@ async function decorateRows(rows: Record<string, unknown>[]): Promise<QueueRow[]
   ].filter(Boolean);
   const catIds = rows.map((r) => r.category_id).filter(Boolean) as string[];
   const depIds = rows.map((r) => r.department_id).filter(Boolean) as string[];
-  const [users, categories, departments] = await Promise.all([
+  // [v2] đối tác & tag: nạp theo ID, cùng công ty của từng dòng
+  const rowCompanies = [...new Set(rows.map((r) => String(r.company_id ?? '')).filter(Boolean))];
+  const partnerIds = [...new Set(rows.map((r) => (r.partner_id ? String(r.partner_id) : '')).filter(Boolean))];
+  const tagIds = [...new Set(rows.flatMap((r) => ((r.tag_ids ?? []) as unknown[]).map(String)))];
+  const [users, categories, departments, partners, tagRows] = await Promise.all([
     userIds.length
       ? Models.User.find({ _id: { $in: userIds } }).select({ display_name: 1, email: 1, status: 1 }).lean()
       : Promise.resolve([]),
     catIds.length ? Models.Category.find({ _id: { $in: catIds } }).select({ name: 1 }).lean() : Promise.resolve([]),
     depIds.length ? Models.Department.find({ _id: { $in: depIds } }).select({ name: 1 }).lean() : Promise.resolve([]),
+    partnerIds.length && rowCompanies.length
+      ? Models.Partner.find({ _id: { $in: partnerIds }, company_id: { $in: rowCompanies } } as never).select({ name: 1 }).lean<{ _id: unknown; name?: string }[]>()
+      : Promise.resolve([] as { _id: unknown; name?: string }[]),
+    tagIds.length && rowCompanies.length
+      ? Models.Tag.find({ _id: { $in: tagIds }, company_id: { $in: rowCompanies } } as never).select({ name: 1, color: 1 }).lean<{ _id: unknown; name?: string; color?: string }[]>()
+      : Promise.resolve([] as { _id: unknown; name?: string; color?: string }[]),
   ]);
+  const pname = new Map(partners.map((p) => [String(p._id), String(p.name ?? '')]));
+  const tagById = new Map(tagRows.map((t) => [String(t._id), { _id: String(t._id), name: String(t.name ?? ''), color: String(t.color ?? '#64748b') }]));
 
   const cname = new Map(companies.map((c) => [String(c._id), String(c.name)]));
   const uname = new Map(
@@ -331,6 +388,8 @@ async function decorateRows(rows: Record<string, unknown>[]): Promise<QueueRow[]
     const evidence = r.evidence as { missing?: string[] } | undefined;
     const sla = r.sla_deadline ? new Date(String(r.sla_deadline)) : null;
     const submitted = r.submitted_at ?? r.created_at;
+    const partnerId = r.partner_id ? String(r.partner_id) : null;
+    const partnerName = partnerId ? (pname.get(partnerId) ?? null) : null;
     return {
       _id: String(r._id),
       code: String(r.code ?? ''),
@@ -354,7 +413,10 @@ async function decorateRows(rows: Record<string, unknown>[]): Promise<QueueRow[]
       owner_name: current?.user_id ? (uname.get(String(current.user_id)) ?? null) : null,
       fast_tracked_by: early.length ? early.join(', ') : null,
       category_name: r.category_id ? (catname.get(String(r.category_id)) ?? null) : null,
-      payee_name: String((r.payee as { name?: string } | undefined)?.name ?? '—'),
+      payee_name: partnerName ?? String((r.payee as { name?: string } | undefined)?.name ?? '—'),
+      partner_id: partnerId,
+      partner_name: partnerName,
+      tags: ((r.tag_ids ?? []) as unknown[]).map(String).map((id) => tagById.get(id)).filter((t): t is { _id: string; name: string; color: string } => Boolean(t)),
       amount,
       compact: compact(asBigInt(amount.minor), amount.currency),
       planned_date: String(r.planned_date ?? ''),
@@ -419,8 +481,6 @@ export interface AccountSnapshot {
   is_group: boolean;
   status: string;
   closing: bigint;
-  blocked: bigint;
-  available: bigint;
   min_balance: bigint;
   breach: boolean;
   stale: boolean;
@@ -465,7 +525,7 @@ export async function accountSnapshots(
   const oidIds = ids.map((i) => oid(i));
   // Số dư hiện có = Σ bút toán thực tế **tính đến hôm nay** (bút toán ngày tương lai không
   // định nghĩa số dư hiện tại). Không lọc company: account_ids đã nằm trong scope rồi.
-  const [ledger, blockedRows] = await Promise.all([
+  const [ledger] = await Promise.all([
     scopedAggregate<{ _id: string; in_minor: unknown; out_minor: unknown; last_date: unknown }>(
       Models.CashEntry,
       { companyIds: null },
@@ -481,20 +541,8 @@ export async function accountSnapshots(
         },
       ],
     ),
-    // `blocked_minor` vẫn lấy từ bản materialize (không thuộc sổ cái); không lọc company
-    // vì account_ids đã trong scope.
-    scopedAggregate<{ _id: string; blocked: unknown }>(
-      Models.BalanceDaily,
-      { companyIds: null },
-      [
-        { $match: { account_id: { $in: oidIds as never } } },
-        { $sort: { date: -1 } },
-        { $group: { _id: '$account_id', blocked: { $first: '$blocked_minor' } } },
-      ],
-    ),
   ]);
   const ledgerBy = new Map(ledger.map((l) => [String(l._id), l]));
-  const blockedBy = new Map(blockedRows.map((l) => [String(l._id), l]));
 
   // TK tập đoàn có company_id = null → lọc rỗng để tránh CastError khi tra tên công ty
   const companyIds = [...new Set(accounts.map((a) => (a.company_id ? String(a.company_id) : '')))].filter(Boolean);
@@ -507,7 +555,6 @@ export async function accountSnapshots(
   return accounts.map((a) => {
     const lrec = ledgerBy.get(String(a._id));
     const closing = asBigInt(lrec?.in_minor) - asBigInt(lrec?.out_minor);
-    const blocked = asBigInt(blockedBy.get(String(a._id))?.blocked ?? 0n);
     const min = asBigInt(a.min_balance_minor ?? 0n);
     const companyId = String(a.company_id ?? '');
     return {
@@ -522,10 +569,8 @@ export async function accountSnapshots(
       is_group: Boolean(a.is_group),
       status: String(a.status ?? 'active'),
       closing,
-      blocked,
-      available: closing - blocked,
       min_balance: min,
-      breach: closing - blocked < min,
+      breach: closing < min,
       // số dư tính trực tiếp từ sổ cái — luôn đồng bộ, không bao giờ "stale"
       stale: false,
       balance_date: lrec?.last_date ? String(lrec.last_date) : null,
@@ -567,7 +612,7 @@ export async function maturityLadder(
       maturity_date: { $lte: addDays(today(), horizon) },
     }) as never,
   )
-    .select({ company_id: 1, bank_name: 1, code: 1, principal_minor: 1, repayment_links: 1, maturity_date: 1, next_due_date: 1, currency: 1, interest_rate: 1 })
+    .select({ company_id: 1, bank_name: 1, code: 1, principal_minor: 1, maturity_date: 1, next_due_date: 1, currency: 1, interest_rate: 1 })
     .sort({ maturity_date: 1 })
     .lean();
 
@@ -576,10 +621,7 @@ export async function maturityLadder(
     .lean();
   const cname = new Map(companies.map((c) => [String(c._id), String(c.name)]));
 
-  const { fetchLinkedDocs, settledFromLinks, linkDocumentIds } = await import('../debt/index.ts');
-  const docMap = await fetchLinkedDocs(
-    loans.flatMap((l) => linkDocumentIds((l as Record<string, unknown>).repayment_links)),
-  );
+  const repaidOf = await settledMapOf('loan', loans.map((l) => String(l._id)), 'principal');
 
   const loanIds = loans.map((l) => String(l._id));
   const rollovers = loanIds.length
@@ -595,7 +637,7 @@ export async function maturityLadder(
     const days = daysUntil(due);
     const band = maturity(days);
     const principal = asBigInt((l as { principal_minor?: unknown }).principal_minor);
-    const repaid = settledFromLinks((l as Record<string, unknown>).repayment_links, docMap);
+    const repaid = repaidOf.get(String(l._id)) ?? 0n;
     const outstanding = principal - repaid > 0n ? principal - repaid : 0n;
     const rate = parseRate((l as { interest_rate?: string }).interest_rate);
     // Lãi dự kiến còn phải trả từ hôm nay tới kỳ đáo hạn kế tiếp (lãi đơn 365 ngày).
@@ -683,29 +725,34 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
   const evidence = (doc.evidence ?? {}) as { required?: string[]; present?: string[]; missing?: string[] };
   const source = (doc.source ?? {}) as { fund?: string; account_id?: string | null; group_account_id?: string | null; group_managed?: boolean };
 
-  const [account, balances, category, department, budget] = await Promise.all([
+  const [account, balanceNow, category, department, budget, partner] = await Promise.all([
     source.account_id
       ? Models.BankAccount.findById(String(source.account_id)).select({ bank_name: 1, account_number: 1, min_balance_minor: 1 }).lean()
       : Promise.resolve(null),
     source.account_id
-      ? Models.BalanceDaily.find({ account_id: String(source.account_id) }).sort({ date: -1 }).limit(1).select({ closing_minor: 1, blocked_minor: 1 }).lean()
-      : Promise.resolve([]),
+      ? bookedBalance(String(source.account_id), today())
+      : Promise.resolve(0n),
     doc.category_id ? Models.Category.findById(String(doc.category_id)).select({ name: 1 }).lean() : Promise.resolve(null),
     doc.department_id ? Models.Department.findById(String(doc.department_id)).select({ name: 1 }).lean() : Promise.resolve(null),
     (doc.budget as { budget_id?: string | null } | undefined)?.budget_id
       ? Models.Budget.findById(String((doc.budget as { budget_id: string }).budget_id)).select({ label: 1, limit_minor: 1, period: 1, period_start: 1 }).lean()
       : Promise.resolve(null),
+    // [v2] đối tác sống theo ID (trong công ty của phiếu)
+    doc.partner_id
+      ? Models.Partner.findOne({ _id: String(doc.partner_id), company_id: String(doc.company_id) } as never)
+          .select({ name: 1, tax_code: 1, bank_name: 1 })
+          .lean<{ name?: string; tax_code?: string | null; bank_name?: string | null } | null>()
+      : Promise.resolve(null),
   ]);
 
-  const available = asBigInt(balances[0]?.closing_minor ?? 0n) - asBigInt(balances[0]?.blocked_minor ?? 0n);
   const minBalance = asBigInt(account?.min_balance_minor ?? 0n);
   // phiếu thu CỘNG tiền, phiếu chi / chuyển nội bộ TRỪ tiền vào tài khoản nguồn
   const isInflow = doc.kind === 'income';
   const delta = isInflow ? minor : -minor;
   // Số dư tại thời điểm TRƯỚC và SAU thực thi: phiếu đã ghi sổ (`paid`) → lấy đúng
   // bút toán trong sổ cái; còn lại → số dư khả dụng hiện tại + dự kiến sau thực thi.
-  let balanceBefore = available;
-  let after = available + delta;
+  let balanceBefore = balanceNow;
+  let after = balanceNow + delta;
   if (doc.status === 'paid' && source.account_id) {
     const around = await balanceAroundExecution(String(source.account_id), String(doc._id));
     if (around) {
@@ -713,8 +760,8 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
       after = around.after;
     } else {
       // chưa có bút toán (đồng bộ sổ cái best-effort lỗi) → suy từ số dư hiện tại
-      balanceBefore = available - delta;
-      after = available;
+      balanceBefore = balanceNow - delta;
+      after = balanceNow;
     }
   }
   const payee = (doc.payee ?? {}) as { name?: string; tax_code?: string | null; is_internal?: boolean; bank_name?: string | null };
@@ -722,15 +769,20 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
   const limit = asBigInt(budget?.limit_minor ?? 0n);
   const used = budget ? await budgetUsed(String(budget._id)) : 0n;
   const approval = (doc.approval ?? {}) as { matrix_label?: string | null };
+  // nội bộ: có đích chuyển (theo ID), hoặc phiếu thu do R1 sinh từ chuyển nội bộ (không còn cờ payee v1)
+  const internal =
+    Boolean((doc.transfer_target as { company_id?: unknown } | null | undefined)?.company_id ?? (doc.target as { company_id?: unknown } | null | undefined)?.company_id) ||
+    (doc.origin as { rule_code?: string | null } | null | undefined)?.rule_code === 'R1' ||
+    Boolean(payee.is_internal);
 
   return {
     document_id: String(doc._id),
     code: String(doc.code ?? ''),
     q1_payee: {
-      name: payee.name ?? '—',
-      tax_code: canReadTax ? (payee.tax_code ?? null) : null,
-      is_internal: Boolean(payee.is_internal),
-      bank: payee.bank_name ?? null,
+      name: partner?.name ? String(partner.name) : (payee.name ?? (internal ? 'Chuyển nội bộ' : '—')),
+      tax_code: canReadTax ? (partner ? (partner.tax_code ?? null) : (payee.tax_code ?? null)) : null,
+      is_internal: internal,
+      bank: partner ? (partner.bank_name ?? null) : (payee.bank_name ?? null),
     },
     q2_amount: { amount, amount_usd: null, fx_rate: (doc.fx as { rate?: string } | undefined)?.rate ?? null },
     q3_purpose: {
@@ -774,7 +826,7 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
 
 async function budgetUsed(budgetId: string): Promise<bigint> {
   const rows = await scopedAggregate<{ total: unknown }>(Models.Document, { companyIds: null }, [
-    { $match: { 'budget.budget_id': oid(budgetId) as never, kind: 'spend', status: { $ne: 'draft' } } },
+    { $match: { 'budget.budget_id': oid(budgetId) as never, kind: 'spend', status: { $in: [...PLANNED_FLOW_STATUSES] } } },
     { $group: { _id: null, total: { $sum: '$amount.minor' } } },
   ]);
   return asBigInt(rows[0]?.total ?? 0n);
@@ -811,7 +863,7 @@ export async function forecast(
       { $group: { _id: '$account_id', closing: { $first: '$closing_minor' } } },
     ]),
     scopedAggregate<{ _id: { date: string; kind: string }; total: unknown }>(Models.Document, scopeOf(scope), [
-      { $match: { planned_date: { $gte: dayStartOf(from), $lte: dayEndOf(to) }, status: { $nin: ['draft', 'rejected', 'cancelled'] } } },
+      { $match: { planned_date: { $gte: dayStartOf(from), $lte: dayEndOf(to) }, status: { $in: [...PLANNED_FLOW_STATUSES] } } },
       { $group: { _id: { date: { $substr: ['$planned_date', 0, 10] }, kind: '$kind' }, total: { $sum: '$amount.minor' } } },
     ]),
     Models.Company.find(scope.companyIds === null ? {} : { _id: { $in: scope.companyIds as never } }).select({ name: 1, min_balance_minor: 1 }).lean(),
@@ -1118,10 +1170,9 @@ async function buildOverview(scope: ScopeLike, userId: string, role?: Role, canP
     Models.Notification.countDocuments({ user_id: userId, read_at: null }).exec(),
   ]);
 
-  const cashAvailable = accounts.reduce((a, x) => a + x.available, 0n);
-  const blocked = accounts.reduce((a, x) => a + x.blocked, 0n);
-  const cashOnHand = accounts.filter((a) => a.kind === 'cash').reduce((a, x) => a + x.available, 0n);
-  const bankMoney = cashAvailable - cashOnHand;
+  const cashTotal = accounts.reduce((a, x) => a + x.closing, 0n);
+  const cashOnHand = accounts.filter((a) => a.kind === 'cash').reduce((a, x) => a + x.closing, 0n);
+  const bankMoney = cashTotal - cashOnHand;
   const debt = await sumOutstanding(scope);
   const matToday = maturities.filter((m) => m.days_to_due <= 0).reduce((a, m) => a + asBigInt(m.outstanding.minor), 0n);
   const mat3 = maturities.filter((m) => m.days_to_due <= 3).reduce((a, m) => a + asBigInt(m.outstanding.minor), 0n);
@@ -1141,22 +1192,6 @@ async function buildOverview(scope: ScopeLike, userId: string, role?: Role, canP
     breachAccounts: accounts.filter((a) => a.breach).slice(0, 3),
   });
 
-  const byBankAgg = new Map<string, bigint>();
-  const loanRows = await Models.BankDebt.find(withScope(scopeOf(scope), { status: { $in: ['active', 'overdue'] } }) as never)
-    .select({ bank_name: 1, principal_minor: 1, repayment_links: 1 })
-    .lean();
-  {
-    const { fetchLinkedDocs: fetchDocs, settledFromLinks: settled, linkDocumentIds: linkIds } = await import('../debt/index.ts');
-    const docMap = await fetchDocs(
-      loanRows.flatMap((l) => linkIds((l as Record<string, unknown>).repayment_links)),
-    );
-    for (const l of loanRows) {
-      const principal = asBigInt((l as { principal_minor?: unknown }).principal_minor);
-      const repaid = settled((l as Record<string, unknown>).repayment_links, docMap);
-      const outstanding = principal - repaid > 0n ? principal - repaid : 0n;
-      byBankAgg.set(String(l.bank_name), (byBankAgg.get(String(l.bank_name)) ?? 0n) + outstanding);
-    }
-  }
 
   return {
     scope: {
@@ -1171,12 +1206,11 @@ async function buildOverview(scope: ScopeLike, userId: string, role?: Role, canP
     kpi: {
       cash_total: {
         label: 'Tổng tiền hiện có',
-        amount: wire(cashAvailable),
-        compact: formatMoney(money(cashAvailable), { mode: 'kpi' }),
+        amount: wire(cashTotal),
+        compact: formatMoney(money(cashTotal), { mode: 'kpi' }),
         breakdown: [
           { label: 'Tiền mặt', amount: wire(cashOnHand), compact: compact(cashOnHand) },
           { label: 'Tiền ngân hàng', amount: wire(bankMoney), compact: compact(bankMoney) },
-          { label: 'Bị hạn chế', amount: wire(blocked), compact: compact(blocked) },
         ],
         delta_percent: null,
         as_of: new Date().toISOString(),
@@ -1212,13 +1246,7 @@ async function buildOverview(scope: ScopeLike, userId: string, role?: Role, canP
       maturity_3d: wire(mat3),
       maturity_7d: wire(mat7),
       maturity_30d: wire(mat30),
-      by_bank: [...byBankAgg.entries()]
-        .sort((a, b) => Number(b[1] - a[1]))
-        .map(([bank_name, outstanding]) => ({
-          bank_name,
-          outstanding: wire(outstanding),
-          share_percent: debt > 0n ? Number((outstanding * 10_000n) / debt) / 100 : 0,
-        })),
+      by_bank: [], // theo đối tác: xem reports/dashboard.ts (bank_by_partner)
     },
     exceptions: exceptions.slice(0, 6),
     awaiting_me_rows: queue.items.map((r) => ({
@@ -1271,8 +1299,8 @@ function buildExceptions(input: {
       tone: 'danger',
       glyph: '⛔',
       text: `${a.label} dưới ngưỡng tối thiểu`,
-      amount: wire(a.available),
-      compact: compact(a.available),
+      amount: wire(a.closing),
+      compact: compact(a.closing),
       href: `/ngan-hang/taikhoan/${a.account_id}`,
       cta: 'Xem',
     });
@@ -1324,25 +1352,34 @@ function buildExceptions(input: {
 
 async function sumByDateAndKind(scope: ScopeLike, kind: DocKind, date: string): Promise<bigint> {
   const rows = await scopedAggregate<{ total: unknown }>(Models.Document, scopeOf(scope), [
-    { $match: { kind, planned_date: { $gte: dayStartOf(date), $lte: dayEndOf(date) }, status: { $ne: 'draft' } } },
+    { $match: { kind, planned_date: { $gte: dayStartOf(date), $lte: dayEndOf(date) }, status: { $in: [...PLANNED_FLOW_STATUSES] } } },
     { $group: { _id: null, total: { $sum: '$amount.minor' } } },
   ]);
   return asBigInt(rows[0]?.total ?? 0n);
 }
 
+/**
+ * Đã cấn trừ (công nợ, `amount`) / đã trả gốc (khoản vay, `principal`) theo đối tượng — chỉ phiếu ĐÃ paid,
+ * đọc `business_links` (v2).
+ */
+async function settledMapOf(kind: 'debt' | 'loan', ids: string[], part: 'amount' | 'principal'): Promise<Map<string, bigint>> {
+  const targets = ids.map((id) => ({ id }));
+  const rows = kind === 'debt' ? await loadDebtSettlements(targets) : await loadLoanSettlements(targets);
+  const out = new Map<string, bigint>();
+  for (const [id, list] of groupSettlements(rows)) out.set(id, executedSum(list, part));
+  return out;
+}
+
 async function overdueReceivable(scope: ScopeLike): Promise<{ count: number; total: bigint }> {
   const rows = await Models.DebtVoucher.find(withScope(scopeOf(scope), { side: 'debit', due_date: { $lt: today() } }) as never)
-    .select({ value_minor: 1, document_links: 1 })
+    .select({ value_minor: 1 })
     .limit(500)
     .lean();
-  const { fetchLinkedDocs, settledFromLinks, linkDocumentIds } = await import('../debt/index.ts');
-  const docMap = await fetchLinkedDocs(
-    rows.flatMap((r) => linkDocumentIds((r as Record<string, unknown>).document_links)),
-  );
+  const settledOf = await settledMapOf('debt', rows.map((r) => String(r._id)), 'amount');
   let count = 0;
   let total = 0n;
   for (const r of rows) {
-    const remaining = asBigInt((r as { value_minor?: unknown }).value_minor) - settledFromLinks((r as Record<string, unknown>).document_links, docMap);
+    const remaining = asBigInt((r as { value_minor?: unknown }).value_minor) - (settledOf.get(String(r._id)) ?? 0n);
     if (remaining > 0n) {
       count += 1;
       total += remaining;
@@ -1353,16 +1390,13 @@ async function overdueReceivable(scope: ScopeLike): Promise<{ count: number; tot
 
 async function sumOutstanding(scope: ScopeLike): Promise<bigint> {
   const debts = await Models.BankDebt.find(withScope(scopeOf(scope), { status: { $in: ['active', 'overdue'] } }) as never)
-    .select({ principal_minor: 1, repayment_links: 1 })
+    .select({ principal_minor: 1 })
     .lean();
-  const { fetchLinkedDocs, settledFromLinks, linkDocumentIds } = await import('../debt/index.ts');
-  const docMap = await fetchLinkedDocs(
-    debts.flatMap((d) => linkDocumentIds((d as Record<string, unknown>).repayment_links)),
-  );
+  const repaidOf = await settledMapOf('loan', debts.map((d) => String(d._id)), 'principal');
   let total = 0n;
   for (const d of debts) {
     const principal = asBigInt((d as { principal_minor?: unknown }).principal_minor);
-    const repaid = settledFromLinks((d as Record<string, unknown>).repayment_links, docMap);
+    const repaid = repaidOf.get(String(d._id)) ?? 0n;
     total += principal - repaid > 0n ? principal - repaid : 0n;
   }
   return total;
@@ -1372,16 +1406,13 @@ async function sumPayableDue(scope: ScopeLike): Promise<bigint> {
   const rows = await Models.DebtVoucher.find(
     withScope(scopeOf(scope), { side: 'credit', due_date: { $lte: addDays(today(), 7) } }) as never,
   )
-    .select({ value_minor: 1, document_links: 1 })
+    .select({ value_minor: 1 })
     .lean();
-  const { fetchLinkedDocs, settledFromLinks, linkDocumentIds } = await import('../debt/index.ts');
-  const docMap = await fetchLinkedDocs(
-    rows.flatMap((d) => linkDocumentIds((d as Record<string, unknown>).document_links)),
-  );
+  const settledOf = await settledMapOf('debt', rows.map((d) => String(d._id)), 'amount');
   let total = 0n;
   for (const d of rows) {
     const value = asBigInt((d as { value_minor?: unknown }).value_minor);
-    const settled = settledFromLinks((d as Record<string, unknown>).document_links, docMap);
+    const settled = settledOf.get(String(d._id)) ?? 0n;
     const remaining = value - settled;
     if (remaining > 0n) total += remaining;
   }

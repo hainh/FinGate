@@ -108,6 +108,72 @@ const offsetLink = new Schema(
 );
 
 /* ------------------------------------------------------------------ *
+ * v2 — sub-schema dùng chung (v2/v2.md §11, §14.2)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Nguồn gốc: thủ công (người gán) hoặc tự động (quy tắc + lượt chạy đã sinh ra). Thiếu trên dữ liệu v1 ⇒ coi là manual.
+ * `source_document_id`: phiếu nguồn đã sinh ra khoản vay / phiếu (R2/R3) — tìm lại đối tượng sinh ra không phụ thuộc liên kết.
+ */
+const originEmbed = new Schema(
+  {
+    kind: { type: String, enum: ['manual', 'automation'], default: 'manual' },
+    run_id: { type: Schema.Types.ObjectId, default: null },
+    rule_code: { type: String, default: null },
+    source_document_id: { type: Schema.Types.ObjectId, default: null },
+  },
+  { _id: false },
+);
+
+/** Điều khoản khoản vay gắn trên phiếu (options.loan.terms). */
+const loanTermsEmbed = new Schema(
+  {
+    contract_no: { type: String, default: null },
+    interest_rate: { type: String, default: null },
+    term_months: { type: Number, default: null },
+    due_date: { type: String, default: null },
+    repayment_period: { type: String, enum: ['monthly', 'quarterly', 'semiannual', 'maturity'], default: null },
+    repayment_method: { type: String, enum: ['interest_only', 'equal_principal'], default: null },
+    collateral: { type: String, default: null },
+  },
+  { _id: false },
+);
+
+/** Tuỳ chọn vay trên phiếu: `borrow` = phiếu thu đi vay (R2) · `fund` = phiếu chi vay để chi (R3). */
+const loanOptionsEmbed = new Schema(
+  {
+    kind: { type: String, enum: ['borrow', 'fund'], required: true },
+    mode: { type: String, enum: ['new', 'existing', 'later'], default: 'later' },
+    lender_partner_id: { type: Schema.Types.ObjectId, default: null },
+    receive_account_id: { type: Schema.Types.ObjectId, default: null },
+    /** minor units; null = lấy số tiền phiếu. */
+    amount_minor: { type: BigInt, default: null },
+    existing_loan_id: { type: Schema.Types.ObjectId, default: null },
+    terms: { type: loanTermsEmbed, default: null },
+  },
+  { _id: false },
+);
+
+/** Chuyển nội bộ theo ID (thay `target` v1 — v2 §11.6). */
+const transferTargetEmbed = new Schema(
+  {
+    company_id: { type: Schema.Types.ObjectId, required: true },
+    account_id: { type: Schema.Types.ObjectId, default: null },
+  },
+  { _id: false },
+);
+
+/** Tách gốc / lãi / phí của liên kết (v2 §10.3). Đơn vị minor units. */
+const linkSplitEmbed = new Schema(
+  {
+    principal: { type: BigInt, default: 0n },
+    interest: { type: BigInt, default: 0n },
+    fee: { type: BigInt, default: 0n },
+  },
+  { _id: false },
+);
+
+/* ------------------------------------------------------------------ *
  * Tổ chức & người dùng
  * ------------------------------------------------------------------ */
 
@@ -352,8 +418,26 @@ export const DocumentSchema = new Schema(
     },
     loan_id: { type: Schema.Types.ObjectId, default: null },
     debt_code: { type: String, default: null },
-    /** Phiếu thu: tự tạo phiếu nợ ngân hàng khi được duyệt & thực thi. */
+    /**
+     * Phiếu thu: tự tạo phiếu nợ ngân hàng khi được duyệt & thực thi.
+     * [v2 — SẼ BỎ] thay bằng `options.loan` (kind borrow) + link disbursement; giữ để chạy song song v1.
+     */
     create_bank_debt: { type: Boolean, default: false },
+    /**
+     * ★ v2: đối tác theo ID (danh bạ công ty). Tạm tuỳ chọn để v1 không vỡ; sau migrate M2
+     * thành bắt buộc. Thay `payee.*` nhập tự do (sẽ bỏ — xem docs/v2-implementation.md).
+     */
+    partner_id: { type: Schema.Types.ObjectId, default: null },
+    /** ★ v2: tag gắn phiếu (thuộc danh bạ tag của công ty). */
+    tag_ids: { type: [Schema.Types.ObjectId], default: [] },
+    /** ★ v2: tuỳ chọn tự động — `options.loan` (cờ đi vay / vay để chi + thông tin khoản vay dự kiến). */
+    options: {
+      loan: { type: loanOptionsEmbed, default: null },
+    },
+    /** ★ v2: chuyển nội bộ theo ID (thay `target` v1 — giữ song song). */
+    transfer_target: { type: transferTargetEmbed, default: null },
+    /** ★ v2: nguồn gốc `manual` / `automation` (+ run_id, rule_code). */
+    origin: { type: originEmbed, default: () => ({ kind: 'manual' }) },
     budget: {
       budget_id: { type: Schema.Types.ObjectId, default: null },
       line_id: { type: Schema.Types.ObjectId, default: null },
@@ -368,11 +452,16 @@ export const DocumentSchema = new Schema(
       new_rate: { type: String, default: null },
       collateral: { type: String, default: null },
       proposal: { type: String, default: null },
+      /** v2 §7.3/§10.3: ngày đáo hạn mới đề xuất (phương án) — YYYY-MM-DD. */
+      new_maturity_date: { type: String, default: null },
       result: {
         type: new Schema(
           {
             done_at: { type: String, default: null },
+            /** Số HĐ tín dụng mới — ghi vào `bank_debts.contract_no` khi cập nhật kết quả. */
             new_contract_code: { type: String, default: null },
+            /** Ngày đáo hạn mới sau khi ngân hàng ký HĐ — ghi vào `bank_debts.maturity_date`. */
+            new_maturity_date: { type: String, default: null },
             new_limit: { type: moneySchema, default: null },
             new_rate: { type: String, default: null },
             actual_fee: { type: moneySchema, default: null },
@@ -606,7 +695,24 @@ export const BankDebtSchema = new Schema(
     /** Hạn thanh toán. */
     maturity_date: { type: String, required: true },
     next_due_date: { type: String, default: null },
-    status: { type: String, enum: ['active', 'overdue', 'settled', 'archived'], default: 'active' },
+    /** v2 §10.1: số HĐ tín dụng (cập nhật khi đảo hạn). */
+    contract_no: { type: String, default: null },
+    /** v2 §10.1: tài sản đảm bảo (mô tả). */
+    collateral: { type: String, default: null },
+    /** v2 §10.1: người phụ trách khoản vay (tên, tự do). */
+    responsible: { type: String, default: null },
+    /** v2: + `pending_disbursement` (chờ giải ngân, không tính dư nợ) + `cancelled` (phiếu giải ngân bị huỷ). */
+    status: {
+      type: String,
+      enum: ['pending_disbursement', 'active', 'overdue', 'settled', 'archived', 'cancelled'],
+      default: 'active',
+    },
+    /** ★ v2: ngân hàng cho vay theo ID (loại Ngân hàng). `bank_name` v1 giữ tạm. */
+    partner_id: { type: Schema.Types.ObjectId, default: null },
+    /** ★ v2: thời điểm giải ngân thực tế (= lúc phiếu thu giải ngân được thực thi). */
+    disbursed_at: { type: Date, default: null },
+    /** ★ v2: nguồn gốc `manual` / `automation` (thay `auto_source_document_id` — v1 giữ song song). */
+    origin: { type: originEmbed, default: () => ({ kind: 'manual' }) },
     attachments: { type: [attachmentEmbed], default: [] },
     /** Phiếu chi được gán để đánh dấu đã trả nợ. */
     repayment_links: { type: [offsetLink], default: [] },
@@ -631,7 +737,8 @@ BankDebtSchema.index({ 'repayment_links.document_id': 1 });
 /**
  * Phiếu công nợ (thay `debt_items` cũ) — theo chuẩn kế toán VN:
  *   KH = 131, NCC = 331, NV = 334; bút toán Nợ/Có chọn tự do (2 chiều).
- * Số đã cấn trừ KHÔNG lưu: suy ra từ `document_links` khi phiếu thu/chi ở trạng thái `paid`.
+ * Số đã cấn trừ KHÔNG lưu: suy ra từ `business_links` (relation `offset`) khi phiếu thu/chi ở trạng thái `paid`.
+ * `document_links` (v1 nhúng) chỉ còn để migration 0004 đọc; bỏ hẳn ở migration 0005.
  */
 export const DebtVoucherSchema = new Schema(
   {
@@ -647,8 +754,15 @@ export const DebtVoucherSchema = new Schema(
     party_bank_name: { type: String, default: null },
     /** STK của công ty đối tác. */
     party_bank_account: { type: String, default: null },
-    /** liên kết danh bạ đối tác (đồng bộ định danh — mục tiêu phụ). */
+    /** liên kết danh bạ đối tác (đồng bộ định danh — mục tiêu phụ). [v2 — SẼ BỎ sau migrate] */
     counterparty_id: { type: Schema.Types.ObjectId, default: null },
+    /** ★ v2: đối tác KH/NCC theo ID (danh bạ `partners`). Tạm tuỳ chọn; bắt buộc sau migrate M2. */
+    partner_id: { type: Schema.Types.ObjectId, default: null },
+    /**
+     * ★ v2: hướng khoản — độc lập với loại đối tác (v2 §9.1). `null` = dữ liệu v1 chưa migrate
+     * (migrate M3b: side=debit → receivable, side=credit → payable).
+     */
+    direction: { type: String, enum: ['receivable', 'payable'], default: null },
     /** mã tài khoản kế toán — suy ra từ `party_type`. */
     account_code: { type: String, enum: ['131', '331', '334'], required: true },
     /** Nợ (debit) / Có (credit). */
@@ -673,43 +787,6 @@ export const DebtVoucherSchema = new Schema(
 DebtVoucherSchema.index({ company_id: 1, party_type: 1, side: 1, due_date: 1 });
 DebtVoucherSchema.index({ company_id: 1, party_code: 1 });
 DebtVoucherSchema.index({ 'document_links.document_id': 1 });
-
-/**
- * Danh bạ Đối tác / Khách hàng — DÙNG CHUNG toàn tập đoàn.
- *
- * Khoá đối tác = `name_key` (tên công ty chuẩn hoá: gộp khoảng trắng + lowercase).
- * Khoá tài khoản ngân hàng = `account_number` (doc con trong `banks[]`).
- * Việc chống trùng khi quét phiếu thu/chi làm ở tầng ứng dụng (không dùng unique
- * index trên `banks.account_number`) để một số tài khoản dùng cho 2 công ty khác
- * nhau không bị chặn.
- */
-const counterpartyBankEmbed = new Schema(
-  {
-    bank_name: { type: String, required: true },
-    account_number: { type: String, required: true },
-    branch: { type: String, default: null },
-    account_name: { type: String, default: null },
-    created_at: { type: Date, default: () => new Date() },
-  },
-  { _id: true },
-);
-
-export const CounterpartySchema = new Schema(
-  {
-    name: { type: String, required: true },
-    /** tên chuẩn hoá (gộp khoảng trắng + lowercase) — khoá chống trùng. */
-    name_key: { type: String, required: true },
-    /** nhiều tài khoản ngân hàng của đối tác. */
-    banks: { type: [counterpartyBankEmbed], default: [] },
-    note: { type: String, default: null },
-    created_by: { type: Schema.Types.ObjectId, default: null },
-    created_at: { type: Date, default: () => new Date() },
-    updated_at: { type: Date, default: () => new Date() },
-  },
-  { collection: 'counterparties', versionKey: false },
-);
-CounterpartySchema.index({ name_key: 1 }, { unique: true });
-CounterpartySchema.index({ 'banks.account_number': 1 });
 
 export const BudgetSchema = new Schema(
   {
@@ -781,7 +858,10 @@ export const RecurringRuleSchema = new Schema(
     purpose: { type: String, default: null },
     category_id: { type: Schema.Types.ObjectId, default: null },
     department_id: { type: Schema.Types.ObjectId, default: null },
+    /** [v2 — SẼ BỎ] tên người nhận nhập tự do; thay bằng `partner_id`. */
     payee: { name: String, tax_code: { type: String, default: null } },
+    /** ★ v2: người nhận theo ID đối tác (danh bạ công ty). */
+    partner_id: { type: Schema.Types.ObjectId, default: null },
     amount_minor: { type: BigInt, default: 0n },
     currency: { type: String, default: 'VND' },
     source: { fund: { type: String, default: 'bank' }, account_id: { type: Schema.Types.ObjectId, default: null } },
@@ -800,6 +880,215 @@ export const RecurringRuleSchema = new Schema(
   { collection: 'recurring_rules', versionKey: false },
 );
 RecurringRuleSchema.index({ company_id: 1, status: 1 });
+
+/* ------------------------------------------------------------------ *
+ * v2 — Đối tác · Tag · Liên kết · Sự kiện · Quy tắc tự động (v2/v2.md §14.1–14.2)
+ * Index của các collection này khai báo TẬP TRUNG ở db/indexes.ts (không khai báo tại schema).
+ * ------------------------------------------------------------------ */
+
+const partnerHistoryEntry = new Schema(
+  {
+    at: { type: Date, required: true },
+    actor: {
+      user_id: { type: Schema.Types.ObjectId, default: null },
+      name: { type: String, default: null },
+    },
+    /** `{ field: { from, to } }` — chỉ ghi các trường thực sự đổi (v2 §5.1). */
+    changes: { type: Schema.Types.Mixed, default: {} },
+  },
+  { _id: false },
+);
+
+/** Danh bạ đối tác THEO CÔNG TY (v2 §5.1). Định danh = `_id` / `code`; tên, NH, STK, MST chỉ hiển thị. */
+export const PartnerSchema = new Schema(
+  {
+    company_id: { type: Schema.Types.ObjectId, required: true },
+    /** mã tự sinh `DT-2026-00001` — unique toàn hệ thống (db/indexes.ts). */
+    code: { type: String, required: true },
+    type: { type: String, enum: ['bank', 'customer', 'supplier'], required: true },
+    status: { type: String, enum: ['active', 'inactive'], default: 'active' },
+    name: { type: String, required: true },
+    /** tên chuẩn hoá (`normalizeNameKey`) — chỉ để CẢNH BÁO trùng, KHÔNG unique. */
+    name_key: { type: String, required: true },
+    bank_name: { type: String, default: null },
+    account_number: { type: String, default: null },
+    tax_code: { type: String, default: null },
+    note: { type: String, default: null },
+    /** lịch sử sửa — chỉ thêm (ai, khi nào, trước → sau). */
+    history: { type: [partnerHistoryEntry], default: [] },
+    created_by: { type: Schema.Types.ObjectId, default: null },
+    created_at: { type: Date, default: () => new Date() },
+    updated_at: { type: Date, default: () => new Date() },
+  },
+  { collection: 'partners', versionKey: false },
+);
+
+/** Tag theo công ty (v2 §6.2). Chống trùng theo `name_key` (unique (company_id, name_key)). */
+export const TagSchema = new Schema(
+  {
+    company_id: { type: Schema.Types.ObjectId, required: true },
+    name: { type: String, required: true },
+    name_key: { type: String, required: true },
+    color: { type: String, default: '#64748b' },
+    hidden: { type: Boolean, default: false },
+    created_by: { type: Schema.Types.ObjectId, default: null },
+    created_at: { type: Date, default: () => new Date() },
+    updated_at: { type: Date, default: () => new Date() },
+  },
+  { collection: 'tags', versionKey: false },
+);
+
+/**
+ * Liên kết nghiệp vụ — một bảng cho mọi quan hệ giữa hai đối tượng (v2 §11.2, §14.1).
+ * Gỡ = `status: 'removed'` (không xoá). Chỉ tiêu đã cấn trừ / dư nợ KHÔNG lưu ở đây.
+ */
+export const BusinessLinkSchema = new Schema(
+  {
+    company_id: { type: Schema.Types.ObjectId, required: true },
+    from_type: { type: String, enum: ['document', 'debt_voucher', 'bank_debt'], required: true },
+    from_id: { type: Schema.Types.ObjectId, required: true },
+    to_type: { type: String, enum: ['document', 'debt_voucher', 'bank_debt'], required: true },
+    to_id: { type: Schema.Types.ObjectId, required: true },
+    relation: {
+      type: String,
+      enum: ['offset', 'repayment', 'disbursement', 'funded_by', 'generated', 'internal_transfer'],
+      required: true,
+    },
+    /** số tiền phân bổ (minor units); null khi quan hệ không có tiền (generated, internal_transfer). */
+    amount_minor: { type: BigInt, default: null },
+    /** tách gốc / lãi / phí; null nếu không tách. Khi có: tổng = amount_minor. */
+    split: { type: linkSplitEmbed, default: null },
+    origin: { type: String, enum: ['manual', 'automation'], default: 'manual' },
+    run_id: { type: Schema.Types.ObjectId, default: null },
+    rule_code: { type: String, default: null },
+    status: { type: String, enum: ['active', 'removed'], default: 'active' },
+    note: { type: String, default: null },
+    created_by: { type: Schema.Types.ObjectId, default: null },
+    created_at: { type: Date, default: () => new Date() },
+    removed_by: { type: Schema.Types.ObjectId, default: null },
+    removed_at: { type: Date, default: null },
+    removed_reason: { type: String, default: null },
+  },
+  { collection: 'business_links', versionKey: false },
+);
+
+/**
+ * Outbox sự kiện nghiệp vụ (v2 §11.2): ghi CÙNG LÚC với đổi trạng thái (best-effort, không
+ * transaction — ADR-03); tiến trình tự động đọc theo `processed_at: null` và nhận bằng lease `claimed_at`.
+ */
+export const DomainEventSchema = new Schema(
+  {
+    type: { type: String, required: true },
+    company_id: { type: Schema.Types.ObjectId, default: null },
+    subject_type: { type: String, required: true },
+    subject_id: { type: Schema.Types.ObjectId, default: null },
+    /** dữ liệu sự kiện — số tiền luôn là CHUỖI minor units (không lưu BigInt trong Mixed). */
+    payload: { type: Schema.Types.Mixed, default: {} },
+    actor: {
+      user_id: { type: Schema.Types.ObjectId, default: null },
+      name: { type: String, default: null },
+      role: { type: String, default: null },
+    },
+    created_at: { type: Date, default: () => new Date() },
+    /** null = chưa xử lý. TTL 30 ngày sau khi xử lý (db/indexes.ts). */
+    processed_at: { type: Date, default: null },
+    /** lease: tiến trình đang xử lý sự kiện; quá hạn lease thì tiến trình khác được nhận. */
+    claimed_at: { type: Date, default: null },
+    attempts: { type: Number, default: 0 },
+    last_error: { type: String, default: null },
+  },
+  { collection: 'domain_events', versionKey: false },
+);
+
+/** Ghi đè theo công ty: bật/tắt riêng và tham số riêng (v2 §11.2 (2), US-AUTO-07). */
+const automationCompanyOverrideEmbed = new Schema(
+  {
+    company_id: { type: Schema.Types.ObjectId, required: true },
+    enabled: { type: Boolean, default: true },
+    params: { type: Schema.Types.Mixed, default: {} },
+  },
+  { _id: false },
+);
+
+/** Quy tắc tự động (v2 §11.2 (2), §14.2). `company_ids` rỗng = mọi công ty. */
+export const AutomationRuleSchema = new Schema(
+  {
+    /** R1..R6 (unique — db/indexes.ts). */
+    code: { type: String, required: true },
+    name: { type: String, required: true },
+    /** sự kiện kích hoạt chính (VD `voucher.approved`). */
+    trigger_event: { type: String, required: true },
+    /** các sự kiện kích hoạt bổ sung (một quy tắc có thể nghe nhiều sự kiện). */
+    trigger_events: { type: [String], default: [] },
+    /** điều kiện: `{ "payload.kind": "spend", "payload.loan_kind": "fund" }` — xem engine.matchCondition. */
+    condition: { type: Schema.Types.Mixed, default: {} },
+    /** tên các bước theo thứ tự (hiển thị; bộ xử lý đăng ký trong code là nguồn thực thi). */
+    steps: { type: [String], default: [] },
+    /** tham số mặc định (VD term_months, due_offset_months, r2_create_at). */
+    params: { type: Schema.Types.Mixed, default: {} },
+    company_overrides: { type: [automationCompanyOverrideEmbed], default: [] },
+    company_ids: { type: [Schema.Types.ObjectId], default: [] },
+    enabled: { type: Boolean, default: true },
+    created_at: { type: Date, default: () => new Date() },
+    updated_at: { type: Date, default: () => new Date() },
+  },
+  { collection: 'automation_rules', versionKey: false },
+);
+
+const automationRunStepEmbed = new Schema(
+  {
+    name: { type: String, required: true },
+    status: { type: String, enum: ['pending', 'done', 'failed', 'skipped'], default: 'pending' },
+    output_type: { type: String, default: null },
+    output_id: { type: String, default: null },
+    error: { type: String, default: null },
+    at: { type: Date, default: null },
+  },
+  { _id: false },
+);
+
+/** Lượt chạy một quy tắc cho một đối tượng nguồn (v2 §11.2 (3)). `idem_key` unique (db/indexes.ts). */
+export const AutomationRunSchema = new Schema(
+  {
+    rule_id: { type: Schema.Types.ObjectId, required: true },
+    rule_code: { type: String, required: true },
+    company_id: { type: Schema.Types.ObjectId, default: null },
+    source_type: { type: String, required: true },
+    source_id: { type: Schema.Types.ObjectId, required: true },
+    event_id: { type: Schema.Types.ObjectId, default: null },
+    event_type: { type: String, required: true },
+    /** khoá idempotency = `${rule_code}:${source_id}:${event_type}`. */
+    idem_key: { type: String, required: true },
+    status: { type: String, enum: ['pending', 'running', 'done', 'failed'], default: 'pending' },
+    steps: { type: [automationRunStepEmbed], default: [] },
+    error: { type: String, default: null },
+    attempts: { type: Number, default: 0 },
+    /** lease của tiến trình đang chạy lượt này. */
+    claimed_at: { type: Date, default: null },
+    created_at: { type: Date, default: () => new Date() },
+    updated_at: { type: Date, default: () => new Date() },
+  },
+  { collection: 'automation_runs', versionKey: false },
+);
+
+/**
+ * Khoá chống ghi đúp theo `request_id` (đối tác: tạo / sao chép / trả nợ). `_id` = khoá chuỗi duy nhất
+ * (vd `partner.settle:<company>:<partner>:<request_id>`) ⇒ chỉ một lượt thắng khi chạy song song.
+ * Hết hạn sau 7 ngày (TTL, db/indexes.ts). Không lưu dữ liệu nghiệp vụ — chỉ kết quả để trả lại khi replay.
+ */
+export const RequestClaimSchema = new Schema(
+  {
+    _id: String,
+    kind: { type: String, required: true },
+    company_id: { type: Schema.Types.ObjectId, default: null },
+    status: { type: String, enum: ['pending', 'done'], default: 'pending' },
+    /** kết quả đã ghi (khi `done`): dùng để replay đúng kết quả lần đầu. */
+    result: { type: Schema.Types.Mixed, default: null },
+    created_at: { type: Date, default: () => new Date() },
+    updated_at: { type: Date, default: () => new Date() },
+  },
+  { collection: 'request_claims', versionKey: false },
+);
 
 /* ------------------------------------------------------------------ *
  * Cảnh báo · thông báo · audit · jobs · settings
@@ -955,7 +1244,6 @@ export const Models = {
   BankTransaction: model('BankTransaction', BankTransactionSchema),
   BankDebt: model('BankDebt', BankDebtSchema),
   DebtVoucher: model('DebtVoucher', DebtVoucherSchema),
-  Counterparty: model('Counterparty', CounterpartySchema),
   Budget: model('Budget', BudgetSchema),
   BudgetLine: model('BudgetLine', BudgetLineSchema),
   Category: model('Category', CategorySchema),
@@ -966,6 +1254,14 @@ export const Models = {
   Job: model('Job', JobSchema),
   Setting: model('Setting', SettingSchema),
   Counter: model('Counter', CounterSchema),
+  /* v2 */
+  Partner: model('Partner', PartnerSchema),
+  Tag: model('Tag', TagSchema),
+  BusinessLink: model('BusinessLink', BusinessLinkSchema),
+  DomainEvent: model('DomainEvent', DomainEventSchema),
+  AutomationRule: model('AutomationRule', AutomationRuleSchema),
+  AutomationRun: model('AutomationRun', AutomationRunSchema),
+  RequestClaim: model('RequestClaim', RequestClaimSchema),
 } as const;
 
 export type ModelsKey = keyof typeof Models;

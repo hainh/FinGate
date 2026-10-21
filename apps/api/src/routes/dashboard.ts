@@ -1,28 +1,134 @@
 /**
- * Nhóm route điều hành: DASH-01 · DASH-03/04 (bản tin) · CASH-01 (lịch sử dòng tiền) ·
- * RPT-00→13 (báo cáo) · NOTI-01 · SRCH-02.
+ * Nhóm route điều hành: DASH-01 · DASH-03/04 (bản tin) · CASH-01 (lịch sử & dự báo dòng tiền) ·
+ * RPT-00→16 (báo cáo) · NOTI-01 · SRCH-02.
  *
  * Dashboard là MỘT endpoint gộp (`Promise.all`, query có index) + `max-age=15` + ETag
  * — cơ chế chính để nền 0.1 CPU không bị đánh sập khi 20 người cùng mở (§8.3, §14).
+ *
+ * v2: `/dashboard/overview` lấy bản cache của `dashboardOverview` rồi GHI ĐÈ bằng số liệu sổ cái
+ * và phần bổ sung (top đối tác, khoản vay chờ giải ngân, lượt tự động lỗi) — không sửa bản cache.
  */
 
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import {
   ALERT_LABEL,
   ApiError,
   REPORT_LABEL,
   REPORT_PRESETS,
+  formatMoney,
+  money,
   today,
   type Permission,
 } from '@fingate/shared';
 import { Models } from '../db/models.ts';
 import { defineRoute, requireActor, requireScope, validate } from '../lib/http.ts';
 import { ok } from '../lib/serialize.ts';
+import { scopedFind, scopedOne } from '../lib/mongo.ts';
 import { cashflowHistoryQuery, dashboardQuery, reportQuery, searchQuery, newsletterQuery, notificationListQuery } from '@fingate/shared';
-import { accountSnapshots, asBigInt, awaitingBadge, cashflowHistory, compact, dashboardOverview, maturityLadder, scopeOf, wire } from '../domain/queries/index.ts';
+import { asBigInt, awaitingBadge, cashflowHistory, compact, dashboardOverview, docHref, maturityLadder, scopeOf, wire } from '../domain/queries/index.ts';
 import { buildNewsletter, cachedNewsletter, storeNewsletter } from '../domain/newsletter/index.ts';
 import { reportPreset } from '../domain/reports/index.ts';
-import { scopedFind, scopedOne } from '../lib/mongo.ts';
+import { cashflowForecast, parseHorizon, FORECAST_HORIZONS } from '../domain/reports/cashflow.ts';
+import { dashboardExtras, type DashboardExtras } from '../domain/reports/dashboard.ts';
+import { loadPartnerRefs, partnerNameOf } from '../domain/reports/refs.ts';
+import { ledgerAccountViews } from '../domain/accounts.ts';
+import { toBig } from '../domain/links/index.ts';
+import { cacheThrough } from '../lib/cache.ts';
+import { LEGACY_AUTOMATION_ALERTS } from '../domain/alerts/index.ts';
+
+/** Nhãn cảnh báo kiểu cũ (bộ máy tự động v1) — để danh sách không hiện mã thô. */
+const LEGACY_ALERT_LABEL: Record<string, string> = {
+  automation_failed: 'Quy trình tự động lỗi',
+  automation_event_failed: 'Sự kiện tự động lỗi',
+  // bản ghi R6 cũ (trước khi chuyển sang source_cancelled_with_money)
+  automation_money_moved: 'Phiếu nguồn huỷ khi đối tượng sinh đã có tiền',
+};
+
+const forecastQuery = z.object({
+  horizon: z.coerce.number().int().optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+const compactOf = (minor: bigint): string => formatMoney(money(minor), { mode: 'compact' });
+
+/** Ghi đè các trường v1 (tiền khả dụng, ngân hàng theo chữ) bằng số liệu sổ cái + đối tác. */
+function overlayOverview(base: Record<string, unknown>, x: DashboardExtras): Record<string, unknown> {
+  const kpi = (base.kpi ?? {}) as Record<string, unknown>;
+  const cashPrev = (kpi.cash_total ?? {}) as Record<string, unknown>;
+  const actual = toBig(x.cash.actual.minor);
+  const cashTotal = {
+    ...cashPrev,
+    label: 'Tổng tiền hiện có (sổ cái)',
+    amount: x.cash.actual,
+    compact: compactOf(actual),
+    breakdown: [
+      { label: 'Tiền mặt', amount: x.cash.cash_on_hand, compact: compactOf(toBig(x.cash.cash_on_hand.minor)) },
+      { label: 'Tiền ngân hàng', amount: x.cash.bank_money, compact: compactOf(toBig(x.cash.bank_money.minor)) },
+      { label: 'Dự kiến sau 30 ngày', amount: x.cash.projected, compact: compactOf(toBig(x.cash.projected.minor)) },
+    ],
+  };
+
+  // Phải thu quá hạn: MỘT con số theo HƯỚNG công nợ (v2 §9.1), thay cho mục 'receivable' đếm theo side v1.
+  const baseExceptions = (Array.isArray(base.exceptions) ? base.exceptions : []) as Record<string, unknown>[];
+  const kept = baseExceptions.filter((e) => !String(e.id ?? '').startsWith('breach-') && e.id !== 'receivable');
+  const overdueCount = x.partners.receivable_overdue_count;
+  const overdueTotal = toBig(x.partners.receivable_overdue_total.minor);
+  const overdueItem =
+    overdueCount > 0
+      ? [
+          {
+            id: 'receivable',
+            severity: 1,
+            tone: 'info',
+            glyph: '●',
+            text: `${overdueCount} khoản phải thu quá hạn`,
+            amount: x.partners.receivable_overdue_total,
+            compact: compactOf(overdueTotal),
+            href: '/cong-no?direction=receivable&overdue_only=true',
+            cta: 'Đôn đốc',
+          },
+        ]
+      : [];
+  const breach = x.cash.accounts_below_min.map((a) => ({
+    id: `breach-${a.account_id}`,
+    severity: 3,
+    tone: 'danger',
+    glyph: '⛔',
+    text: `${a.label} dưới ngưỡng tối thiểu`,
+    amount: a.actual,
+    compact: compactOf(toBig(a.actual.minor)),
+    href: `/ngan-hang/taikhoan/${a.account_id}`,
+    cta: 'Xem',
+  }));
+  const exceptions = [...kept, ...breach, ...overdueItem].sort((a, b) => Number(b.severity ?? 0) - Number(a.severity ?? 0)).slice(0, 6);
+
+  const bank = (base.bank ?? {}) as Record<string, unknown>;
+  return {
+    ...base,
+    kpi: { ...kpi, cash_total: cashTotal },
+    counts: { ...((base.counts ?? {}) as Record<string, unknown>), overdue_receivable: overdueCount },
+    bank: {
+      ...bank,
+      by_bank: x.bank_by_partner.map((b) => ({
+        partner_id: b.partner_id,
+        bank_name: b.partner_name,
+        outstanding: b.outstanding,
+        share_percent: b.share_percent,
+      })),
+    },
+    receivable_overdue: x.partners.receivable_overdue_total,
+    exceptions,
+    partners: {
+      top_receivable: x.partners.top_receivable,
+      top_payable: x.partners.top_payable,
+      receivable_total: x.partners.receivable_total,
+      payable_total: x.partners.payable_total,
+    },
+    loans_pending: x.loans_pending,
+    automation: x.automation,
+  };
+}
 
 export function dashboardRoutes(app: FastifyInstance): void {
   /** DASH-01 — 5 tầng, exception-first. */
@@ -35,7 +141,13 @@ export function dashboardRoutes(app: FastifyInstance): void {
         const actor = requireActor(req);
         const scope = requireScope(req);
         validate(dashboardQuery, req.query);
-        const data = await dashboardOverview(scope, actor.user_id, actor.role, actor.permissions.includes('payment:mark'));
+        const [base, extras] = await Promise.all([
+          dashboardOverview(scope, actor.user_id, actor.role, actor.permissions.includes('payment:mark')),
+          // phần bổ sung không phụ thuộc người xem: cache 20 giây như phần cơ sở (máy 0.1 CPU, §8.3)
+          cacheThrough(`dash-extras:${JSON.stringify(scope.companyIds)}:${today()}`, () => dashboardExtras(scope, today()), 20_000),
+        ]);
+        // không sửa `base` (bản cache của queries) — dựng object mới
+        const data = overlayOverview(base, extras);
         return ok(reply, { data }, { maxAge: 15, etag: `ov-${actor.user_id}-${today()}`, staleWhileRevalidate: 30 });
       },
     }),
@@ -51,11 +163,12 @@ export function dashboardRoutes(app: FastifyInstance): void {
         const actor = requireActor(req);
         const scope = requireScope(req);
         const [accounts, awaiting, mat] = await Promise.all([
-          accountSnapshots(scope),
+          ledgerAccountViews(scope),
           awaitingBadge(scope, actor.user_id, actor.role, actor.permissions.includes('payment:mark')),
           maturityLadder(scope, { horizonDays: 30 }),
         ]);
-        const total = accounts.reduce((a, x) => a + x.available, 0n);
+        // số dư = sổ cái (thực tế); không còn "khả dụng" (v2 BỎ phong toả)
+        const total = accounts.reduce((a, x) => a + x.actual, 0n);
         return ok(
           reply,
           {
@@ -143,6 +256,25 @@ export function dashboardRoutes(app: FastifyInstance): void {
     }),
   );
 
+  /**
+   * CASH-02 (v2) — dự báo dòng tiền 7 / 30 / 60 / 90 ngày: đầu kỳ, thu, chi dự kiến, cuối kỳ;
+   * gồm giải ngân sắp tới và lịch trả nợ vay. Dưới số dư tối thiểu → `breach` (đỏ).
+   */
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/cashflow/forecast',
+      config: { perms: ['forecast:read'] as Permission[], screen: 'CASH-02', summary: 'Dự báo dòng tiền 7/30/60/90 ngày' },
+      handler: async (req, reply) => {
+        const scope = requireScope(req);
+        const q = validate(forecastQuery, req.query);
+        const horizon = parseHorizon(q.horizon ?? 30);
+        const data = await cashflowForecast(scope, { horizon, from: q.from ?? today() });
+        return ok(reply, { data: { ...data, horizons: FORECAST_HORIZONS } }, { maxAge: 60, etag: `fc-${horizon}-${q.from ?? today()}-${scope.companyIds?.join(',') ?? 'all'}` });
+      },
+    }),
+  );
+
   /** RPT-00 — thư viện preset theo quyền. */
   app.route(
     defineRoute({
@@ -158,6 +290,7 @@ export function dashboardRoutes(app: FastifyInstance): void {
               label: REPORT_LABEL[p],
               href: `/baocao/${p}`,
               exportable: true,
+              needs_partner: p === 'so-chi-tiet-doi-tac',
             })),
           },
           { maxAge: 300 },
@@ -166,7 +299,7 @@ export function dashboardRoutes(app: FastifyInstance): void {
     }),
   );
 
-  /** RPT-01→13 — MỘT khung runner cho mọi preset. */
+  /** RPT-01→16 — MỘT khung runner cho mọi preset (lọc đối tác / tag). */
   app.route(
     defineRoute({
       method: 'GET',
@@ -187,8 +320,10 @@ export function dashboardRoutes(app: FastifyInstance): void {
           groupBy: q.group_by,
           limit: q.limit,
           canExport: actor.permissions.includes('report:export'),
+          partnerId: q.partner_id ?? null,
+          tagIds: q.tag_ids ? q.tag_ids.split(',').map((s) => s.trim()).filter(Boolean) : [],
         });
-        return ok(reply, { data }, { maxAge: 60, etag: `rpt-${preset}-${actor.user_id}-${today()}` });
+        return ok(reply, { data }, { maxAge: 60, etag: `rpt-${preset}-${actor.user_id}-${today()}-${q.partner_id ?? ''}-${q.tag_ids ?? ''}` });
       },
     }),
   );
@@ -246,24 +381,34 @@ export function dashboardRoutes(app: FastifyInstance): void {
       url: '/alerts',
       config: { perms: ['doc:read'] as Permission[], screen: 'ADM-10', summary: 'Danh sách cảnh báo' },
       handler: async (req, reply) => {
+        const actor = requireActor(req);
         const scope = requireScope(req);
-        const events = await scopedFind<Record<string, unknown>>(Models.Alert, scope, { type: 'event' }, {
+        // Chỉ hiện cảnh báo gửi đúng vai trò nhận (to_roles); bản ghi cũ không có to_roles thì ai có quyền xem cũng thấy.
+        const forRole = { $or: [{ to_roles: { $in: [actor.role] } }, { to_roles: { $size: 0 } }] };
+        const events = await scopedFind<Record<string, unknown>>(Models.Alert, scope, { type: 'event', ...forRole }, {
           sort: { created_at: -1 },
           limit: 50,
         } as never).catch(() => [] as Record<string, unknown>[]);
-        const rows = events.map((e) => ({
-          _id: String(e._id),
-          type: String(e.alert_type),
-          type_label: ALERT_LABEL[String(e.alert_type) as keyof typeof ALERT_LABEL] ?? String(e.alert_type),
-          severity: Number(e.severity ?? 1),
-          tone: Number(e.severity ?? 1) >= 3 ? 'danger' : Number(e.severity ?? 1) === 2 ? 'warning' : 'attention',
-          text: String(e.text ?? ''),
-          amount: e.amount_minor !== null && e.amount_minor !== undefined ? wire(asBigInt(e.amount_minor)) : null,
-          company_id: e.company_id ? String(e.company_id) : null,
-          href: (e.href as string | null) ?? null,
-          created_at: e.created_at ? new Date(String(e.created_at)).toISOString() : null,
-          acknowledged_at: e.acknowledged_at ? new Date(String(e.acknowledged_at)).toISOString() : null,
-        }));
+        const rows = events.map((e) => {
+          const kind = String(e.alert_type);
+          const label =
+            (ALERT_LABEL as Record<string, string>)[kind] ??
+            LEGACY_ALERT_LABEL[kind] ??
+            (LEGACY_AUTOMATION_ALERTS.includes(kind as never) ? 'Quy trình tự động lỗi' : kind);
+          return {
+            _id: String(e._id),
+            type: kind,
+            type_label: label,
+            severity: Number(e.severity ?? 1),
+            tone: Number(e.severity ?? 1) >= 3 ? 'danger' : Number(e.severity ?? 1) === 2 ? 'warning' : 'attention',
+            text: String(e.text ?? ''),
+            amount: e.amount_minor !== null && e.amount_minor !== undefined ? wire(asBigInt(e.amount_minor)) : null,
+            company_id: e.company_id ? String(e.company_id) : null,
+            href: (e.href as string | null) ?? null,
+            created_at: e.created_at ? new Date(String(e.created_at)).toISOString() : null,
+            acknowledged_at: e.acknowledged_at ? new Date(String(e.acknowledged_at)).toISOString() : null,
+          };
+        });
         return ok(reply, { items: rows }, { maxAge: 30 });
       },
     }),
@@ -290,7 +435,10 @@ export function dashboardRoutes(app: FastifyInstance): void {
     }),
   );
 
-  /** SRCH-02 — tìm kiếm qua index + regex (K-14: không search engine). */
+  /**
+   * SRCH-02 — tìm kiếm qua index + regex (K-14: không search engine).
+   * v2: khớp ĐỐI TÁC theo tên/STK/MST (qua `partner_id`), khớp TAG theo tên; không đọc text v1.
+   */
   app.route(
     defineRoute({
       method: 'GET',
@@ -299,27 +447,62 @@ export function dashboardRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const scope = requireScope(req);
         const q = validate(searchQuery, req.query);
-        const rx = { $regex: q.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
-        const [docs, loans, debts] = await Promise.all([
-          scopedFind<Record<string, unknown>>(Models.Document, scope, { $or: [{ code: rx }, { title: rx }, { 'payee.name': rx }] }, { limit: q.limit, sort: { updated_at: -1 } } as never).catch(() => []),
-          scopedFind<Record<string, unknown>>(Models.BankDebt, scope, { $or: [{ code: rx }, { bank_name: rx }] }, { limit: 10 } as never).catch(() => []),
-          scopedFind<Record<string, unknown>>(Models.DebtVoucher, scope, { $or: [{ party_name: rx }, { party_code: rx }] }, { limit: 10 } as never).catch(() => []),
+        const esc = q.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const rx = { $regex: esc, $options: 'i' };
+        const [partners, tags] = await Promise.all([
+          scopedFind<Record<string, unknown>>(Models.Partner, scope, { $or: [{ name: rx }, { code: rx }, { bank_name: rx }, { account_number: rx }, { tax_code: rx }] }, { limit: 50 } as never).catch(() => []),
+          scopedFind<Record<string, unknown>>(Models.Tag, scope, { name: rx, hidden: { $ne: true } }, { limit: 50 } as never).catch(() => []),
+        ]);
+        const partnerIds = partners.map((p) => p._id);
+        const tagIds = tags.map((t) => t._id);
+        const docs: Record<string, unknown>[] = await scopedFind<Record<string, unknown>>(
+          Models.Document,
+          scope,
+          { $or: [{ code: rx }, { title: rx }, ...(partnerIds.length ? [{ partner_id: { $in: partnerIds } }] : []), ...(tagIds.length ? [{ tag_ids: { $in: tagIds } }] : [])] },
+          { limit: q.limit, sort: { updated_at: -1 } } as never,
+        ).catch(() => []);
+        const loans: Record<string, unknown>[] = await scopedFind<Record<string, unknown>>(
+          Models.BankDebt,
+          scope,
+          { $or: [{ code: rx }, ...(partnerIds.length ? [{ partner_id: { $in: partnerIds } }] : [])] },
+          { limit: 10 } as never,
+        ).catch(() => []);
+        const debts: Record<string, unknown>[] = await scopedFind<Record<string, unknown>>(
+          Models.DebtVoucher,
+          scope,
+          { $or: [{ code: rx }, ...(partnerIds.length ? [{ partner_id: { $in: partnerIds } }] : [])] },
+          { limit: 10 } as never,
+        ).catch(() => []);
+        const partnerNames = await loadPartnerRefs([
+          ...docs.map((d) => (d.partner_id ? String(d.partner_id) : null)),
+          ...loans.map((l) => (l.partner_id ? String(l.partner_id) : null)),
+          ...debts.map((d) => (d.partner_id ? String(d.partner_id) : null)),
+          ...partners.map((p) => String(p._id)),
         ]);
         const hits = [
+          ...partners.map((p) => ({
+            type: 'counterparty' as const,
+            id: String(p._id),
+            code: String(p.code ?? ''),
+            title: String(p.name ?? ''),
+            subtitle: String(p.type ?? '') === 'bank' ? 'Ngân hàng' : String(p.type ?? '') === 'customer' ? 'Khách hàng' : 'Nhà cung cấp',
+            amount: null,
+            href: `/doi-tac/${String(p._id)}`,
+          })),
           ...docs.map((d) => ({
             type: 'document' as const,
             id: String(d._id),
             code: String(d.code ?? ''),
             title: String(d.title ?? ''),
-            subtitle: String(d.kind ?? ''),
+            subtitle: partnerNameOf(partnerNames, d.partner_id ? String(d.partner_id) : null, 'Chưa gán đối tác'),
             amount: d.amount ? wire(asBigInt((d.amount as { minor?: unknown }).minor)) : null,
-            href: `/ho-so/${kindSegment(String(d.kind))}/${String(d._id)}`,
+            href: docHref(String(d.kind), String(d._id)),
           })),
           ...loans.map((l) => ({
             type: 'loan' as const,
             id: String(l._id),
             code: String(l.code ?? ''),
-            title: `${l.bank_name} · ${l.code}`,
+            title: `${partnerNameOf(partnerNames, l.partner_id ? String(l.partner_id) : null, 'Chưa gán ngân hàng')} · ${l.code}`,
             subtitle: 'Nợ ngân hàng',
             amount: wire(asBigInt(l.principal_minor)),
             href: `/ngan-hang/khoan-vay/${String(l._id)}`,
@@ -328,18 +511,18 @@ export function dashboardRoutes(app: FastifyInstance): void {
             type: 'counterparty' as const,
             id: String(d._id),
             code: null,
-            title: String(d.party_name ?? ''),
-            subtitle: d.side === 'debit' ? 'Ghi Nợ' : 'Ghi Có',
+            title: partnerNameOf(partnerNames, d.partner_id ? String(d.partner_id) : null, 'Chưa gán đối tác'),
+            subtitle: debtSubtitle(d),
             amount: wire(asBigInt(d.value_minor)),
             href: `/cong-no/phieu/${String(d._id)}`,
           })),
-        ];
+        ].slice(0, q.limit);
         return ok(reply, { data: { query: q.q, hits, hidden_by_permission: 0 } }, { maxAge: 0 });
       },
     }),
   );
 }
 
-function kindSegment(kind: string): string {
-  return { spend: 'chi', income: 'thu', rollover: 'dao-han', internal: 'noi-bo' }[kind] ?? kind;
+function debtSubtitle(d: Record<string, unknown>): string {
+  return d.direction === 'receivable' || d.side === 'debit' ? 'Phải thu' : 'Phải trả';
 }

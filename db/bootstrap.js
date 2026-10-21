@@ -7,7 +7,7 @@
  * Tự tạo pháp nhân Tập đoàn (mã GROUP, is_group=true) làm gốc để gắn assignment.
  *
  * Email/mật khẩu lấy từ BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD
- * (mặc định: admin@fingate.local / fingate-demo-2026 — ĐỔI ngay sau khi đăng nhập).
+ * (mặc định dev/test: admin@fingate.local / 123qweasdzxc — production bắt buộc đặt BOOTSTRAP_ADMIN_PASSWORD; ĐỔI ngay sau khi đăng nhập).
  */
 import { withDb } from './_common.js';
 

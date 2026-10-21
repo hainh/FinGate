@@ -61,11 +61,10 @@ export function simpleInterest(principal: bigint, ratePct: number, days: number)
 
 const FREQ_MONTHS: Record<RepaymentFrequency, number> = { monthly: 1, quarterly: 3, semiannual: 6, maturity: 0 };
 
-export function buildSchedule(input: ScheduleInput): ScheduleResult {
-  const rate = typeof input.rate === 'number' ? input.rate : parseRate(input.rate);
-  const { principalMinor: principal, maturityDate, startDate } = input;
+/** Các ngày đến hạn của lịch gốc: đều theo tần suất từ ngày bắt đầu; kỳ cuối = ngày đáo hạn. */
+function duesOf(input: Pick<ScheduleInput, 'frequency' | 'startDate' | 'maturityDate'>): string[] {
   const stepMonths = FREQ_MONTHS[input.frequency] ?? 0;
-
+  const { maturityDate, startDate } = input;
   const dues: string[] = [];
   if (stepMonths === 0 || startDate >= maturityDate) {
     dues.push(maturityDate);
@@ -78,13 +77,25 @@ export function buildSchedule(input: ScheduleInput): ScheduleResult {
     }
     if (dues[dues.length - 1] !== maturityDate) dues.push(maturityDate);
   }
+  return dues;
+}
 
+/** Dựng dòng lịch cho các kỳ `dues` với gốc `principal`; kỳ đầu tính lãi từ `prevDate`. */
+function rowsFor(args: {
+  dues: string[];
+  prevDate: string;
+  principal: bigint;
+  rate: number;
+  method: RepaymentMethod;
+  firstPeriod: number;
+}): ScheduleResult {
+  const { dues, principal, rate, method, firstPeriod } = args;
   const periods = dues.length;
-  const equalPrincipal = input.method === 'equal_principal' && periods > 0 ? principal / BigInt(periods) : 0n;
+  const equalPrincipal = method === 'equal_principal' && periods > 0 ? principal / BigInt(periods) : 0n;
   const rows: ScheduleEntry[] = [];
   let remaining = principal;
   let allocated = 0n;
-  let prev = startDate;
+  let prev = args.prevDate;
   let totalInterest = 0n;
   let totalPrincipal = 0n;
 
@@ -93,14 +104,14 @@ export function buildSchedule(input: ScheduleInput): ScheduleResult {
     const days = Math.max(0, daysBetween(prev, due));
     const interest = simpleInterest(remaining, rate, days);
     let principalDue: bigint;
-    if (input.method === 'equal_principal') {
+    if (method === 'equal_principal') {
       principalDue = i === periods - 1 ? principal - allocated : equalPrincipal;
       allocated += principalDue;
     } else {
       principalDue = i === periods - 1 ? principal : 0n;
     }
     remaining = remaining - principalDue > 0n ? remaining - principalDue : 0n;
-    rows.push({ period: i + 1, due_date: due, days, principal: principalDue, interest, fee: 0n, total: principalDue + interest });
+    rows.push({ period: firstPeriod + i, due_date: due, days, principal: principalDue, interest, fee: 0n, total: principalDue + interest });
     totalInterest += interest;
     totalPrincipal += principalDue;
     prev = due;
@@ -110,4 +121,48 @@ export function buildSchedule(input: ScheduleInput): ScheduleResult {
     rows,
     totals: { principal: totalPrincipal, interest: totalInterest, fee: 0n, total: totalPrincipal + totalInterest },
   };
+}
+
+export function buildSchedule(input: ScheduleInput): ScheduleResult {
+  return rowsFor({
+    dues: duesOf(input),
+    prevDate: input.startDate,
+    principal: input.principalMinor,
+    rate: typeof input.rate === 'number' ? input.rate : parseRate(input.rate),
+    method: input.method,
+    firstPeriod: 1,
+  });
+}
+
+/** Đầu vào lịch còn lại: `principalMinor` là GỐC BAN ĐẦU, `repaidPrincipalMinor` là gốc đã trả. */
+export interface RemainingScheduleInput extends ScheduleInput {
+  repaidPrincipalMinor: bigint;
+}
+
+/**
+ * Lịch CÒN LẠI sau khi đã trả một phần gốc — dự báo dòng tiền (v2 §12, §10.3).
+ *  · `interest_only` (hoặc chưa trả gốc): dư nợ còn lại theo đúng các kỳ của lịch gốc.
+ *  · `equal_principal`: kỳ đã trả = các kỳ mà gốc đã trả phủ hết theo lịch gốc. Phần gốc còn lại
+ *    chia đều cho SỐ KỲ CÒN LẠI (không chia lại theo lịch gốc đầy đủ); kỳ đầu tính lãi từ kỳ đã trả gần nhất.
+ */
+export function buildRemainingSchedule(input: RemainingScheduleInput): ScheduleResult {
+  const rate = typeof input.rate === 'number' ? input.rate : parseRate(input.rate);
+  const repaid = input.repaidPrincipalMinor > 0n ? input.repaidPrincipalMinor : 0n;
+  const outstanding = input.principalMinor > repaid ? input.principalMinor - repaid : 0n;
+  if (outstanding <= 0n) return { rows: [], totals: { principal: 0n, interest: 0n, fee: 0n, total: 0n } };
+  const dues = duesOf(input);
+  if (input.method !== 'equal_principal' || repaid === 0n) {
+    return rowsFor({ dues, prevDate: input.startDate, principal: outstanding, rate, method: input.method, firstPeriod: 1 });
+  }
+  const original = rowsFor({ dues, prevDate: input.startDate, principal: input.principalMinor, rate, method: 'equal_principal', firstPeriod: 1 });
+  let paid = 0;
+  let covered = 0n;
+  for (const row of original.rows) {
+    if (covered + row.principal > repaid) break;
+    covered += row.principal;
+    paid++;
+  }
+  // Gốc ban đầu luôn > gốc đã trả (outstanding > 0) nên luôn còn ít nhất một kỳ.
+  const prevDate = paid > 0 ? dues[paid - 1]! : input.startDate;
+  return rowsFor({ dues: dues.slice(paid), prevDate, principal: outstanding, rate, method: 'equal_principal', firstPeriod: paid + 1 });
 }

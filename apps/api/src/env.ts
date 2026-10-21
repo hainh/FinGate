@@ -85,7 +85,8 @@ const envSchema = z.object({
    * Đổi mật khẩu ngay sau lần đăng nhập đầu (mặc định chỉ để chạy được).
    */
   BOOTSTRAP_ADMIN_EMAIL: z.string().min(3).default('admin@fingate.local'),
-  BOOTSTRAP_ADMIN_PASSWORD: z.string().min(8).default('fingate-demo-2026'),
+  /** Bắt buộc ở production; dev/test mặc định 123qweasdzxc (mật khẩu test chung, AGENTS.md). */
+  BOOTSTRAP_ADMIN_PASSWORD: z.string().min(8).optional(),
   BOOTSTRAP_ADMIN_NAME: z.string().default('Quản trị hệ thống'),
   /** true = tự tạo tài khoản quản trị đầu tiên khi khởi động nếu DB rỗng. */
   BOOTSTRAP_ON_BOOT: z.enum(['true', 'false']).default('true'),
@@ -125,6 +126,8 @@ export function loadEnv(overrides: Record<string, string | undefined> = {}): Env
       '[fingate] dev mode: SESSION_SECRET/FIELD_KEY/TASK_TOKEN tự sinh — TOTP và session sẽ mất sau khi restart.',
     );
   }
+  // dev/test: mật khẩu tài khoản quản trị đầu tiên = mật khẩu test chung. Production: bắt buộc đặt (kiểm khi bootstrap).
+  if (!env.BOOTSTRAP_ADMIN_PASSWORD && !env.isProd) env.BOOTSTRAP_ADMIN_PASSWORD = '123qweasdzxc';
   cached = env;
   return env;
 }

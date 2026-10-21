@@ -51,9 +51,9 @@ curl -s http://localhost:8080/healthz
 # {"status":"ok","version":"0.1.0","uptime_s":..,"db":"up","memory_mb":..,"profile":"cloud"}
 ```
 
-## 3. Tài khoản demo (mật khẩu chung: `fingate-demo-2026`)
+## 3. Tài khoản demo (mật khẩu chung: `123qweasdzxc`)
 
-> **Tài khoản quản trị đầu tiên (bootstrap)**: `admin@fingate.local` / `fingate-demo-2026`
+> **Tài khoản quản trị đầu tiên (bootstrap)**: `admin@fingate.local` / `123qweasdzxc` (dev/test; production bắt buộc `BOOTSTRAP_ADMIN_PASSWORD`)
 > (đổi bằng `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`, hoặc mật khẩu mới trong *Cá nhân*).
 > Vai trò `admin` là **quản lý thuần** — nhân sự · công ty/bộ phận · ma trận duyệt · cấu hình ·
 > tài khoản tập đoàn · audit — **KHÔNG** có quyền trên hồ sơ/hoá đơn/phiếu thu chi; sau đăng nhập
@@ -126,7 +126,7 @@ pnpm infra:prod               # build + chạy app + Mongo bằng Docker (Profil
 | `Env không hợp lệ: SESSION_SECRET ...` | Thiếu `.env`. `cp .env.example .env` |
 | `db:*` báo `secret tự sinh` / trỏ sai DB | **Đã sửa:** `db/_common.js` nạp `.env` gốc repo trước `loadEnv()` (`process.loadEnvFile`), nên script dùng đúng `MONGODB_URI`/secret/`BOOTSTRAP_ADMIN_*` (biến môi trường đã đặt vẫn được ưu tiên). |
 | Mongo không kết nối (`db":"down"`) | `pnpm infra:up`; đợi healthcheck `healthy` (`docker ps`) |
-| Đăng nhập không được / sai mật khẩu | Mật khẩu demo là `fingate-demo-2026`; nếu DB đã bị seed bằng `FIELD_KEY` khác thì reset: `pnpm db:seed --force` |
+| Đăng nhập không được / sai mật khẩu | Mật khẩu demo là `123qweasdzxc`; nếu DB đã bị seed bằng `FIELD_KEY` khác thì reset: `pnpm db:seed --force` |
 | Banner **"Máy chủ đang thức dậy"** kẹt ở màn đăng nhập | **Đã sửa** (`apps/web/src/app/api.ts`: reset `coldStart` khi nhận *bất kỳ* response, kể cả 401 của `/me`) |
 | TOTP mất sau khi restart | Dev tự sinh `FIELD_KEY` mỗi lần nếu `.env` không đặt → đặt `FIELD_KEY` cố định trong `.env` |
 | **Mọi phiên "ghi nhớ" chết sau deploy** (ADR-19) | Token hash = HMAC(`SESSION_SECRET`) → `SESSION_SECRET` đổi là mất hết. `render.yaml` để `generateValue: true`: giá trị **được giữ qua các lần deploy**, nhưng **tạo lại service mới từ blueprint = secret mới = tất cả đăng xuất**. Muốn an toàn tuyệt đối: chuyển sang `sync: false` và dán một chuỗi ≥ 32 byte cố định trong Render Environment. `FIELD_KEY` đổi thì TOTP không giải mã được (không đăng xuất, nhưng phải bật lại 2FA). |

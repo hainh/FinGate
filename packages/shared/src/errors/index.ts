@@ -47,6 +47,15 @@ export type ProblemCode =
   | 'FG-HR-003' // nhân sự đang giữ hồ sơ chờ duyệt — cần chỉ định người thay thế
   // --- tổ chức ---
   | 'FG-ORG-001' // bộ phận đang được tham chiếu — không xoá được, chỉ ngừng dùng
+  // --- v2: đối tác · tag · liên kết · quy trình tự động ---
+  | 'FG-PARTNER-001' // đối tác không hợp lệ cho chỗ dùng (sai loại / ngừng giao dịch / khác công ty)
+  | 'FG-PARTNER-002' // đối tác đã phát sinh — chỉ được ngừng giao dịch, không xoá
+  | 'FG-PARTNER-003' // đổi loại đối tác làm vỡ ràng buộc hiện có
+  | 'FG-TAG-001' // tag trùng tên (đã chuẩn hoá)
+  | 'FG-LINK-001' // liên kết không hợp lệ giữa hai đối tượng (loại / công ty / đối tác)
+  | 'FG-LINK-002' // tổng phân bổ vượt số tiền của phiếu / công nợ / khoản vay
+  | 'FG-LINK-003' // liên kết cùng cặp + quan hệ đã tồn tại
+  | 'FG-AUTO-001' // lượt chạy không chạy lại được (không ở trạng thái lỗi / đang chạy / thiếu bộ xử lý)
   // --- hệ thống ---
   | 'FG-SYS-001' // lỗi hệ thống
   | 'FG-SYS-002' // dịch vụ đang bảo trì
@@ -102,6 +111,15 @@ export const PROBLEM_CATALOG: Record<ProblemCode, ProblemDef> = {
   'FG-HR-003': { code: 'FG-HR-003', status: 409, titleVi: 'Người này đang giữ hồ sơ chờ duyệt', hint: 'none' },
 
   'FG-ORG-001': { code: 'FG-ORG-001', status: 409, titleVi: 'Bộ phận đang được dùng, không thể xoá', hint: 'none' },
+
+  'FG-PARTNER-001': { code: 'FG-PARTNER-001', status: 422, titleVi: 'Đối tác không hợp lệ cho mục này', hint: 'none' },
+  'FG-PARTNER-002': { code: 'FG-PARTNER-002', status: 409, titleVi: 'Đối tác đã có phát sinh, chỉ ngừng giao dịch được', hint: 'none' },
+  'FG-PARTNER-003': { code: 'FG-PARTNER-003', status: 409, titleVi: 'Không đổi được loại đối tác vì đang vướng ràng buộc', hint: 'none' },
+  'FG-TAG-001': { code: 'FG-TAG-001', status: 409, titleVi: 'Tag này đã tồn tại', hint: 'none' },
+  'FG-LINK-001': { code: 'FG-LINK-001', status: 422, titleVi: 'Hai đối tượng không thể liên kết theo quan hệ này', hint: 'none' },
+  'FG-LINK-002': { code: 'FG-LINK-002', status: 422, titleVi: 'Số tiền phân bổ vượt số tiền còn lại', hint: 'none' },
+  'FG-LINK-003': { code: 'FG-LINK-003', status: 409, titleVi: 'Liên kết này đã tồn tại', hint: 'none' },
+  'FG-AUTO-001': { code: 'FG-AUTO-001', status: 422, titleVi: 'Không thể chạy lại lượt này', hint: 'none' },
 
   'FG-SYS-001': { code: 'FG-SYS-001', status: 500, titleVi: 'Hệ thống đang gặp sự cố. Vui lòng thử lại.', hint: 'retry' },
   'FG-SYS-002': { code: 'FG-SYS-002', status: 503, titleVi: 'Hệ thống đang bảo trì', hint: 'retry' },

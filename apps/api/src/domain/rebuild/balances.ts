@@ -19,7 +19,7 @@ export function orphanDocumentIds(entryDocumentIds: string[], aliveDocumentIds: 
 /** Backfill ledger từ hồ sơ đã thực thi. Idempotent — chạy lại không nhân đôi. */
 export async function rebuildLedger(): Promise<Record<string, unknown>> {
   const docs = await Models.Document.find({ status: { $in: ['paid', 'approved', 'processing'] } } as never)
-    .select({ _id: 1, code: 1, kind: 1, company_id: 1, amount: 1, source: 1, target: 1, planned_date: 1, status: 1, execution: 1 })
+    .select({ _id: 1, code: 1, kind: 1, company_id: 1, amount: 1, source: 1, target: 1, transfer_target: 1, planned_date: 1, status: 1, execution: 1 })
     .lean();
 
   let inserted = 0;
@@ -65,7 +65,11 @@ export async function purgeOrphanLedgerEntries(opts: { dryRun?: boolean } = {}):
   const entries = await Models.CashEntry.find({ document_id: { $ne: null } } as never)
     .select({ document_id: 1 })
     .lean<{ document_id?: unknown }[]>();
-  const docIds = [...new Set(entries.map((e) => String(e.document_id)))];
+  // [v2 §8] phiếu đã xoá mà sổ cái ĐÃ ĐẢO (có bút toán `reverses`) KHÔNG phải mồ côi: giữ nguyên gốc + đảo (sổ cái chỉ thêm).
+  const reversedDocs = new Set(
+    (await Models.CashEntry.distinct('document_id', { reverses: { $ne: null } } as never)).map((id) => String(id)),
+  );
+  const docIds = [...new Set(entries.map((e) => String(e.document_id)))].filter((id) => !reversedDocs.has(id));
   const alive = new Set(
     (await Models.Document.find({ _id: { $in: docIds } } as never).select({ _id: 1 }).lean()).map((d) => String(d._id)),
   );

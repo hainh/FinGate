@@ -124,13 +124,15 @@ export interface StepState {
 
 /**
  * Đánh dấu một step đã duyệt + tính lại state các step còn lại.
- * Cấp cao hơn duyệt trước (fast-track) → các cấp trung gian chưa xử lý = `skipped`
- * khi hồ sơ đạt cấp cao nhất; KHÔNG xoá, audit giữ nguyên (blueprint §IV).
+ * Duyệt VƯỢT CẤP có lý do (`fastTrack`, v2 §7.2) tới cấp cao nhất → các cấp chưa xử lý = `skipped`;
+ * KHÔNG xoá, audit giữ nguyên (blueprint §IV). Duyệt thường không bao giờ bỏ qua cấp nào.
+ * Chỉ đẩy cấp thấp nhất đang chờ thành `current` khi CHƯA có cấp nào đang `current`.
  */
 export function applyDecision(
   steps: { order: number; role: Role; state: string; user_id?: string | null }[],
   decidedOrder: number,
   decision: 'approve' | 'reject' | 'changes',
+  opts: { fastTrack?: boolean } = {},
 ): { steps: StepState[]; finished: boolean } {
   const next = steps.map((s) => ({ ...s, state: s.state as StepState['state'] }));
   const idx = next.findIndex((s) => s.order === decidedOrder);
@@ -150,15 +152,20 @@ export function applyDecision(
   next[idx]!.state = 'done';
   const highestOrder = Math.max(...next.map((s) => s.order));
   const topDone = next.find((s) => s.order === highestOrder)?.state === 'done';
-  if (topDone) {
-    // hồ sơ đạt cấp cao nhất → các cấp chưa xử lý = skipped (giữ lịch sử, không xóa)
+  const pendingBelow = next.some((s) => s.state === 'waiting' || s.state === 'current');
+  if (topDone && opts.fastTrack) {
+    // duyệt vượt cấp (có lý do) tới cấp cao nhất → cấp chưa xử lý = skipped (giữ lịch sử, không xoá)
     for (const s of next) if (s.state === 'waiting' || s.state === 'current') s.state = 'skipped';
-  } else {
-    // cấp thấp nhất chưa xử lý thành `current`
+    return { steps: next, finished: true };
+  }
+  if (topDone && !pendingBelow) return { steps: next, finished: true };
+  // còn cấp chưa xử lý phía dưới: cấp thấp nhất đang chờ thành `current` — nhưng KHÔNG đẩy thêm nếu đã có cấp `current`
+  // (duyệt vượt cấp ở cấp trên không được làm cấp đang xử lý bị bỏ qua hoặc có hai cấp `current`)
+  if (!next.some((s) => s.state === 'current')) {
     const lowestPending = next.filter((s) => s.state === 'waiting').sort((a, b) => a.order - b.order)[0];
     if (lowestPending) lowestPending.state = 'current';
   }
-  return { steps: next, finished: topDone };
+  return { steps: next, finished: false };
 }
 
 /** Bước tiếp theo cần ai đó làm gì (để chọn sla_deadline + notification). */

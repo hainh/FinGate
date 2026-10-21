@@ -3,10 +3,10 @@
  */
 
 import { z } from 'zod';
-import { MATURITY_BUCKETS } from '../status/index.js';
+import { BANK_DEBT_STATUSES, DEBT_DIRECTIONS, MATURITY_BUCKETS } from '../status/index.js';
 const lit = <T extends string>(arr: readonly T[]) => arr as unknown as [T, ...T[]];
 import { businessDate, businessDateTime, moneyField, moneyWire, objectId } from './common.js';
-import { priority } from './documents.js';
+import { priority, documentOrigin } from './documents.js';
 
 export const accountKind = z.enum(['bank', 'cash']);
 export const accountStatus = z.enum(['active', 'closed', 'frozen']);
@@ -99,7 +99,9 @@ export const statementImportBody = z.object({
  * Nợ Ngân hàng (§IX) — thay module "Khoản vay" cũ nhưng vẫn cấp dữ liệu Đáo hạn.
  * ------------------------------------------------------------------ */
 
-export const bankDebtStatus = z.enum(['active', 'overdue', 'settled', 'archived']);
+/** v2: thêm `pending_disbursement` (chờ giải ngân, chưa tính dư nợ) và `cancelled` (đã huỷ). */
+export const bankDebtStatus = z.enum(lit(BANK_DEBT_STATUSES));
+export const debtDirection = z.enum(lit(DEBT_DIRECTIONS));
 
 /** Kỳ trả lãi/gốc — dùng sinh lịch nghĩa vụ trả nợ (LOAN-04). */
 export const repaymentFrequency = z.enum(['monthly', 'quarterly', 'semiannual', 'maturity']);
@@ -111,7 +113,8 @@ export type RepaymentMethod = z.infer<typeof repaymentMethod>;
 
 export const bankDebtUpsertBody = z.object({
   company_id: objectId.optional().describe('Mặc định theo phiên làm việc'),
-  bank_name: z.string().min(2).max(120),
+  /** ★ v2: ngân hàng cho vay theo ID (đối tác loại Ngân hàng) — bắt buộc; tên ngân hàng lấy từ đối tác. */
+  partner_id: objectId,
   /** Số tiền vay. */
   amount: moneyField,
   /** Hạn mức vay (hạn mức tín dụng) — mặc định 0 nếu bỏ trống. */
@@ -162,6 +165,10 @@ export const bankDebtRow = z.object({
   repayment_count: z.number().int(),
   created_at: z.string().nullable(),
   updated_at: z.string(),
+  /** ★ v2: đối tác ngân hàng (ID) + ngày giải ngân thực tế (UTC) + nguồn gốc. */
+  partner_id: objectId.nullable().optional(),
+  disbursed_at: z.string().nullable().optional(),
+  origin: documentOrigin.optional(),
 });
 
 /** LOAN-04 — một kỳ nghĩa vụ trả nợ (gốc + lãi + phí). */
@@ -245,6 +252,8 @@ export const maturityRow = z.object({
 export const rolloverResultBody = z.object({
   done_at: businessDate,
   new_contract_code: z.string().max(80),
+  /** v2 §10.3: ngày đáo hạn mới sau khi ngân hàng ký HĐ — cập nhật hạn thanh toán của khoản vay. */
+  new_maturity_date: businessDate,
   new_limit: moneyField,
   new_rate: z.string().regex(/^\d+(\.\d{1,2})?$/),
   actual_fee: moneyField,
@@ -287,13 +296,10 @@ export const DEBT_SIDE_LABEL: Record<DebtSide, string> = { debit: 'Nợ', credit
 
 export const debtVoucherUpsertBody = z.object({
   company_id: objectId.optional().describe('Mặc định theo phiên làm việc'),
-  party_type: debtPartyType,
-  /** Tên công ty / đối tượng (chọn từ danh bạ hoặc nhập mới). */
-  party_name: z.string().min(2).max(200),
-  /** Ngân hàng của công ty đối tác. */
-  party_bank_name: z.string().max(200).optional(),
-  /** STK của công ty đối tác. */
-  party_bank_account: z.string().max(40).optional(),
+  /** ★ v2: đối tác KH/NCC theo ID (danh bạ công ty) — bắt buộc; tên/ngân hàng lấy từ đối tác, không nhập tự do. */
+  partner_id: objectId,
+  /** ★ v2: hướng khoản — độc lập với loại đối tác (v2 §9.1): phải thu / phải trả. */
+  direction: debtDirection,
   /** Nợ / Có — chọn thủ công, không suy diễn. */
   side: debtSide,
   value: moneyField,
@@ -309,6 +315,8 @@ export const debtVoucherRow = z.object({
   company_name: z.string(),
   code: z.string(),
   party_type: debtPartyType,
+  partner_id: objectId.nullable().optional(),
+  direction: debtDirection.nullable().optional(),
   party_name: z.string(),
   party_bank_name: z.string().nullable(),
   party_bank_account: z.string().nullable(),
@@ -331,6 +339,8 @@ export const debtVoucherRow = z.object({
 
 export const debtListQuery = z.object({
   party_type: debtPartyType.optional(),
+  partner_id: objectId.optional(),
+  direction: debtDirection.optional(),
   side: debtSide.optional(),
   company_id: objectId.optional(),
   scope: z.string().max(64).optional(),

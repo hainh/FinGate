@@ -395,3 +395,205 @@ export const EVIDENCE_LABEL: Record<EvidenceType, string> = {
   minutes: 'Biên bản',
   other: 'Tài liệu khác',
 };
+
+/* ------------------------------------------------------------------ *
+ * v2 — Đối tác · Tag · Liên kết nghiệp vụ · Quy tắc tự động
+ * (v2/v2.md §5, §6.2, §9.1, §10.2, §11, §14). Enum nằm ở đây để contracts/
+ * dùng lại (giống DOC_KINDS) — không import ngược từ contracts/.
+ * ------------------------------------------------------------------ */
+
+/** Mã đối tác tự sinh: `DT-2026-00001` (v2 §2.3). */
+export const PARTNER_CODE_PREFIX = 'DT';
+
+/** Loại đối tác — mỗi đối tác đúng một loại (v2 §5.1). */
+export const PARTNER_TYPES = ['bank', 'customer', 'supplier'] as const;
+export type PartnerType = (typeof PARTNER_TYPES)[number];
+export const PARTNER_TYPE_LABEL: Record<PartnerType, string> = {
+  bank: 'Ngân hàng',
+  customer: 'Khách hàng',
+  supplier: 'Nhà cung cấp',
+};
+
+/** Trạng thái đối tác: Hoạt động / Ngừng giao dịch (không xoá khi đã phát sinh, v2 §5.1). */
+export const PARTNER_STATUSES = ['active', 'inactive'] as const;
+export type PartnerStatus = (typeof PARTNER_STATUSES)[number];
+export const PARTNER_STATUS_LABEL: Record<PartnerStatus, string> = {
+  active: 'Hoạt động',
+  inactive: 'Ngừng giao dịch',
+};
+
+/** Hướng khoản công nợ — chọn độc lập với loại đối tác (v2 §9.1). */
+export const DEBT_DIRECTIONS = ['receivable', 'payable'] as const;
+export type DebtDirection = (typeof DEBT_DIRECTIONS)[number];
+export const DEBT_DIRECTION_LABEL: Record<DebtDirection, string> = {
+  receivable: 'Phải thu',
+  payable: 'Phải trả',
+};
+
+/** Quan hệ của liên kết nghiệp vụ (v2 §11.2). */
+export const BUSINESS_LINK_RELATIONS = [
+  'offset',
+  'repayment',
+  'disbursement',
+  'funded_by',
+  'generated',
+  'internal_transfer',
+] as const;
+export type BusinessLinkRelation = (typeof BUSINESS_LINK_RELATIONS)[number];
+export const BUSINESS_LINK_RELATION_LABEL: Record<BusinessLinkRelation, string> = {
+  offset: 'Cấn trừ công nợ',
+  repayment: 'Trả nợ vay',
+  disbursement: 'Giải ngân',
+  funded_by: 'Chi bằng vốn vay',
+  generated: 'Tự động sinh',
+  internal_transfer: 'Chuyển tiền nội bộ',
+};
+
+/** Đối tượng có thể nằm hai đầu liên kết. */
+export const LINK_OBJECT_TYPES = ['document', 'debt_voucher', 'bank_debt'] as const;
+export type LinkObjectType = (typeof LINK_OBJECT_TYPES)[number];
+export const LINK_OBJECT_TYPE_LABEL: Record<LinkObjectType, string> = {
+  document: 'Phiếu thu/chi',
+  debt_voucher: 'Khoản công nợ',
+  bank_debt: 'Khoản nợ ngân hàng',
+};
+
+/** Nguồn gốc liên kết / đối tượng: Thủ công (ai gán) hoặc Tự động (lượt chạy nào). */
+export const LINK_ORIGINS = ['manual', 'automation'] as const;
+export type LinkOrigin = (typeof LINK_ORIGINS)[number];
+export const LINK_ORIGIN_LABEL: Record<LinkOrigin, string> = {
+  manual: 'Thủ công',
+  automation: 'Tự động',
+};
+
+/** Trạng thái liên kết: gỡ = đánh dấu, không xoá (có người gỡ, lý do). */
+export const LINK_STATUSES = ['active', 'removed'] as const;
+export type LinkStatus = (typeof LINK_STATUSES)[number];
+export const LINK_STATUS_LABEL: Record<LinkStatus, string> = {
+  active: 'Hiệu lực',
+  removed: 'Đã gỡ',
+};
+
+/** Phân loại cấu phần tiền của liên kết có tách gốc/lãi/phí (v2 §10.3). */
+export const LINK_SPLIT_KEYS = ['principal', 'interest', 'fee'] as const;
+export const LINK_SPLIT_LABEL: Record<(typeof LINK_SPLIT_KEYS)[number], string> = {
+  principal: 'Gốc',
+  interest: 'Lãi',
+  fee: 'Phí',
+};
+
+/** Mã quy tắc tự động (v2 §11.3). */
+export const AUTOMATION_RULE_CODES = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6'] as const;
+export type AutomationRuleCode = (typeof AUTOMATION_RULE_CODES)[number];
+export const AUTOMATION_RULE_LABEL: Record<AutomationRuleCode, string> = {
+  R1: 'Chuyển tiền nội bộ → phiếu thu tự động',
+  R2: 'Phiếu thu đi vay → khoản nợ ngân hàng',
+  R3: 'Vay ngân hàng để chi',
+  R4: 'Khoản vay tất toán → nhắc lưu trữ / giải chấp TSĐB',
+  R5: 'Khoản chi định kỳ → phiếu nháp',
+  R6: 'Huỷ phiếu nguồn → cảnh báo / huỷ đối tượng sinh chưa phát sinh tiền',
+};
+
+/** Trạng thái lượt chạy quy tắc tự động (v2 §11.2 — lỗi ⇒ Chạy lại). */
+export const AUTOMATION_RUN_STATUSES = ['pending', 'running', 'done', 'failed'] as const;
+export type AutomationRunStatus = (typeof AUTOMATION_RUN_STATUSES)[number];
+export interface AutomationRunStatusDef {
+  key: AutomationRunStatus;
+  labelVi: string;
+  glyph: string;
+  tone: Tone;
+}
+export const AUTOMATION_RUN_STATUS_REGISTRY: Record<AutomationRunStatus, AutomationRunStatusDef> = {
+  pending: { key: 'pending', labelVi: 'Chờ chạy', glyph: '○', tone: 'neutral' },
+  running: { key: 'running', labelVi: 'Đang chạy', glyph: '↻', tone: 'info' },
+  done: { key: 'done', labelVi: 'Hoàn tất', glyph: '✓', tone: 'success' },
+  failed: { key: 'failed', labelVi: 'Lỗi', glyph: '✕', tone: 'danger' },
+};
+
+/** Trạng thái từng bước trong lượt chạy: chờ / xong / lỗi / bỏ qua. */
+export const AUTOMATION_STEP_STATUSES = ['pending', 'done', 'failed', 'skipped'] as const;
+export type AutomationStepStatus = (typeof AUTOMATION_STEP_STATUSES)[number];
+export const AUTOMATION_STEP_STATUS_LABEL: Record<AutomationStepStatus, string> = {
+  pending: 'Chờ',
+  done: 'Xong',
+  failed: 'Lỗi',
+  skipped: 'Bỏ qua',
+};
+
+/**
+ * Trạng thái khoản nợ ngân hàng (v2 §10.2) — registry RIÊNG, không trộn với
+ * workflow status (DS §3). `pending_disbursement` không tính vào dư nợ.
+ */
+export const BANK_DEBT_STATUSES = [
+  'pending_disbursement',
+  'active',
+  'overdue',
+  'settled',
+  'archived',
+  'cancelled',
+] as const;
+export type BankDebtStatus = (typeof BANK_DEBT_STATUSES)[number];
+export interface BankDebtStatusDef {
+  key: BankDebtStatus;
+  labelVi: string;
+  glyph: string;
+  tone: Tone;
+  /** Không còn chuyển tiếp trong vòng đời thường. */
+  terminal: boolean;
+}
+export const BANK_DEBT_STATUS_REGISTRY: Record<BankDebtStatus, BankDebtStatusDef> = {
+  pending_disbursement: { key: 'pending_disbursement', labelVi: 'Chờ giải ngân', glyph: '◌', tone: 'attention', terminal: false },
+  active: { key: 'active', labelVi: 'Đang vay', glyph: '●', tone: 'info', terminal: false },
+  overdue: { key: 'overdue', labelVi: 'Quá hạn', glyph: '!', tone: 'danger', terminal: false },
+  settled: { key: 'settled', labelVi: 'Tất toán', glyph: '✓', tone: 'success', terminal: true },
+  archived: { key: 'archived', labelVi: 'Lưu trữ', glyph: '▣', tone: 'neutral', terminal: true },
+  cancelled: { key: 'cancelled', labelVi: 'Đã huỷ', glyph: '⊘', tone: 'neutral', terminal: true },
+};
+export const BANK_DEBT_STATUS_KEYS = Object.keys(BANK_DEBT_STATUS_REGISTRY) as BankDebtStatus[];
+
+/** Trạng thái khoản nợ ngân hàng → nhãn (an toàn khi DB có giá trị lạ). */
+export function bankDebtStatusLabel(key: string): string {
+  return BANK_DEBT_STATUS_REGISTRY[key as BankDebtStatus]?.labelVi ?? key;
+}
+
+export function bankDebtStatusTone(key: string): Tone {
+  return BANK_DEBT_STATUS_REGISTRY[key as BankDebtStatus]?.tone ?? 'neutral';
+}
+
+/** Tuỳ chọn vay trên phiếu (v2 §11.4 R2 và §11.5 R3): `borrow` = phiếu thu đi vay, `fund` = phiếu chi vay để chi. */
+export const LOAN_KINDS = ['borrow', 'fund'] as const;
+export type LoanKind = (typeof LOAN_KINDS)[number];
+export const LOAN_KIND_LABEL: Record<LoanKind, string> = {
+  borrow: 'Khoản vay ngân hàng (đi vay)',
+  fund: 'Vay ngân hàng để chi',
+};
+
+/** Cách gắn khoản vay: tạo mới / gắn khoản có sẵn / để sau. */
+export const LOAN_MODES = ['new', 'existing', 'later'] as const;
+export type LoanMode = (typeof LOAN_MODES)[number];
+export const LOAN_MODE_LABEL: Record<LoanMode, string> = {
+  new: 'Tạo khoản vay mới',
+  existing: 'Gắn khoản vay đã có',
+  later: 'Để sau',
+};
+
+/** Kỳ trả lãi/gốc của khoản vay (trùng `payment_frequency` của nợ ngân hàng). */
+export const REPAYMENT_PERIODS = ['monthly', 'quarterly', 'semiannual', 'maturity'] as const;
+export type RepaymentPeriod = (typeof REPAYMENT_PERIODS)[number];
+export const REPAYMENT_PERIOD_LABEL: Record<RepaymentPeriod, string> = {
+  monthly: 'Hàng tháng',
+  quarterly: 'Hàng quý',
+  semiannual: 'Nửa năm',
+  maturity: 'Đáo hạn',
+};
+
+/** Phương thức trả nợ gốc: chỉ trả lãi, hoặc chia đều gốc. */
+export const REPAYMENT_METHODS = ['interest_only', 'equal_principal'] as const;
+export type RepaymentMethodKey = (typeof REPAYMENT_METHODS)[number];
+export const REPAYMENT_METHOD_LABEL: Record<RepaymentMethodKey, string> = {
+  interest_only: 'Chỉ trả lãi, gốc cuối kỳ',
+  equal_principal: 'Chia đều gốc',
+};
+
+/** Màu tag mặc định (token trung tính, DS §2). */
+export const TAG_COLOR_DEFAULT = '#64748b';

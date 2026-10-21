@@ -2,13 +2,15 @@
  * Khung "List + FilterBar + Table" (screens §21) dùng cho:
  * APPR-01 Chờ tôi duyệt (/queue) · APPR-02 · APPR-03 · CHI-01/04/07 · THU-01/04.
  *
- * URL là state của danh sách: /chi?status=pending.gd&q=ABC&sort=-waiting —
- * deep-link từ notification mở đúng hồ sơ và QUAY LẠI vẫn giữ bộ lọc (?from=).
+ * URL là state của danh sách: /chi?status=pending.gd&q=ABC&sort=-waiting — deep-link từ notification
+ * mở đúng hồ sơ và QUAY LẠI vẫn giữ bộ lọc (?from=). Bộ lọc v2: `partner_id` (đối tác) và `tag_ids`
+ * (CSV, phiếu có ÍT NHẤT MỘT tag) — chỉ với danh sách phiếu (`source === 'documents'`).
  * Bulk bar hiển thị TỔNG TIỀN tính qua shared `sum()` (BigInt minor units, không Number()).
  */
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
+import { Select, type TableColumnsType } from 'antd';
 import {
   STATUS_KEYS,
   daysBetween,
@@ -25,11 +27,13 @@ import { useDocuments, useProcessed, useQueue, type DocListFilters } from '../ap
 import type { QueueRow } from '../app/types.ts';
 import { FgButton, FgMoneyStack, FgSelect, FgStatusChip, FgText } from '../components/primitives.tsx';
 import { FgEmptyState, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
-import type { TableColumnsType } from 'antd';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useDebounced } from '../components/pagekit.tsx';
-import { useAuth } from '../app/store.tsx';
+import { SCOPE_ALL, useAuth } from '../app/store.tsx';
 import { OwnerLine } from '../components/finance.tsx';
+import { TagChip, TagFilter } from '../components/tag-input.tsx';
+import { usePartner, usePartnerList } from '../app/v2/partners.ts';
+import type { DocTagRef } from '../app/v2/documents.ts';
 import { BulkApproveModal } from './approve-modal.tsx';
 
 const STATUS_OPTIONS = [
@@ -69,6 +73,20 @@ const INCOME_LANES = [
   { key: 'khac', title: 'Hủy / hết hiệu lực', statuses: ['cancelled', 'expired', 'overdue'] },
 ];
 
+/** Tag trong một ô: tối đa 2 chip, phần còn lại thành "+N". */
+function TagList({ tags }: { tags: DocTagRef[] }): ReactNode {
+  if (!tags.length) return <FgText style="caption" color="muted">—</FgText>;
+  const shown = tags.slice(0, 2);
+  return (
+    <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4, maxWidth: '100%' }}>
+      {shown.map((t) => (
+        <TagChip key={t._id} name={t.name} color={t.color} />
+      ))}
+      {tags.length > shown.length ? <FgText style="caption" color="muted">+{tags.length - shown.length}</FgText> : null}
+    </span>
+  );
+}
+
 export function useDocColumns(sortable = false): TableColumnsType<QueueRow> {
   return useMemo(
     () =>
@@ -86,7 +104,7 @@ export function useDocColumns(sortable = false): TableColumnsType<QueueRow> {
               <br />
               <FgText style="caption" color="muted">
                 {r.kind_label}
-                {r.fast_tracked_by ? ' · ⚡ duyệt trước' : ''}
+                {r.fast_tracked_by ? ` · ⚡ Đã duyệt trước bởi ${r.fast_tracked_by}` : ''}
               </FgText>
             </div>
           ),
@@ -101,13 +119,25 @@ export function useDocColumns(sortable = false): TableColumnsType<QueueRow> {
               <FgText style="bodyS">{r.title}</FgText>
               <br />
               <FgText style="caption" color="muted">
-                {r.company_name} · {r.payee_name}
+                {r.company_name}
                 {r.missing_evidence_count ? (
                   <span style={{ color: 'var(--fg-status-attention-text)' }}> · ⚠ thiếu {r.missing_evidence_count} chứng từ</span>
                 ) : null}
               </FgText>
             </div>
           ),
+        },
+        {
+          title: 'Đối tác',
+          key: 'partner',
+          ellipsis: true,
+          render: (_v: unknown, r: QueueRow) => <FgText style="bodyS">{r.partner_name ?? r.payee_name}</FgText>,
+        },
+        {
+          title: 'Tag',
+          key: 'tags',
+          width: 240,
+          render: (_v: unknown, r: QueueRow) => <TagList tags={r.tags ?? []} />,
         },
         {
           title: 'Số tiền',
@@ -165,6 +195,42 @@ function deepLink(r: QueueRow): string {
   return `${r.href}?from=${from}`;
 }
 
+/** `tag_ids` trên URL: chuỗi CSV → mảng ID (bỏ rỗng). */
+const parseTagParam = (value: string): string[] => value.split(',').map((s) => s.trim()).filter(Boolean);
+
+/**
+ * Lọc theo đối tác (v2 §5.2 "Bộ lọc danh sách"): tìm theo tên / STK / MST qua danh bạ. Phạm vi "Toàn tập
+ * đoàn": hiện thêm tên công ty để phân biệt đối tác trùng tên. Đối tác đã ngừng giao dịch vẫn lọc được.
+ */
+function PartnerFilter({ value, onChange }: { value: string; onChange: (id: string) => void }): ReactNode {
+  const { scope } = useAuth();
+  const [search, setSearch] = useState('');
+  const q = useDebounced(search.trim(), 300);
+  const list = usePartnerList({ q: q || undefined, limit: 50 });
+  const picked = usePartner(value || null);
+  const multiCompany = scope === SCOPE_ALL;
+  const label = (p: { name: string; company_name?: string | null; status?: string }): string =>
+    `${p.name}${multiCompany && p.company_name ? ` · ${p.company_name}` : ''}${p.status === 'inactive' ? ' (ngừng)' : ''}`;
+  const options: { value: string; label: string }[] = (list.data?.items ?? []).map((p) => ({ value: p._id, label: label(p) }));
+  // đối tác đang lọc nhưng ngoài kết quả tìm → vẫn hiện nhãn
+  if (value && picked.data && !options.some((o) => o.value === value)) options.unshift({ value, label: label(picked.data) });
+  return (
+    <Select
+      aria-label="Lọc theo đối tác"
+      showSearch
+      allowClear
+      filterOption={false}
+      onSearch={setSearch}
+      value={value || undefined}
+      onChange={(v: string | undefined) => onChange(v ?? '')}
+      options={options}
+      placeholder="Lọc theo đối tác"
+      loading={list.isFetching}
+      style={{ minWidth: 200, maxWidth: 280 }}
+    />
+  );
+}
+
 export interface DocListConfig {
   title: string;
   source: 'queue' | 'documents' | 'processed';
@@ -192,7 +258,7 @@ export function DocListScreen({
   sortOnTable = false,
   swimlanes,
 }: DocListConfig): ReactNode {
-  const { can } = useAuth();
+  const { can, scope } = useAuth();
   const canCreate = can('doc:create');
   const navigate = useNavigate();
   const [params, setParams] = useUrlSearchParamsShim();
@@ -217,6 +283,11 @@ export function DocListScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qDebounced]);
 
+  // [v2] lọc theo đối tác / tag — chỉ danh sách phiếu (queue và processed không có tham số này)
+  const partnerParam = source === 'documents' ? get('partner_id') : '';
+  const tagParam = source === 'documents' ? get('tag_ids') : '';
+  const tagIds = useMemo(() => parseTagParam(tagParam), [tagParam]);
+
   const filters: DocListFilters = useMemo(
     () => ({
       ...fixed,
@@ -226,10 +297,12 @@ export function DocListScreen({
       mine: (get('mine') as DocListFilters['mine']) || fixed.mine,
       sort: get('sort') || fixed.sort || '-waiting',
       overdue_only: fixed.overdue_only,
+      partner_id: partnerParam || undefined,
+      tag_ids: tagIds.length ? tagIds : undefined,
       limit: 100,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [qDebounced, get('status'), get('mine'), get('sort'), fixed, swimlanes],
+    [qDebounced, get('status'), get('mine'), get('sort'), fixed, swimlanes, partnerParam, tagIds],
   );
 
   const queue = useQueue({ limit: 100 }, source === 'queue');
@@ -239,7 +312,7 @@ export function DocListScreen({
 
   const [selected, setSelected] = useState<Record<string, QueueRow>>({});
   const [bulkOpen, setBulkOpen] = useState(false);
-  const anyFilter = Boolean(qDebounced || get('status') || get('mine'));
+  const anyFilter = Boolean(qDebounced || get('status') || get('mine') || partnerParam || tagIds.length);
   const columns = useDocColumns(sortOnTable);
   // Duyệt hàng loạt chỉ dành cho người có quyền duyệt; kế toán thực thi không chọn bulk.
   const selectable = Boolean(bulk) && can('approval:act');
@@ -249,6 +322,14 @@ export function DocListScreen({
     () => sum(selectedList.map((r) => money(r.amount as { minor: unknown; currency?: string })), 'VND'),
     [selectedList],
   );
+
+  /** Xoá mọi bộ lọc trong MỘT lần ghi URL (gọi setFilter lặp sẽ mất các thay đổi trước đó). */
+  const clearAll = () => {
+    setQText('');
+    const next = new URLSearchParams(params);
+    for (const k of ['q', 'status', 'mine', 'partner_id', 'tag_ids', 'page']) next.delete(k);
+    setParams(next);
+  };
 
   return (
     <>
@@ -270,21 +351,16 @@ export function DocListScreen({
         {source === 'documents' ? (
           <FgSelect ariaLabel="Phạm vi hồ sơ" options={MINE_OPTIONS} value={get('mine')} onChange={(v) => setFilter('mine', v ?? '')} style={{ width: 170 }} />
         ) : null}
+        {source === 'documents' && can('partner:read') ? <PartnerFilter value={partnerParam} onChange={(id) => setFilter('partner_id', id)} /> : null}
+        {source === 'documents' ? (
+          <TagFilter value={tagIds} onChange={(ids) => setFilter('tag_ids', ids.join(','))} companyId={scope === SCOPE_ALL ? null : scope} />
+        ) : null}
         {sortOnTable ? null : (
           <FgSelect ariaLabel="Sắp xếp" options={SORTS} value={get('sort') || '-waiting'} onChange={(v) => setFilter('sort', v ?? '')} style={{ width: 180 }} />
         )}
         <FgSearchInput value={qText} onChange={setQText} />
         {anyFilter ? (
-          <FgButton
-            size="small"
-            variant="ghost"
-            onClick={() => {
-              setQText('');
-              setFilter('q', '');
-              setFilter('status', '');
-              setFilter('mine', '');
-            }}
-          >
+          <FgButton size="small" variant="ghost" onClick={clearAll}>
             Xóa lọc
           </FgButton>
         ) : null}
@@ -300,12 +376,6 @@ export function DocListScreen({
       >
         {(data) => {
           const rows = data.items ?? [];
-          const clearFilters = () => {
-            setQText('');
-            setFilter('q', '');
-            setFilter('status', '');
-            setFilter('mine', '');
-          };
           if (!rows.length)
             return anyFilter ? (
               <div className="fg-card">
@@ -313,7 +383,7 @@ export function DocListScreen({
                   glyph="⌕"
                   title="Không có kết quả với bộ lọc hiện tại"
                   description="Thử bỏ bớt bộ lọc hoặc tìm bằng mã hồ sơ (PC-2026-…)."
-                  action={<FgButton onClick={clearFilters}>Xóa toàn bộ bộ lọc</FgButton>}
+                  action={<FgButton onClick={clearAll}>Xóa toàn bộ bộ lọc</FgButton>}
                 />
               </div>
             ) : (
@@ -453,7 +523,7 @@ function FgSearchInput({ value, onChange }: { value: string; onChange: (v: strin
     <input
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      placeholder="Tìm mã, nội dung, đối tượng…"
+      placeholder="Tìm mã, nội dung, đối tác, STK, MST, tag…"
       aria-label="Tìm kiếm trong danh sách"
       style={{
         flex: '1 1 220px',
@@ -470,7 +540,6 @@ function FgSearchInput({ value, onChange }: { value: string; onChange: (v: strin
 }
 
 /** URLSearchParams qua react-router (không import trực tiếp để giữ 1 nơi). */
-import { useSearchParams } from 'react-router';
 function useUrlSearchParamsShim(): [URLSearchParams, (p: URLSearchParams) => void] {
   const [params, setParams] = useSearchParams();
   return [params, (p: URLSearchParams) => setParams(p, { replace: true })];
@@ -518,7 +587,7 @@ export function SpendPaidScreen(): ReactNode {
   return <DocListScreen title="Chi đã thanh toán" source="documents" fixed={{ kind: 'spend', status: 'paid' }} sortOnTable />;
 }
 
-/** THU-01 — danh sách thu (swimlane: đã duyệt chờ thu lên đầu cho kế toán). */
+/** THU-01 — danh sách thu (swimlane: đã duyệt chờ thu lên đầu cho kế toán thực hiện). */
 export function IncomeListScreen(): ReactNode {
   return (
     <DocListScreen

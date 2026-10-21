@@ -22,6 +22,7 @@ export const PERMISSIONS = [
   'bank:transfer',
   'loan:read',
   'loan:write',
+  'loan:delete',
   'rollover:act',
   'debt:read',
   'debt:write',
@@ -43,6 +44,11 @@ export const PERMISSIONS = [
   'admin:group_accounts',
   'admin:backup',
   'audit:read',
+  // v2 (v2/v2.md §3.2)
+  'tag:create',
+  'tag:manage',
+  'automation:config',
+  'link:manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -60,11 +66,18 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'bank:read',
     'debt:read',
     'debt:write',
+    'debt:update',
     'partner:read',
     'partner:write',
     'budget:read',
     'forecast:read',
     'report:view',
+    // v2
+    'tag:create',
+    'link:manage',
+    // v2 §3.2: KTV tạo/sửa đối tác, công nợ VÀ khoản vay ngân hàng (US-PAR-05)
+    'loan:read',
+    'loan:write',
   ],
   // Kế toán trưởng: kiểm tra hồ sơ, đối chiếu, duyệt kế toán → gửi cấp trên.
   chief_accountant: [
@@ -81,6 +94,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'bank:transfer',
     'loan:read',
     'loan:write',
+    'loan:delete',
     'rollover:act',
     'debt:read',
     'debt:write',
@@ -95,6 +109,10 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'report:export',
     'alert:config',
     'audit:read',
+    // v2
+    'tag:create',
+    'tag:manage',
+    'link:manage',
   ],
   deputy_director: [
     'doc:read',
@@ -103,13 +121,13 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'loan:read',
     'rollover:act',
     'debt:read',
-    'debt:update',
-    'debt:delete',
     'budget:read',
     'forecast:read',
     'report:view',
     'report:export',
     'audit:read',
+    // v2 (§3.2: Quản lý đối tác / công nợ / nợ NH → xem)
+    'partner:read',
   ],
   director: [
     'doc:read',
@@ -121,11 +139,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'bank:write',
     'bank:transfer',
     'loan:read',
-    'loan:write',
     'rollover:act',
     'debt:read',
-    'debt:update',
-    'debt:delete',
     'budget:read',
     'budget:write',
     'forecast:read',
@@ -135,6 +150,9 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'hr:invite',
     'audit:read',
     'admin:matrix',
+    // v2
+    'tag:create',
+    'partner:read',
   ],
   // Phó Tổng Giám đốc (Phó Chủ tịch) — chức danh cấp Tập đoàn, giám sát mọi công ty con;
   // duyệt cấp cao nhưng KHÔNG nhập liệu hồ sơ (không `doc:create`).
@@ -147,8 +165,6 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'loan:read',
     'rollover:act',
     'debt:read',
-    'debt:update',
-    'debt:delete',
     'budget:read',
     'forecast:read',
     'report:view',
@@ -158,8 +174,9 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'hr:disable',
     'hr:transfer',
     'admin:matrix',
-    'admin:group_accounts',
     'audit:read',
+    // v2
+    'partner:read',
   ],
   // Tổng Giám đốc (Chủ tịch): phê duyệt + giám sát toàn hệ thống + nhân sự + cấu hình/tài khoản tập đoàn
   // + ma trận duyệt. Có `admin:settings` để tự tạo công ty con (ADM-06) — KHÔNG nhập liệu hồ sơ.
@@ -174,8 +191,6 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'loan:read',
     'rollover:act',
     'debt:read',
-    'debt:update',
-    'debt:delete',
     'budget:read',
     'forecast:read',
     'report:view',
@@ -188,6 +203,9 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'admin:settings',
     'admin:group_accounts',
     'audit:read',
+    // v2
+    'partner:read',
+    'automation:config',
   ],
   // Quản trị hệ thống: CHỈ quyền quản lý (nhân sự, công ty/bộ phận, ma trận duyệt,
   // cấu hình, tài khoản tập đoàn, audit). KHÔNG có bất kỳ quyền nào với hồ sơ,
@@ -200,10 +218,11 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'hr:transfer',
     'admin:matrix',
     'admin:settings',
-    'admin:group_accounts',
     'admin:backup',
     'alert:config',
     'audit:read',
+    // v2 — quản trị cấu hình quy tắc tự động (§3.2)
+    'automation:config',
   ],
 };
 
@@ -232,6 +251,7 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   'bank:transfer': 'Chuyển tiền',
   'loan:read': 'Xem khoản vay',
   'loan:write': 'Sửa khoản vay',
+  'loan:delete': 'Xoá khoản vay (chưa phát sinh tiền)',
   'rollover:act': 'Xử lý đáo hạn',
   'debt:read': 'Xem công nợ',
   'debt:write': 'Tạo phiếu công nợ & liên kết cấn trừ',
@@ -253,6 +273,10 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   'admin:group_accounts': 'Tài khoản tập đoàn',
   'admin:backup': 'Sao lưu & tải dữ liệu',
   'audit:read': 'Xem audit log',
+  'tag:create': 'Tạo tag (nhãn phiếu)',
+  'tag:manage': 'Quản lý tag: đổi tên, gộp, ẩn',
+  'automation:config': 'Cấu hình quy trình tự động',
+  'link:manage': 'Gán / gỡ liên kết nghiệp vụ',
 };
 
 /** Nhóm quyền theo module — dựng bảng tick phân quyền ở màn sửa nhân sự. */
@@ -267,9 +291,12 @@ export const PERMISSION_GROUPS: readonly PermissionGroup[] = [
   { key: 'approval', label: 'Phê duyệt', permissions: ['approval:act', 'approval:override'] },
   { key: 'payment', label: 'Thanh toán', permissions: ['payment:mark'] },
   { key: 'bank', label: 'Ngân hàng & quỹ', permissions: ['bank:read', 'bank:write', 'bank:transfer'] },
-  { key: 'loan', label: 'Khoản vay & đáo hạn', permissions: ['loan:read', 'loan:write', 'rollover:act'] },
+  { key: 'loan', label: 'Khoản vay & đáo hạn', permissions: ['loan:read', 'loan:write', 'loan:delete', 'rollover:act'] },
   { key: 'debt', label: 'Công nợ', permissions: ['debt:read', 'debt:write', 'debt:update', 'debt:delete'] },
   { key: 'partner', label: 'Đối tác / Khách hàng', permissions: ['partner:read', 'partner:write'] },
+  { key: 'tag', label: 'Tag', permissions: ['tag:create', 'tag:manage'] },
+  { key: 'link', label: 'Liên kết nghiệp vụ', permissions: ['link:manage'] },
+  { key: 'automation', label: 'Quy trình tự động', permissions: ['automation:config'] },
   { key: 'budget', label: 'Ngân sách & dòng tiền', permissions: ['budget:read', 'budget:write', 'forecast:read'] },
   { key: 'report', label: 'Báo cáo', permissions: ['report:view', 'report:export'] },
   { key: 'alert', label: 'Cảnh báo', permissions: ['alert:config'] },
@@ -407,6 +434,7 @@ export function buildEntitlements(input: {
       'bank:write': can('bank:write'),
       'bank:transfer': can('bank:transfer'),
       'loan:write': can('loan:write'),
+      'loan:delete': can('loan:delete'),
       'rollover:act': can('rollover:act'),
       'debt:write': can('debt:write'),
       'debt:update': can('debt:update'),
@@ -420,6 +448,10 @@ export function buildEntitlements(input: {
       'admin:matrix': can('admin:matrix'),
       'admin:group_accounts': can('admin:group_accounts'),
       'audit:read': can('audit:read'),
+      'tag:create': can('tag:create'),
+      'tag:manage': can('tag:manage'),
+      'link:manage': can('link:manage'),
+      'automation:config': can('automation:config'),
     },
     amount_limit_minor: input.amount_limit_minor ?? DEFAULT_AMOUNT_LIMIT_MINOR[input.role],
     columns: SENSITIVE_COLUMNS.map((c) => ({

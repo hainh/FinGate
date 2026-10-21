@@ -26,12 +26,15 @@ import {
   statementImportBody,
 } from '@fingate/shared';
 import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, internalTransferBodySchema, statementImportBodySchema } from './schemas.ts';
-import { accountSnapshots, asBigInt, docHref, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
+import { asBigInt, docHref, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
 import { bookedBalance } from '../domain/ledger/index.ts';
+import { ledgerAccountViews } from '../domain/accounts.ts';
+import { loadPartnerRefs } from '../domain/reports/refs.ts';
 import { scopedFind } from '../lib/mongo.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
 import { nextDocumentCode } from '../domain/numbering/index.ts';
 import { invalidateFor } from '../domain/side-effects.ts';
+import { emitVoucherEvent, type VoucherEventSubject } from '../domain/events/index.ts';
 
 /** Chi tiết tài khoản tiền cho form sửa (BANK-02) — trả số TK đầy đủ (đã kiểm quyền ở route). */
 async function bankAccountDetail(id: string): Promise<Record<string, unknown>> {
@@ -59,6 +62,25 @@ async function bankAccountDetail(id: string): Promise<Record<string, unknown>> {
   };
 }
 
+/**
+ * v2: tên ngân hàng của khoản đáo hạn lấy theo ĐỐI TÁC (`partner_id`). Khoản chưa gán đối tác
+ * (dữ liệu v1 chờ migrate M2) giữ nguyên text v1 để không mất thông tin hiển thị.
+ */
+async function withBankPartnerName<T extends { loan_id: string; bank_name: string }>(rows: T[]): Promise<T[]> {
+  const loanIds = [...new Set(rows.map((r) => r.loan_id))];
+  if (!loanIds.length) return rows;
+  const loans = await Models.BankDebt.find({ _id: { $in: loanIds } } as never)
+    .select({ partner_id: 1 })
+    .lean<{ _id: unknown; partner_id?: unknown }[]>();
+  const partnerOf = new Map(loans.map((l) => [String(l._id), l.partner_id ? String(l.partner_id) : null]));
+  const partners = await loadPartnerRefs([...partnerOf.values()]);
+  return rows.map((r) => {
+    const pid = partnerOf.get(r.loan_id) ?? null;
+    const p = pid ? partners.get(pid) : undefined;
+    return p ? { ...r, bank_name: p.name } : r;
+  });
+}
+
 export function financeRoutes(app: FastifyInstance): void {
   /* ------------------------------- BANK ------------------------------- */
 
@@ -84,10 +106,10 @@ export function financeRoutes(app: FastifyInstance): void {
           if (!company) throw new ApiError({ code: 'FG-VAL-001', detail: 'Công ty không tồn tại' });
           forCompanyOpt = { id: q.for_company, isGroup: Boolean(company.is_group) };
         }
-        const rows = await accountSnapshots(scope, {
+        // Màn BANK-01: công ty con thấy tài khoản Tập đoàn để theo dõi số dư;
+        // khi chọn nguồn tiền cho phiếu (for_company) server đã lọc theo công ty.
+        const rows = await ledgerAccountViews(scope, {
           includeClosed: q.include_closed === 'true',
-          // Màn BANK-01: công ty con thấy tài khoản Tập đoàn để theo dõi số dư;
-          // khi chọn nguồn tiền cho phiếu (for_company) server đã lọc theo công ty.
           includeGroup: !forCompanyOpt,
           forCompany: forCompanyOpt,
         });
@@ -101,23 +123,26 @@ export function financeRoutes(app: FastifyInstance): void {
               company_code: r.company_code,
               is_group: r.is_group,
               label: r.label,
-              bank_name: r.label.split(' ')[0] ?? '',
+              bank_name: r.bank_name,
               account_number_masked: r.account_number_masked,
               account_number: r.account_number_masked,
               kind: r.kind,
               currency: r.currency,
               status: r.status,
-              balance: wire(r.closing, r.currency),
-              available: wire(r.available, r.currency),
-              blocked: wire(r.blocked, r.currency),
+              // v2 §4.2: số dư = sổ cái (thực tế) + dự kiến; không còn phong toả / khả dụng
+              balance: wire(r.actual, r.currency),
+              projected: wire(r.projected, r.currency),
+              planned_in: wire(r.planned_in, r.currency),
+              planned_out: wire(r.planned_out, r.currency),
               min_balance: wire(r.min_balance, r.currency),
               breach: r.breach,
-              stale: r.stale,
+              breach_projected: r.breach_projected,
+              stale: false,
               balance_date: r.balance_date,
             })),
             totals: {
-              available: wire(rows.reduce((a, r) => a + r.available, 0n)),
-              blocked: wire(rows.reduce((a, r) => a + r.blocked, 0n)),
+              balance: wire(rows.reduce((a, r) => a + r.actual, 0n)),
+              projected: wire(rows.reduce((a, r) => a + r.projected, 0n)),
             },
           },
           { maxAge: 15 },
@@ -297,16 +322,28 @@ export function financeRoutes(app: FastifyInstance): void {
         // Tài khoản thường phải thuộc công ty trong phạm vi hiện tại.
         if (!acct.is_group) assertCompanyScope(req, acct.company_id ? String(acct.company_id) : null);
         if (status !== 'active') {
-          const referencing = await Models.Document.countDocuments({
+          // Tham chiếu = tài khoản nguồn, tài khoản đích (phiếu chuyển nội bộ v1 `target` và v2 `transfer_target`).
+          // Quyết định: CHẶN (409) thay vì chỉ cảnh báo, để không có phiếu chờ xử lý trỏ tới tài khoản đã khoá; trả kèm mã phiếu.
+          const referenceFilter = {
             status: { $in: ['draft', 'pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman', 'approved', 'processing'] },
-            $or: [{ 'source.account_id': id }, { 'source.group_account_id': id }],
-          } as never);
+            $or: [
+              { 'source.account_id': id },
+              { 'source.group_account_id': id },
+              { 'target.account_id': id },
+              { 'transfer_target.account_id': id },
+            ],
+          };
+          const referencing = await Models.Document.countDocuments(referenceFilter as never);
           if (referencing > 0) {
+            const codes = await Models.Document.find(referenceFilter as never)
+              .select({ code: 1 })
+              .limit(20)
+              .lean<{ code?: string }[]>();
             throw new ApiError({
               code: 'FG-SYS-003',
               status: 409,
               detail: `${referencing} hồ sơ đang chờ xử lý tham chiếu tài khoản này. Chuyển nguồn tiền trước khi khoá.`,
-              data: { referencing_documents: referencing },
+              data: { referencing_documents: referencing, codes: codes.map((c) => c.code ?? '') },
             });
           }
         }
@@ -347,7 +384,6 @@ export function financeRoutes(app: FastifyInstance): void {
           {
             items: rows.map((r) => {
               const closing = asBigInt(r.closing_minor);
-              const blocked = asBigInt(r.blocked_minor);
               const min = asBigInt(r.min_balance_minor);
               return {
                 date: String(r.date),
@@ -359,62 +395,15 @@ export function financeRoutes(app: FastifyInstance): void {
                 inflow: wire(asBigInt(r.actual_in_minor)),
                 outflow: wire(asBigInt(r.actual_out_minor)),
                 closing: wire(closing),
-                blocked: wire(blocked),
-                available: wire(closing - blocked),
                 min_balance: wire(min),
-                breach: closing - blocked < min,
+                // v2 §4.2: vi phạm = số dư sổ cái cuối ngày < tối thiểu (không trừ phong toả)
+                breach: closing < min,
                 diff_minor: (closing - (asBigInt(r.opening_minor) + asBigInt(r.actual_in_minor) - asBigInt(r.actual_out_minor))).toString(),
               };
             }),
           },
           { maxAge: 30 },
         );
-      },
-    }),
-  );
-
-  /**
-   * CHI-02 — "Đơn vị nhận tiền": danh sách MỌI tài khoản tiền toàn tập đoàn dưới dạng
-   * `Mã công ty - Tên ngân hàng hoặc tên quỹ - Số tài khoản hoặc mã quỹ` (phân tách ` - `).
-   * Server là nguồn chuẩn để FE prefill + để parser khi thực thi đối chiếu.
-   */
-  app.route(
-    defineRoute({
-      method: 'GET',
-      url: '/bank-accounts/payee-options',
-      config: { perms: ['doc:read'] as Permission[], screen: 'CHI-02', summary: 'Tài khoản tiền toàn tập đoàn (gợi ý Đơn vị nhận tiền)' },
-      handler: async (_req, reply) => {
-        const accounts = await Models.BankAccount.find({ status: 'active' } as never)
-          .select({ company_id: 1, is_group: 1, bank_name: 1, account_number: 1, account_name: 1, kind: 1 })
-          .lean();
-        const companies = await Models.Company.find({}).select({ code: 1, name: 1, is_group: 1 }).lean();
-        const cmap = new Map(companies.map((c) => [String(c._id), { code: String(c.code ?? ''), name: String(c.name ?? '') }]));
-        const group = companies.find((c) => c.is_group);
-        const groupCode = String(group?.code ?? 'GROUP');
-        const groupName = String(group?.name ?? 'Tập đoàn');
-        const items = accounts
-          .map((a) => {
-            const company = a.is_group ? { code: groupCode, name: groupName } : cmap.get(String(a.company_id ?? ''));
-            const code = company?.code ?? '';
-            if (!code) return null;
-            const bankName = String(a.bank_name ?? '');
-            const number = String(a.account_number ?? '');
-            if (!bankName || !number) return null;
-            return {
-              _id: String(a._id),
-              value: `${code} - ${bankName} - ${number}`,
-              label: `${code} - ${bankName} - ${number}`,
-              company_id: a.company_id ? String(a.company_id) : null,
-              company_code: code,
-              company_name: company?.name ?? '',
-              is_group: Boolean(a.is_group),
-              kind: String(a.kind ?? 'bank'),
-              bank_name: bankName,
-              account_number: number,
-            };
-          })
-          .filter((x): x is NonNullable<typeof x> => Boolean(x));
-        return ok(reply, { items }, { maxAge: 60 });
       },
     }),
   );
@@ -465,10 +454,12 @@ export function financeRoutes(app: FastifyInstance): void {
         const docIds = [...new Set(entries.map((e) => (e.document_id ? String(e.document_id) : '')).filter(Boolean))];
         const docs = docIds.length
           ? await Models.Document.find({ _id: { $in: docIds } } as never)
-              .select({ code: 1, kind: 1, title: 1, purpose: 1, payee: 1, execution: 1 })
+              .select({ code: 1, kind: 1, title: 1, purpose: 1, payee: 1, partner_id: 1, execution: 1 })
               .lean<Record<string, unknown>[]>()
           : [];
         const dmap = new Map(docs.map((d) => [String(d._id), d]));
+        // đối tác v2 lấy theo partner_id (tên luôn đúng khi đổi tên); chỉ phiếu chưa có đối tác mới dùng text v1
+        const partnerMap = await loadPartnerRefs(docs.map((d) => (d.partner_id ? String(d.partner_id) : null)));
         const company = account.company_id ? await Models.Company.findById(account.company_id).select({ name: 1 }).lean<{ name?: string } | null>() : null;
 
         const money = (v: bigint): { minor: string; currency: string; decimals: number } => ({
@@ -485,9 +476,10 @@ export function financeRoutes(app: FastifyInstance): void {
             const createdAt = entry.created_at ? new Date(String(entry.created_at)).toISOString() : null;
             // ưu tiên mốc thực thi (nếu có giờ), còn lại dùng created_at (đủ giây).
             const at = exec?.paid_at && exec.paid_at.length > 10 ? exec.paid_at : createdAt;
+            const partnerId = doc?.partner_id ? String(doc.partner_id) : null;
             const payee = (doc?.payee ?? null) as { name?: string } | null;
             const kind = doc?.kind ? String(doc.kind) : '';
-            const counterparty = payee?.name ? String(payee.name) : direction === 'in' ? '—' : '—';
+            const counterparty = partnerId ? (partnerMap.get(partnerId)?.name ?? '—') : payee?.name ? String(payee.name) : '—';
             return {
               _id: String(entry._id),
               at,
@@ -605,7 +597,7 @@ export function financeRoutes(app: FastifyInstance): void {
         return ok(
           reply,
           {
-            items: rows,
+            items: await withBankPartnerName(rows),
             kpi: {
               today: wire(sum(all.filter((r) => r.days_to_due <= 0))),
               d3: wire(sum(all.filter((r) => r.days_to_due <= 3))),
@@ -672,6 +664,8 @@ export function financeRoutes(app: FastifyInstance): void {
           amount: { minor, currency: body.amount.currency, decimals: 0 },
           source: { fund: 'bank', account_id: body.from_account_id },
           target: { company_id: body.to_company_id, account_id: body.to_account_id },
+          // v2: đích chuyển nội bộ theo ID (ưu tiên khi ghi sổ cái & báo cáo); `target` v1 giữ song song
+          transfer_target: { company_id: body.to_company_id, account_id: body.to_account_id ?? null },
           planned_date: normalizePlannedDate(body.planned_date),
           business_date: today(),
           history: [history],
@@ -687,6 +681,13 @@ export function financeRoutes(app: FastifyInstance): void {
           document_id: String(created._id),
           ip: requestCtx(req).ip,
         });
+        // v2: sự kiện tạo phiếu chuyển nội bộ (outbox, best-effort)
+        await emitVoucherEvent(
+          'voucher.created',
+          created as unknown as VoucherEventSubject,
+          { user_id: actor.user_id, name: actor.name, role: actor.role },
+          { from: null, to: 'draft', action: 'create', internal_transfer: true },
+        );
         invalidateFor(body.from_company_id, actor.user_id);
         return ok(reply, { data: { document_id: String(created._id), code, note: 'Không tính vào chi phí/doanh thu' } }, { status: 201 });
       },
@@ -701,8 +702,8 @@ export function financeRoutes(app: FastifyInstance): void {
       config: { perms: ['loan:read'] as Permission[], screen: 'RENEW-05', summary: 'Tiền cần chuẩn bị 30 ngày tới' },
       handler: async (req, reply) => {
         const scope = requireScope(req);
-        const [accounts, mat, spend] = await Promise.all([
-          accountSnapshots(scope),
+        const [accounts, matRaw, spend] = await Promise.all([
+          ledgerAccountViews(scope),
           maturityLadder(scope, { horizonDays: 30 }),
           scopedFind<Record<string, unknown>>(
             Models.Document,
@@ -711,7 +712,9 @@ export function financeRoutes(app: FastifyInstance): void {
             { limit: 500 },
           ),
         ]);
-        const available = accounts.reduce((a, r) => a + r.available, 0n);
+        const mat = await withBankPartnerName(matRaw);
+        // so sánh với SỐ DƯ SỔ CÁI hiện tại (không cộng phiếu chờ — phiếu chi 30 ngày đã nằm trong nhu cầu)
+        const balance = accounts.reduce((a, r) => a + r.actual, 0n);
         const maturityTotal = mat.reduce((a, m) => a + asBigInt(m.need_prepare.minor), 0n);
         const spendTotal = spend.reduce((a, d) => a + asBigInt((d.amount as { minor?: unknown } | undefined)?.minor ?? 0n), 0n);
         const need = maturityTotal + spendTotal;
@@ -720,12 +723,12 @@ export function financeRoutes(app: FastifyInstance): void {
           {
             data: {
               horizon_days: 30,
-              available: wire(available),
+              balance: wire(balance),
               need: wire(need),
               maturity: wire(maturityTotal),
               planned_spend: wire(spendTotal),
-              gap: wire(available - need),
-              breach: available - need < 0n,
+              gap: wire(balance - need),
+              breach: balance - need < 0n,
               rows: mat.map((m) => ({ date: m.maturity_date, label: `${m.bank_name} ${m.contract_code}`, amount: m.need_prepare, principal: m.outstanding, interest: m.interest_to_due, tone: m.tone })),
             },
           },

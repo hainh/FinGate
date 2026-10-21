@@ -67,6 +67,9 @@ export async function bootstrapAdminIfEmpty(log?: FastifyBaseLogger): Promise<Re
 
   const env = getEnv();
   const email = env.BOOTSTRAP_ADMIN_EMAIL.trim().toLowerCase();
+  if (!env.BOOTSTRAP_ADMIN_PASSWORD) {
+    throw new Error('Thiếu BOOTSTRAP_ADMIN_PASSWORD ở production: không tạo được tài khoản quản trị đầu tiên.');
+  }
   const password = await hashPassword(env.BOOTSTRAP_ADMIN_PASSWORD);
   const companyId = await ensureGroupCompany();
   await ensureGroupCashAccount();

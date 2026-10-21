@@ -10,6 +10,8 @@
  */
 
 import { useEffect, useState, type ReactNode } from 'react';
+import { DatePicker } from 'antd';
+import dayjs from 'dayjs';
 import {
   formatMoney,
   money,
@@ -26,6 +28,8 @@ import type { DocumentDetail, QueueRow } from '../app/types.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgPassword, FgSelect, FgStatusChip, FgTextarea, FgText } from '../components/primitives.tsx';
 import { FgModal } from '../components/uitk.tsx';
 import { FgDecisionPack, directionOf } from '../components/finance.tsx';
+import { LoanBanner } from '../components/voucher-v2.tsx';
+import { hasAutoLoanRun } from '../app/v2/documents.ts';
 
 /* ================= step-up ================= */
 
@@ -260,10 +264,18 @@ export function ApprovalConfirmModal({
   const accountChanged = accountId !== (doc.source.account_id ?? '');
   const amount = moneyFromWire(doc.amount)!;
   // Cấp duyệt phiếu chi có thể đổi số tiền; TĂNG so với đề nghị ban đầu phải xác nhận lại.
-  const canEditAmount = (action === 'approve' || action === 'approve_with_reason') && doc.kind === 'spend';
+  // §11.5: đã có lượt R3 (vay để chi) ⇒ số tiền đã khoá; server trả FG-WF-005 nếu vẫn đổi.
+  const amountLocked = hasAutoLoanRun(doc.automation_runs);
+  const canEditAmount = (action === 'approve' || action === 'approve_with_reason') && doc.kind === 'spend' && !amountLocked;
   const [amountText, setAmountText] = useState('');
   const [amountErr, setAmountErr] = useState<string | null>(null);
   const [amountConfirm, setAmountConfirm] = useState<null | { nextMinor: bigint }>(null);
+  // §8 / US-EXE-01 — thực thi phiếu chi: ngày thực tế (mặc định hôm nay, không quá hôm nay), số tham chiếu NH, UNC đính kèm
+  const isPay = action === 'pay';
+  const [paidAt, setPaidAt] = useState<string>(() => today());
+  const [bankRef, setBankRef] = useState('');
+  const hasUnc = (doc.attachments ?? []).some((a) => a.type === 'bank_order');
+  const payMissing = isPay && doc.kind === 'spend' ? [...(bankRef.trim() ? [] : ['số tham chiếu ngân hàng']), ...(hasUnc ? [] : ['chứng từ UNC (Ủy nhiệm chi)'])] : [];
   // thành công (cả khi retry sau step-up/gõ lại tiền) → đóng confirm
   useEffect(() => {
     if (runner.success > 0) onDone();
@@ -282,7 +294,7 @@ export function ApprovalConfirmModal({
   const danger = action === 'reject' || action === 'cancel';
 
   const send = async (amountMinor?: string) => {
-    const execution: TransitionInput['execution'] = action === 'pay' ? { paid_at: today() } : undefined;
+    const execution: TransitionInput['execution'] = isPay ? { paid_at: paidAt, bank_ref: bankRef.trim() || undefined } : undefined;
     await runner.runAsync({
       id: doc._id,
       action,
@@ -342,7 +354,7 @@ export function ApprovalConfirmModal({
             variant={danger ? 'danger' : 'primary'}
             onClick={submit}
             loading={runner.busy}
-            disabled={needsReason && opinion.trim().length < 5}
+            disabled={(needsReason && opinion.trim().length < 5) || payMissing.length > 0}
           >
             {label[action]}
           </FgButton>
@@ -352,6 +364,12 @@ export function ApprovalConfirmModal({
       {action === 'approve_with_reason' ? (
         <div style={{ marginBottom: 12 }}>
           <div className="fg-stripe-fast">⚡ Bạn đang duyệt TRƯỚC cấp dưới chưa xong — lý do sẽ vào audit log và hiển thị cho mọi người.</div>
+        </div>
+      ) : null}
+      {/* US-AUTO-04: duyệt phiếu chi vốn vay phải thấy rõ ngân hàng, số tiền và kỳ hạn */}
+      {doc.options?.loan ? (
+        <div style={{ marginBottom: 12 }}>
+          <LoanBanner loan={doc.options.loan} />
         </div>
       ) : null}
       {pack.data ? <FgDecisionPack pack={pack.data} direction={directionOf(doc.kind)} /> : <FgText style="bodyS" color="muted">Đang tải 7 câu hỏi kiểm soát…</FgText>}
@@ -379,6 +397,41 @@ export function ApprovalConfirmModal({
               style={{ width: '100%' }}
             />
           </FgField>
+        </div>
+      ) : null}
+      {amountLocked && doc.kind === 'spend' && (action === 'approve' || action === 'approve_with_reason') ? (
+        <div style={{ marginTop: 16 }}>
+          <FgAlert
+            tone="attention"
+            title="Số tiền đã khoá"
+            description="Phiếu này đã sinh khoản vay tự động (R3): số tiền không đổi được khi duyệt. Muốn đổi số tiền phải xử lý khoản vay trước."
+          />
+        </div>
+      ) : null}
+      {isPay ? (
+        <div style={{ marginTop: 16, display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}>
+          <FgField label="Ngày thực chi *" help="Mặc định hôm nay; không chọn ngày sau hôm nay">
+            <DatePicker
+              value={dayjs(paidAt)}
+              onChange={(d) => {
+                if (d) setPaidAt(d.format('YYYY-MM-DD'));
+              }}
+              disabledDate={(d) => d.isAfter(dayjs(), 'day')}
+              format="DD/MM/YYYY"
+              allowClear={false}
+              style={{ width: '100%' }}
+            />
+          </FgField>
+          {doc.kind === 'spend' ? (
+            <FgField label="Số tham chiếu ngân hàng *" help="Mã giao dịch trên UNC / sao kê ngân hàng">
+              <FgInput value={bankRef} onChange={(e) => setBankRef(e.target.value)} maxLength={80} placeholder="VD: FT26294xxxx" />
+            </FgField>
+          ) : null}
+        </div>
+      ) : null}
+      {isPay && doc.kind === 'spend' && !hasUnc ? (
+        <div style={{ marginTop: 12 }}>
+          <FgAlert tone="warning" title="Chưa có chứng từ UNC" description="Đính kèm ủy nhiệm chi (UNC) ở tab Chứng từ của hồ sơ trước khi đánh dấu đã chi." />
         </div>
       ) : null}
       {canEditAmount ? (

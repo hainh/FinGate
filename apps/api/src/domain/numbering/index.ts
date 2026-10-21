@@ -3,12 +3,17 @@
  * bất biến sau khi gửi. CAS bằng `$inc` trên MỘT document counters (không cần transaction).
  */
 
-import { DOC_CODE_PREFIX, type DocKind } from '@fingate/shared';
+import { DOC_CODE_PREFIX, PARTNER_CODE_PREFIX, type DocKind } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
 
 export async function nextDocumentCode(kind: DocKind, at: Date = new Date()): Promise<string> {
   const prefix = DOC_CODE_PREFIX[kind] ?? 'FG';
   return nextSequentialCode(prefix, at);
+}
+
+/** Mã đối tác (v2 §2.3): `DT-2026-00001`. Dùng cùng bộ đếm `counters` theo năm. */
+export async function nextPartnerCode(at: Date = new Date()): Promise<string> {
+  return nextSequentialCode(PARTNER_CODE_PREFIX, at);
 }
 
 /** Mã tuần tự dùng chung cho phiếu công nợ (`CN`), khoản vay ngân hàng (`NHD`)… */

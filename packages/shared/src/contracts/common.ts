@@ -40,6 +40,17 @@ export const docVersion = z.coerce.number().int().min(0);
 /** Tiền trên wire là STRING minor units (§8.5). Chấp nhận number nguyên cho tiện. */
 export const minorUnits = z.union([z.string().regex(/^-?\d+$/), z.number().int()]);
 
+/** Số tiền không âm dạng chuỗi minor units (v2: phân bổ liên kết, gốc/lãi/phí). */
+export const minorNonNeg = z.string().regex(/^\d+$/, 'Số tiền phải là số nguyên không âm (minor units)');
+
+/**
+ * Khoá so khớp tên chuẩn hoá (v2 §5.1, §6.2): bỏ khoảng trắng thừa, không phân biệt
+ * hoa thường. Dùng cho `partners.name_key` và `tags.name_key` (chống trùng).
+ */
+export function normalizeNameKey(name: string): string {
+  return name.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
 const litCur = <T extends string>(arr: readonly T[]) => arr as unknown as [T, ...T[]];
 export const currencyCode = z.enum(litCur(CURRENCY_CODES));
 

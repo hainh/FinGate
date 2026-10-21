@@ -12,7 +12,9 @@ import { connectDb, disconnectDb, dbUp } from './lib/mongo.ts';
 import { applyIndexes } from './db/indexes.ts';
 import { seedIfEmpty } from './db/seed.ts';
 import { bootstrapAdminIfEmpty, ensureGroupCompany } from './db/bootstrap.ts';
-import { syncCounterparties } from './domain/counterparty/index.ts';
+import { ensureAutomationRules } from './domain/automation/engine.ts';
+import './domain/automation/rules/index.ts'; // đăng ký bộ xử lý R1–R6 (trước khi chu kỳ tự động chạy)
+import { startAutomationLoop } from './jobs/index.ts';
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -23,15 +25,11 @@ async function main(): Promise<void> {
     await applyIndexes((msg) => app.log.info(msg));
     // Hệ thống chỉ có MỘT pháp nhân Tập đoàn — tạo sẵn (idempotent) cho mọi DB.
     await ensureGroupCompany();
+    // v2: quy tắc tự động mặc định (chỉ thêm quy tắc còn thiếu, không ghi đè chỉnh sửa).
+    await ensureAutomationRules();
     if (env.SEED_ON_BOOT === 'true') await seedIfEmpty(app.log);
     // DB trắng (chưa seed demo) → luôn có tài khoản quản trị đầu tiên để đăng nhập.
     else if (env.BOOTSTRAP_ON_BOOT === 'true') await bootstrapAdminIfEmpty(app.log);
-    // Quét phiếu thu/chi cũ để tạo danh bạ đối tác (chỉ chạy khi khởi động lại backend).
-    try {
-      await syncCounterparties((m) => app.log.info(m));
-    } catch (err) {
-      app.log.error({ err }, 'không quét được danh bạ đối tác — bỏ qua');
-    }
   } catch (err) {
     // DB chưa lên (Atlas M0 bị pause / mongo container chưa ready) → vẫn boot để
     // /healthz trả về degraded, Render không kill loop vô hạn
@@ -43,11 +41,14 @@ async function main(): Promise<void> {
     { version: env.VERSION, profile: env.PROFILE, storage: env.STORAGE_DRIVER, db: dbUp() ? 'up' : 'down' },
     `FinGate sẵn sàng tại ${env.PUBLIC_URL}`,
   );
+  // v2: xử lý hàng sự kiện → quy tắc tự động mỗi vài giây (bỏ qua khi DB chưa lên).
+  const stopAutomation = startAutomationLoop(app.log);
 
   let closing = false;
   const shutdown = (signal: string): void => {
     if (closing) return;
     closing = true;
+    stopAutomation();
     app.log.info(`${signal}: đang đóng`);
     const timer = setTimeout(() => {
       app.log.error('quá 10s, buộc thoát');

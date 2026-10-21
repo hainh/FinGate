@@ -33,19 +33,31 @@ const NAV: NavItem[] = [
   { to: '/dashboard', label: 'Tổng quan', glyph: '◧', mobile: true, perm: 'doc:read', match: ['/dashboard', '/hom-nay'] },
   { to: '/cho-toi-duyet', label: 'Chờ tôi duyệt', glyph: '✍', badge: 'awaiting', mobile: true, perm: ['approval:act', 'payment:mark'], match: ['/cho-toi-duyet', '/toi-da-duyet', '/can-bo-sung'] },
   { to: '/can-xu-ly', label: 'Cần xử lý', glyph: '⚑', badge: 'unread', mobile: true, perm: 'doc:read', match: ['/can-xu-ly'] },
+  // v2 §12 — cảnh báo (loại mới: quy trình tự động lỗi, phiếu nguồn huỷ khi đối tượng sinh đã có tiền).
+  { to: '/canh-bao', label: 'Cảnh báo', glyph: '⚠', mobile: true, perm: 'doc:read', match: ['/canh-bao'] },
   { to: '/chi', label: 'Chi', glyph: '↗', mobile: true, perm: 'doc:read', match: ['/chi', '/ho-so/chi'] },
   { to: '/thu', label: 'Thu', glyph: '↙', mobile: true, perm: 'doc:read', match: ['/thu', '/ho-so/thu'] },
   { to: '/ngan-hang/taikhoan', label: 'Ngân hàng', glyph: '▤', mobile: true, perm: 'bank:read', match: ['/ngan-hang', '/ngan-hang/taikhoan', '/ngan-hang/chuyen-noi-bo', '/ho-so/noi-bo'] },
   { to: '/ngan-hang/khoan-vay', label: 'Nợ ngân hàng', glyph: '⌂', mobile: true, perm: 'loan:read', match: ['/ngan-hang/khoan-vay'] },
   { to: '/ngan-hang/dao-han', label: 'Đáo hạn', glyph: '⧗', mobile: true, perm: 'loan:read', dev: true, match: ['/ngan-hang/dao-han', '/ho-so/dao-han'] },
   { to: '/cong-no', label: 'Công nợ', glyph: '≡', mobile: true, perm: 'debt:read', match: ['/cong-no'] },
-  { to: '/doi-tac', label: 'Đối tác/Khách hàng', glyph: '⚭', mobile: true, perm: 'partner:read', match: ['/doi-tac'] },
+  { to: '/doi-tac', label: 'Đối tác', glyph: '⚭', mobile: true, perm: 'partner:read', match: ['/doi-tac'] },
   { to: '/dong-tien', label: 'Dòng tiền', glyph: '∿', mobile: true, perm: 'forecast:read', match: ['/dong-tien'] },
   { to: '/baocao', label: 'Báo cáo', glyph: '☰', mobile: true, perm: 'report:view', dev: true, match: ['/baocao'] },
   { to: '/ban-tin/ngay', label: 'Bản tin', glyph: '✉', mobile: true, perm: 'report:view', match: ['/ban-tin'] },
-  // Ai được vào BẤT KỲ tab Quản trị nào (nhân sự · công ty · ma trận · audit) đều thấy mục này.
+  // Ai được vào BẤT KỲ tab Quản trị nào đều thấy mục này: đây là HỢP các quyền của ADMIN_TABS
+  // (screens/admin.tsx) — nhân sự · công ty · ma trận · ngưỡng · chi định kỳ · tự động · tag · audit · sao lưu.
   // KTT sau khi bỏ quyền nhân sự vẫn giữ `audit:read` → vẫn xem được audit log.
-  { to: '/quantri', label: 'Quản trị', glyph: '⚙', mobile: true, perm: ['hr:invite', 'admin:settings', 'admin:matrix', 'audit:read'], match: ['/quantri'] },
+  {
+    to: '/quantri',
+    label: 'Quản trị',
+    glyph: '⚙',
+    mobile: true,
+    perm: ['hr:invite', 'admin:settings', 'admin:matrix', 'audit:read', 'admin:backup', 'tag:manage', 'automation:config', 'doc:create'],
+    match: ['/quantri'],
+  },
+  // v2 §13 — quản lý tag theo công ty (KTT): nằm ngay dưới khu Quản trị, chỉ hiện với tag:manage.
+  { to: '/quantri/tags', label: 'Quản lý tag', glyph: '#', perm: 'tag:manage', match: ['/quantri/tags'] },
 ];
 
 /**
@@ -135,7 +147,7 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
     const visible = NAV.filter((n) => !n.perm || (Array.isArray(n.perm) ? n.perm.some((p) => can(p)) : can(n.perm)));
     if (!isMobile) return visible;
     return visible.filter((n) => n.mobile);
-  }, [isMobile, location.pathname, can]);
+  }, [isMobile, can]);
 
   // Mục menu đang active = mục có tiền tố `match` dài nhất khớp path hiện tại (khớp theo SEGMENT).
   // Dùng match thay cho NavLink isActive để giữ active cả ở màn con (chi tiết/tạo: /ho-so/*, /cong-no/phieu/*…).

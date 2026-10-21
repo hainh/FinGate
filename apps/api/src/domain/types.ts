@@ -98,8 +98,16 @@ export interface DomainDoc {
   priority: string;
   contract?: { code?: string | null; value?: { minor: bigint } | null } | null;
   loan_id?: string | null;
-  /** Phiếu thu: tự tạo phiếu nợ ngân hàng khi được duyệt & thực thi. */
-  create_bank_debt?: boolean;
+  /** ★ v2: đối tác theo ID (có thể null với dữ liệu v1 chưa migrate). */
+  partner_id?: string | null;
+  /** ★ v2: tag gắn phiếu. */
+  tag_ids?: string[];
+  /** ★ v2: tuỳ chọn vay (options.loan). */
+  options?: { loan?: DocLoanOptions | null } | null;
+  /** ★ v2: chuyển nội bộ theo ID. */
+  transfer_target?: { company_id: string; account_id?: string | null } | null;
+  /** ★ v2: nguồn gốc — thủ công / tự động. */
+  origin?: { kind?: 'manual' | 'automation'; run_id?: string | null; rule_code?: string | null } | null;
   budget?: { budget_id?: string | null; line_id?: string | null; in_plan?: boolean } | null;
   rollover?: Record<string, unknown> | null;
   approval: { matrix_id?: string | null; matrix_version?: number; matrix_label?: string | null; steps: StepRow[] };
@@ -123,6 +131,17 @@ export interface DomainDoc {
   archived_at?: Date | null;
 }
 
+
+/** Tuỳ chọn vay trên phiếu ở tầng domain (BigInt đã chuẩn hoá). */
+export interface DocLoanOptions {
+  kind: 'borrow' | 'fund';
+  mode?: 'new' | 'existing' | 'later';
+  lender_partner_id?: string | null;
+  receive_account_id?: string | null;
+  amount_minor?: bigint | null;
+  existing_loan_id?: string | null;
+  terms?: Record<string, unknown> | null;
+}
 
 export interface StepRow {
   order: number;

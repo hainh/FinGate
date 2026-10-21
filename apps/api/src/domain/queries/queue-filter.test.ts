@@ -41,3 +41,40 @@ describe('queueFilter — "chờ tôi duyệt" gồm cả việc thực thi cho 
     expect(f.status).toBeUndefined();
   });
 });
+
+describe('queueFilter — đối tác & tag (v2)', () => {
+  const P = 'a'.repeat(24);
+  const T1 = 'b'.repeat(24);
+  const T2 = 'c'.repeat(24);
+
+  it('không lọc đối tác/tag khi không truyền', () => {
+    const f = queueFilter(base({}));
+    expect(f.partner_id).toBeUndefined();
+    expect(f.tag_ids).toBeUndefined();
+  });
+
+  it('lọc đúng một đối tác theo ID', () => {
+    expect(queueFilter(base({ partnerId: P })).partner_id).toBe(P);
+  });
+
+  it('tag: phiếu có ÍT NHẤT MỘT trong các tag ($in)', () => {
+    expect(queueFilter(base({ tagIds: [T1, T2] })).tag_ids).toEqual({ $in: [T1, T2] });
+    expect(queueFilter(base({ tagIds: [] })).tag_ids).toBeUndefined();
+  });
+
+  it('ô tìm kiếm cộng thêm đối tác khớp tên/STK và tag khớp tên (qua ID đã nạp)', () => {
+    const f = queueFilter(base({ q: 'BIDV', qPartnerIds: [P], qTagIds: [T1] }));
+    const or = f.$or as Record<string, unknown>[];
+    expect(or).toHaveLength(4);
+    expect(or).toContainEqual({ partner_id: { $in: [P] } });
+    expect(or).toContainEqual({ tag_ids: { $in: [T1] } });
+    // mã/tiêu đề vẫn là điều kiện text trực tiếp (không còn tìm text `payee.*` nhập tự do)
+    expect(or).toContainEqual({ title: { $regex: 'BIDV', $options: 'i' } });
+    expect(or.some((c) => 'payee.name' in c)).toBe(false);
+  });
+
+  it('tìm kiếm không khớp đối tác/tag thì chỉ còn mã và tiêu đề', () => {
+    const f = queueFilter(base({ q: 'PC-1', qPartnerIds: [], qTagIds: [] }));
+    expect(f.$or as Record<string, unknown>[]).toHaveLength(2);
+  });
+});

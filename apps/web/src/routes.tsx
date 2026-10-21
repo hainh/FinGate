@@ -26,13 +26,15 @@ import { BankAccountHistoryScreen } from './screens/bank-history.tsx';
 import { BankAccountFormScreen } from './screens/bank-account-form.tsx';
 import { RolloverPreparationScreen, RolloversScreen } from './screens/loans.tsx';
 import { DebtListScreen, DebtVoucherFormScreen, DebtDetailScreen } from './screens/debt.tsx';
-import { CounterpartyScreen } from './screens/counterparty.tsx';
+import { PartnerDetailScreen, PartnersScreen } from './screens/partners.tsx';
 import { BankDebtListScreen, BankDebtFormScreen, BankDebtDetailScreen, LoanScheduleScreen } from './screens/bank-debt.tsx';
 import { CashflowHistoryScreen } from './screens/cashflow.tsx';
 import { ReportLibraryScreen, ReportRunnerScreen } from './screens/reports.tsx';
-import { PersonnelScreen, MatrixScreen, ApprovalThresholdScreen, AuditLogScreen, SettingsScreen, CompaniesScreen } from './screens/admin.tsx';
+import { PersonnelScreen, MatrixScreen, ApprovalThresholdScreen, AuditLogScreen, SettingsScreen, CompaniesScreen, RecurringScreen } from './screens/admin.tsx';
+import { AutomationScreen } from './screens/automation.tsx';
 import { BackupScreen } from './screens/backup.tsx';
-import { NewsletterScreen, NotificationsScreen, SearchScreen } from './screens/misc.tsx';
+import { TagsScreen } from './screens/tags.tsx';
+import { AlertsScreen, NewsletterScreen, NotificationsScreen, SearchScreen } from './screens/misc.tsx';
 import { DocumentFormScreen } from './screens/create-form.tsx';
 import { ForbiddenScreen, NotFoundScreen } from './screens/errors.tsx';
 import { FgSpinner } from './components/uitk.tsx';
@@ -82,6 +84,10 @@ const PATH_PERMS: { prefix: string; perm: string | string[] }[] = [
   { prefix: '/dong-tien', perm: 'forecast:read' },
   { prefix: '/baocao', perm: 'report:view' },
   { prefix: '/ban-tin', perm: 'report:view' },
+  { prefix: '/quantri/tags', perm: 'tag:manage' },
+  { prefix: '/quantri/tu-dong', perm: ['automation:config', 'audit:read'] },
+  { prefix: '/quantri/dinh-ky', perm: 'doc:create' }, // khớp tab "Chi định kỳ" (admin.tsx · ADMIN_TABS)
+  { prefix: '/canh-bao', perm: 'doc:read' },
   { prefix: '/quantri/sao-luu', perm: 'admin:backup' },
 ];
 
@@ -120,7 +126,10 @@ function AdminHomeRedirect(): ReactNode {
   if (can('admin:settings')) return <Navigate to="/quantri/cong-ty" replace />;
   if (can('admin:matrix')) return <Navigate to="/quantri/quy-trinh-duyet" replace />;
   if (can('audit:read')) return <Navigate to="/quantri/audit" replace />;
+  if (can('tag:manage')) return <Navigate to="/quantri/tags" replace />;
   if (can('admin:backup')) return <Navigate to="/quantri/sao-luu" replace />;
+  if (can('automation:config')) return <Navigate to="/quantri/tu-dong" replace />;
+  if (can('doc:create')) return <Navigate to="/quantri/dinh-ky" replace />;
   return <Navigate to="/403" replace />;
 }
 
@@ -173,7 +182,8 @@ export function AppRoutes(): ReactNode {
       <Route path="/cong-no/phai-tra/moi" element={<Navigate to="/cong-no/moi?side=credit" replace />} />
       <Route path="/cong-no/phieu/:id" element={<Shell><DebtDetailScreen /></Shell>} /> {/* DEBT-02/04 */}
       <Route path="/cong-no/phieu/:id/sua" element={<Shell><DebtVoucherFormScreen /></Shell>} /> {/* DEBT-02 sửa */}
-      <Route path="/doi-tac" element={<Shell><CounterpartyScreen /></Shell>} /> {/* PARTNER-01 */}
+      <Route path="/doi-tac" element={<Shell><PartnersScreen /></Shell>} /> {/* PARTNER-01 */}
+      <Route path="/doi-tac/:id" element={<Shell><PartnerDetailScreen /></Shell>} /> {/* PARTNER-02 */}
       <Route path="/dong-tien" element={<Shell><CashflowHistoryScreen /></Shell>} /> {/* CASH-01 */}
       <Route path="/baocao" element={<Shell><ReportLibraryScreen /></Shell>} /> {/* RPT-00 */}
       <Route path="/baocao/:preset" element={<Shell><ReportRunnerScreen /></Shell>} /> {/* RPT-01→13 */}
@@ -188,6 +198,10 @@ export function AppRoutes(): ReactNode {
       <Route path="/quantri/nguong-duyet" element={<Shell><ApprovalThresholdScreen /></Shell>} /> {/* ADM-04 · ngưỡng Chairman */}
       <Route path="/quantri/audit" element={<Shell><AuditLogScreen /></Shell>} /> {/* ADM-12 */}
       <Route path="/quantri/sao-luu" element={<Shell><BackupScreen /></Shell>} /> {/* ADM-14 */}
+      <Route path="/quantri/tags" element={<Shell><TagsScreen /></Shell>} /> {/* v2 §6.2, §13 — quản lý tag */}
+      <Route path="/quantri/dinh-ky" element={<Shell><RecurringScreen /></Shell>} /> {/* v2 §13 — khoản chi định kỳ (bên nhận: PartnerPicker) */}
+      <Route path="/quantri/tu-dong" element={<Shell><AutomationScreen /></Shell>} /> {/* v2 §11, §13 — quy tắc tự động, lượt chạy, loại liên kết */}
+      <Route path="/canh-bao" element={<Shell><AlertsScreen /></Shell>} /> {/* v2 §12 — cảnh báo (loại mới, đánh dấu đã xử lý) */}
       <Route path="/ca-nhan" element={<Shell><SettingsScreen /></Shell>} /> {/* PREF-01 */}
 
       <Route path="*" element={<NotFoundScreen />} />

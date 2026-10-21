@@ -19,7 +19,48 @@ const INDEXES: Record<string, IndexDef[]> = {
     { key: { closed_at: 1, archived_at: 1 } },
     { key: { company_id: 1, 'target.company_id': 1 } },
     { key: { loan_id: 1, status: 1 } },
+    // v2: tab "Phiếu thu/chi" của đối tác + lọc theo tag (v2 §5.3, §6.2)
+    { key: { company_id: 1, partner_id: 1 } },
+    { key: { company_id: 1, tag_ids: 1 } },
+    // đối chiếu outbox sự kiện (domain/events reconcileTransitionEvents): phiếu đổi gần đây
+    { key: { updated_at: -1 } },
   ],
+  // ── v2 ──────────────────────────────────────────────────────────────
+  /** Đối tác: tìm theo loại + tên; tìm theo STK (cảnh báo trùng); mã DT- unique toàn hệ thống. */
+  partners: [
+    { key: { company_id: 1, type: 1, name_key: 1 } },
+    { key: { company_id: 1, account_number: 1 } },
+    { key: { code: 1 }, options: { unique: true } },
+  ],
+  /** Tag chống trùng theo tên chuẩn hoá trong từng công ty (v2 §6.2). */
+  tags: [{ key: { company_id: 1, name_key: 1 }, options: { unique: true } }],
+  /**
+   * Liên kết nghiệp vụ (v2 §14.2). Chỉ một liên kết HIỆU LỰC cho cùng cặp + quan hệ:
+   * unique partial theo `status: 'active'` (gỡ rồi tạo lại được).
+   */
+  business_links: [
+    { key: { from_type: 1, from_id: 1 } },
+    { key: { to_type: 1, to_id: 1 } },
+    { key: { from_id: 1, to_id: 1, relation: 1 }, options: { unique: true, partialFilterExpression: { status: 'active' } } },
+  ],
+  /**
+   * Outbox sự kiện: tiến trình đọc `processed_at: null` theo `created_at`.
+   * TTL 30 ngày trên `processed_at` (chỉ dọn bản ĐÃ xử lý; bản chưa xử lý có processed_at = null nên không bị xoá).
+   */
+  domain_events: [
+    { key: { processed_at: 1, created_at: 1 } },
+    { key: { processed_at: 1 }, options: { expireAfterSeconds: 30 * 86_400 } },
+  ],
+  /** Quy tắc: mã R1..R6 duy nhất. */
+  automation_rules: [{ key: { code: 1 }, options: { unique: true } }],
+  /** Lượt chạy: idem_key duy nhất (chống trùng khi retry / chạy song song); tra theo nguồn. */
+  automation_runs: [
+    { key: { idem_key: 1 }, options: { unique: true } },
+    { key: { source_type: 1, source_id: 1 } },
+    { key: { status: 1, claimed_at: 1 } }, // dọn lượt 'running' bị treo (sweepStaleRuns)
+  ],
+  /** Khoá chống ghi đúp theo request_id (đối tác). `_id` đã duy nhất; TTL 7 ngày dọn bản cũ. */
+  request_claims: [{ key: { created_at: 1 }, options: { expireAfterSeconds: 7 * 86_400 } }],
   balances_daily: [{ key: { company_id: 1, account_id: 1, date: -1 }, options: { unique: true } }],
   cash_entries: [
     { key: { account_id: 1, date: 1 } },
@@ -37,15 +78,13 @@ const INDEXES: Record<string, IndexDef[]> = {
     { key: { company_id: 1, code: 1 }, options: { unique: true } },
     { key: { 'repayment_links.document_id': 1 } },
     { key: { auto_source_document_id: 1 } },
+    { key: { company_id: 1, partner_id: 1 } }, // v2: tab "Nợ ngân hàng" của đối tác
   ],
   debt_vouchers: [
     { key: { company_id: 1, party_type: 1, side: 1, due_date: 1 } },
     { key: { company_id: 1, party_code: 1 } },
     { key: { 'document_links.document_id': 1 } },
-  ],
-  counterparties: [
-    { key: { name_key: 1 }, options: { unique: true } },
-    { key: { 'banks.account_number': 1 } },
+    { key: { company_id: 1, partner_id: 1 } }, // v2: tab "Công nợ" của đối tác
   ],
   jobs: [
     { key: { state: 1, run_at: 1 } },
@@ -93,7 +132,6 @@ const COLLECTION_MODEL: Record<string, keyof typeof Models> = {
   audit_log: 'AuditLog',
   bank_debts: 'BankDebt',
   debt_vouchers: 'DebtVoucher',
-  counterparties: 'Counterparty',
   jobs: 'Job',
   sessions: 'Session',
   notifications: 'Notification',
@@ -109,6 +147,14 @@ const COLLECTION_MODEL: Record<string, keyof typeof Models> = {
   departments: 'Department',
   users: 'User',
   settings: 'Setting',
+  // v2
+  partners: 'Partner',
+  tags: 'Tag',
+  business_links: 'BusinessLink',
+  domain_events: 'DomainEvent',
+  automation_rules: 'AutomationRule',
+  automation_runs: 'AutomationRun',
+  request_claims: 'RequestClaim',
 };
 
 export async function applyIndexes(log: (msg: string) => void = console.log): Promise<number> {

@@ -1,42 +1,139 @@
 /**
- * Khung "Hồ sơ form (create/edit)" — CHI-02 · THU-02 · RENEW-02 · NOI-BO.
+ * Khung "Hồ sơ form (create/edit)" — CHI-02 · THU-02 · RENEW-02 · NOI-BO (v2).
  *
- * Tiền nhập bằng parseMoneyInput (hỗ trợ "2,5 tỷ"); validate theo zod contract phía
- * server — lỗi field hiển thị inline từ `problem.errors`.
+ * v2 (v2/v2.md §5.2, §6.2, §11.4–11.6):
+ * - Đối tác: ô chọn theo ID (PartnerPicker), không nhập tự do / không gõ "Tên - NH - STK". Lọc theo loại hợp lệ.
+ *   "+ Tạo đối tác" mở popup NGAY trên form. Phiếu thu đi vay: bên nộp tiền bắt buộc là Ngân hàng.
+ * - Tag: TagInput (gõ để tìm; "+ Tạo tag" nếu có quyền).
+ * - Phiếu thu đi vay (R2): khối khoản vay — tạo mới / gắn khoản có sẵn / để sau.
+ * - Phiếu chi vay để chi (R3): ngân hàng cho vay + TK nhận giải ngân (mặc định = TK nguồn) + số tiền vay + điều khoản.
+ * - Phiếu chi "Nhận: tài khoản nội bộ" (R1) và chuyển nội bộ: công ty + TK đích theo ID.
+ * - Prefill từ query: ?partner_id (đối tác), ?kind (thu|chi, phải khớp form), ?loan=borrow (phiếu thu đi vay).
+ *
+ * Tiền nhập bằng parseMoneyInput (hỗ trợ "2,5 tỷ"); lỗi field hiển thị inline từ `problem.errors` (server).
  */
 
-import { useState, type ReactNode } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { DatePicker } from 'antd';
 import dayjs from 'dayjs';
-import { DOC_KIND_LABEL, formatMoney, moneyFromWire, normalizePlannedDate, statusLabel, type Money } from '@fingate/shared';
-import { ApiRequestError, apiData } from '../app/api.ts';
+import {
+  DOC_KIND_LABEL,
+  LOAN_MODE_LABEL,
+  LOAN_MODES,
+  REPAYMENT_METHODS,
+  REPAYMENT_METHOD_LABEL,
+  REPAYMENT_PERIODS,
+  REPAYMENT_PERIOD_LABEL,
+  bankDebtStatusLabel,
+  formatMoney,
+  moneyFromWire,
+  money,
+  normalizePlannedDate,
+  statusLabel,
+  type Money,
+  type PartnerType,
+} from '@fingate/shared';
+import { ApiRequestError, apiCall, apiData } from '../app/api.ts';
 import { SCOPE_ALL, useAuth, useCurrentCompanyId } from '../app/store.tsx';
-import { useBankAccounts, useCounterpartyOptions, useDocument, usePayeeAccountOptions, usePayeeNames } from '../app/queries.ts';
-import { FgAlert, FgButton, FgField, FgFreeSelect, FgInput, FgMoneyInput, FgSelect, FgTextarea, FgText } from '../components/primitives.tsx';
+import { useBankAccounts, useCompanies, useDocument } from '../app/queries.ts';
+import type { DocumentDetail } from '../app/types.ts';
+import { usePartner, usePartnerLoans } from '../app/v2/partners.ts';
+import { budgetLineLabel, useBudgetLineOptions, useVoucherCategories } from '../app/v2/vouchers.ts';
+import { useLoanList } from '../app/v2/debts.ts';
+import {
+  LOAN_OPEN_STATUSES,
+  defaultLoanDueDate,
+  loanOptionsBody,
+  useLoanDefaults,
+  transferTargetBody,
+  type LoanTermsValues,
+} from '../app/v2/documents.ts';
+import { FgAlert, FgButton, FgField, FgInput, FgMoneyInput, FgNumber, FgSelect, FgTextarea, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
+import { FgSegmented } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { useToast } from '../components/pagekit.tsx';
+import { PartnerPicker, partnerTypesFor } from '../components/partner-picker.tsx';
+import { TagInput } from '../components/tag-input.tsx';
+
+type PageKind = 'spend' | 'income' | 'rollover' | 'internal';
+
+/** Khối khoản vay trên phiếu: thu đi vay (R2, `on` = "Đây là khoản vay ngân hàng") hoặc chi vay để chi (R3). */
+interface LoanState {
+  on: boolean;
+  /** Phiếu thu đi vay: new | existing | later. Vay để chi luôn `new`. */
+  mode: 'new' | 'existing' | 'later';
+  existingLoanId: string;
+  /** Vay để chi: ngân hàng cho vay (đối tác loại Ngân hàng). */
+  lenderId: string | null;
+  /** Vay để chi: TK ngân hàng của công ty nhận giải ngân. */
+  receiveAccountId: string;
+  /** Vay để chi: số tiền vay; null = bằng số tiền phiếu chi. */
+  amount: Money | null;
+  contractNo: string;
+  interestRate: string;
+  /** null = theo tham số kỳ hạn của công ty (không gửi số cứng). */
+  termMonths: number | null;
+  /** '' = theo tham số của công ty (ngày giải ngân + lệch tháng). */
+  dueDate: string;
+  repaymentPeriod: string;
+  repaymentMethod: string;
+  collateral: string;
+}
 
 interface FormState {
   title: string;
   purpose: string;
-  payee_name: string;
-  payee_bank: string;
+  partnerId: string | null;
   amount: Money | null;
-  planned_date: string;
+  plannedDate: string;
   fund: 'bank' | 'cash';
-  account_id: string;
-  contract_code: string;
+  accountId: string;
+  /** Danh mục thu/chi (US-VOU-01): quyết định chứng từ bắt buộc & matrix. */
+  categoryId: string | null;
+  /** Ngân sách / dòng ngân sách (§6.1). `inPlan = false` ⇒ khoản ngoài kế hoạch (người duyệt gõ lại số tiền). */
+  budgetId: string | null;
+  budgetLineId: string | null;
+  inPlan: boolean;
+  debtCode: string;
+  contractCode: string;
+  /** Giá trị hợp đồng (§6.1) và ngày ký. */
+  contractValue: Money | null;
+  contractSignedAt: string;
   priority: string;
   note: string;
-  /** Phiếu thu: tự tạo phiếu nợ ngân hàng khi được duyệt & thực thi. */
-  create_bank_debt: boolean;
-  /* rollover */
+  tagIds: string[];
+  loan: LoanState;
+  /** Chuyển nội bộ theo ID (phiếu chi "Nhận: tài khoản nội bộ"; luôn bật với phiếu chuyển nội bộ). */
+  transferOn: boolean;
+  transferCompanyId: string;
+  transferAccountId: string;
+  /* đảo hạn */
   plan: string;
-  new_rate: string;
-  collateral: string;
+  newRate: string;
+  rolloverCollateral: string;
+  /** Khoản vay đang đảo hạn (v2 §10.3) — bắt buộc với phương án; cùng ngân hàng, đang vay / quá hạn. */
+  rolloverLoanId: string;
+  /** Ngày đáo hạn mới đề xuất (YYYY-MM-DD). */
+  rolloverMaturity: string;
 }
+
+const emptyLoan = (): LoanState => ({
+  on: false,
+  mode: 'new',
+  existingLoanId: '',
+  lenderId: null,
+  receiveAccountId: '',
+  amount: null,
+  contractNo: '',
+  interestRate: '',
+  termMonths: null,
+  dueDate: '',
+  repaymentPeriod: '',
+  repaymentMethod: '',
+  collateral: '',
+});
 
 /** Hạn mặc định: 17:00 hôm nay; nếu đã qua thì 09:00 hôm sau. */
 function defaultDeadline(): string {
@@ -45,26 +142,93 @@ function defaultDeadline(): string {
   return (todayEnd.isAfter(now) ? todayEnd : todayEnd.add(1, 'day').hour(9)).format('YYYY-MM-DDTHH:mm');
 }
 
-const initial = (): FormState => ({
+const initial = (kind: PageKind): FormState => ({
   title: '',
   purpose: '',
-  payee_name: '',
-  payee_bank: '',
+  partnerId: null,
   amount: null,
-  planned_date: defaultDeadline(),
+  plannedDate: defaultDeadline(),
   fund: 'bank',
-  account_id: '',
-  contract_code: '',
+  accountId: '',
+  categoryId: null,
+  budgetId: null,
+  budgetLineId: null,
+  inPlan: true,
+  debtCode: '',
+  contractCode: '',
+  contractValue: null,
+  contractSignedAt: '',
   priority: 'normal',
   note: '',
-  create_bank_debt: false,
+  tagIds: [],
+  loan: emptyLoan(),
+  transferOn: kind === 'internal',
+  transferCompanyId: '',
+  transferAccountId: '',
   plan: '',
-  new_rate: '',
-  collateral: '',
+  newRate: '',
+  rolloverCollateral: '',
+  rolloverLoanId: '',
+  rolloverMaturity: '',
 });
 
-export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollover' | 'internal' }): ReactNode {
+/** Điền form từ hồ sơ đã lưu (sửa). Tiền/ngày/điều khoản đi qua cùng kiểu với lúc nhập. */
+function formFromDocument(doc: DocumentDetail, kind: PageKind): FormState {
+  const loan = doc.options?.loan ?? null;
+  const loanKind = kind === 'income' ? 'borrow' : 'fund';
+  const terms = loan?.terms ?? null;
+  const loanAmount = loan?.amount_minor ? moneyFromWire({ minor: loan.amount_minor, currency: doc.amount.currency, decimals: 0 }) : null;
+  return {
+    title: doc.title,
+    purpose: doc.purpose,
+    partnerId: doc.partner_id ?? null,
+    amount: moneyFromWire(doc.amount),
+    plannedDate: normalizePlannedDate(doc.planned_date),
+    fund: doc.source.fund,
+    accountId: doc.source.account_id ?? '',
+    categoryId: doc.category_id ?? null,
+    budgetId: doc.budget?.budget_id ?? null,
+    budgetLineId: doc.budget?.line_id ?? null,
+    inPlan: doc.budget?.in_plan !== false,
+    debtCode: doc.debt_code ?? '',
+    contractCode: doc.contract.code ?? '',
+    contractValue: doc.contract.value ? moneyFromWire(doc.contract.value) : null,
+    contractSignedAt: doc.contract.signed_at ?? '',
+    priority: doc.priority,
+    note: doc.note ?? '',
+    tagIds: doc.tag_ids ?? [],
+    loan:
+      loan && loan.kind === loanKind
+        ? {
+            on: true,
+            mode: loan.mode,
+            existingLoanId: loan.existing_loan_id ?? '',
+            lenderId: loan.lender_partner_id,
+            receiveAccountId: loan.receive_account_id ?? '',
+            amount: loanAmount,
+            contractNo: terms?.contract_no ?? '',
+            interestRate: terms?.interest_rate ?? '',
+            termMonths: terms?.term_months ?? null,
+            dueDate: terms?.due_date ?? '',
+            repaymentPeriod: terms?.repayment_period ?? '',
+            repaymentMethod: terms?.repayment_method ?? '',
+            collateral: terms?.collateral ?? '',
+          }
+        : emptyLoan(),
+    transferOn: kind === 'internal' || !!doc.transfer_target || !!doc.target,
+    transferCompanyId: doc.transfer_target?.company_id ?? doc.target?.company_id ?? '',
+    transferAccountId: doc.transfer_target?.account_id ?? doc.target?.account_id ?? '',
+    plan: doc.rollover?.plan ?? '',
+    newRate: doc.rollover?.new_rate ?? '',
+    rolloverCollateral: doc.rollover?.collateral ?? '',
+    rolloverLoanId: doc.loan_id ?? '',
+    rolloverMaturity: doc.rollover?.new_maturity_date ?? '',
+  };
+}
+
+export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
   const { id } = useParams<{ id?: string }>();
+  const [query] = useSearchParams();
   const navigate = useNavigate();
   const currentCompany = useCurrentCompanyId();
   const { me, scope } = useAuth();
@@ -73,77 +237,169 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
   const { message } = useToast();
   const existing = useDocument(id);
   const accounts = useBankAccounts(currentCompany);
-  const payees = usePayeeNames();
-  const payeeAccounts = usePayeeAccountOptions();
-  const counterparties = useCounterpartyOptions();
-  const [f, setF] = useState<FormState>(initial);
+  const companies = useCompanies();
+  const [f, setF] = useState<FormState>(() => initial(kind));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [submitAsDraft, setSubmitAsDraft] = useState(true);
+  const prefilled = useRef(false);
+  /** Nháp vừa tạo ở lượt lưu trước (gửi duyệt lỗi): lượt sau sửa phiếu này, không tạo nháp trùng. */
+  const draftRef = useRef<{ id: string; version: number } | null>(null);
 
-  const set = (k: keyof FormState, v: string | Money | null) => setF((s) => ({ ...s, [k]: v }));
+  const partnerQ = usePartner(f.partnerId);
+  const partnerName = partnerQ.data?.name ?? '';
+  const isBorrow = kind === 'income' && f.loan.on;
+  const isFund = kind === 'spend' && f.loan.on;
+  const hasPartnerField = kind === 'spend' || kind === 'income' || kind === 'rollover';
+  // Phiếu thu đi vay: bên nộp tiền chỉ là Ngân hàng (§11.4). Đảo hạn: ngân hàng (tuỳ chọn).
+  const partnerAllowed: PartnerType[] = isBorrow || kind === 'rollover' ? ['bank'] : partnerTypesFor(null);
+  const partnerDefault: PartnerType = isBorrow || kind === 'rollover' ? 'bank' : kind === 'income' ? 'customer' : 'supplier';
+  const partnerLabel = kind === 'income' ? 'Bên nộp tiền' : kind === 'spend' ? 'Bên nhận tiền' : 'Ngân hàng';
+  const partnerRequired = kind === 'spend' || kind === 'income';
 
-  // Tài khoản của phiếu: phiếu thu chọn tài khoản ĐÍCH (nhận tiền), phiếu chi chọn
-  // tài khoản NGUỒN (xuất tiền) — chỉ tài khoản của công ty lập phiếu (server lọc
-  // theo `for_company`; công ty con không thấy/không dùng được quỹ Tập đoàn — §VIII).
-  const accountOptions = (accounts.data?.items ?? [])
+  // §6.1 — danh mục, ngân sách, công nợ, hợp đồng: chỉ phiếu thu/chi (đảo hạn & chuyển nội bộ không dùng).
+  const hasVoucherFinance = kind === 'spend' || kind === 'income';
+  const categoriesQ = useVoucherCategories();
+  const categoryOptions = (categoriesQ.data?.items ?? [])
+    .filter((c) => c.active && c.doc_kind === kind)
+    .map((c) => ({ value: c._id, label: c.code ? `${c.code} · ${c.name}` : c.name }));
+  // danh mục bắt buộc khi GỬI DUYỆT (nháp thì chưa); chỉ đòi khi đã cấu hình danh mục cho loại phiếu này
+  const categoryRequired = hasVoucherFinance && categoryOptions.length > 0;
+  const budgetLinesQ = useBudgetLineOptions(currentCompany);
+  const budgetLineOptions = (budgetLinesQ.data ?? []).map((o) => ({ value: `${o.budget_id}|${o.line_id}`, label: budgetLineLabel(o) }));
+  /** Tạo mới và gửi duyệt ngay (không phải nháp, không phải sửa). */
+  const submitNow = !id && !submitAsDraft;
+
+  // Khoản vay có sẵn (phiếu thu đi vay, chế độ "gắn khoản đã có"): cùng ngân hàng, đang chờ giải ngân hoặc đang vay.
+  const loansQ = usePartnerLoans(isBorrow && f.partnerId ? f.partnerId : undefined);
+  // tham số vay mặc định của công ty đang lập phiếu (US-AUTO-07): hiển thị và tính hạn xem trước
+  const loanDefaults = useLoanDefaults(currentCompany);
+  // Khoản vay cho phương án đảo hạn: cùng ngân hàng (đối tác đã chọn), cùng công ty, đang vay / quá hạn (v2 §10.3).
+  const rolloverLoans = useLoanList({ partner_id: f.partnerId || undefined }, { enabled: kind === 'rollover' });
+  const rolloverLoanOptions = (rolloverLoans.data?.items ?? []).filter(
+    (l) => (l.status === 'active' || l.status === 'overdue') && l.company_id === currentCompany && (!f.partnerId || l.partner_id === f.partnerId),
+  );
+  const openLoans = (loansQ.data?.items ?? []).filter((l) => LOAN_OPEN_STATUSES.includes(l.status));
+
+  // Tài khoản: nguồn (theo hình thức tiền của phiếu); nhận giải ngân = TK ngân hàng của công ty lập phiếu.
+  const sourceAccountOptions = (accounts.data?.items ?? [])
     .filter((a) => a.status === 'active' && a.kind === f.fund)
     .map((a) => ({
       value: a._id,
       label: `${a.is_group ? 'Tập đoàn' : (a.company_name ?? '—')} · ${a.bank_name} ${a.account_number_masked}`,
     }));
+  const receiveAccountOptions = (accounts.data?.items ?? [])
+    .filter((a) => a.status === 'active' && a.kind === 'bank' && !a.is_group && a.company_id === currentCompany)
+    .map((a) => ({ value: a._id, label: `${a.bank_name} · ${a.account_number_masked}${a.account_name ? ` · ${a.account_name}` : ''}` }));
 
-  // Gợi ý đối tượng: mọi tên đã dùng ở bất kỳ phiếu nào trong phạm vi (chọn lại, hoặc nhập mới).
-  // Với phiếu CHI, thêm sẵn các tài khoản tiền toàn tập đoàn dạng
-  // "Mã công ty - Tên ngân hàng/quỹ - Số tài khoản/mã quỹ" (server chuẩn hoá) — chọn để hệ thống
-  // tự sinh phiếu thu khi phiếu chi được thực thi.
-  const payeeOptions = (() => {
-    const accountOpts = kind === 'spend' ? (payeeAccounts.data?.items ?? []).map((a) => ({ value: a.value, label: a.value })) : [];
-    // đối tác/khách hàng + tài khoản ngân hàng (danh bạ) — mỗi tài khoản 1 entry 3 trường.
-    const partnerOpts = (counterparties.data?.items ?? []).map((o) => ({ value: o.value, label: o.value }));
-    const nameOpts = (payees.data ?? []).map((name) => ({ value: name, label: name }));
-    const seen = new Set<string>();
-    return [...accountOpts, ...partnerOpts, ...nameOpts].filter((o) => (seen.has(o.value) ? false : (seen.add(o.value), true)));
-  })();
+  // Chuyển nội bộ: công ty khác (trong danh bạ phạm vi) + TK đang hoạt động của công ty đó.
+  const targetAccounts = useBankAccounts(f.transferCompanyId || null);
+  const companyOptions = (companies.data?.items ?? [])
+    .filter((c) => c._id !== currentCompany && c.status !== 'inactive')
+    .map((c) => ({ value: c._id, label: `${c.name} (${c.code})` }));
+  const transferAccountOptions = (targetAccounts.data?.items ?? [])
+    .filter((a) => a.status === 'active' && a.company_id === f.transferCompanyId)
+    .map((a) => ({ value: a._id, label: `${a.bank_name} · ${a.account_number_masked}${a.account_name ? ` · ${a.account_name}` : ''}` }));
 
-  // entry danh bạ khớp giá trị đang chọn → gắn counterparty_id khi lưu phiếu.
-  const selectedPartner = (counterparties.data?.items ?? []).find((o) => o.value === f.payee_name);
+  const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setF((s) => ({ ...s, [k]: v }));
+  const setLoan = (patch: Partial<LoanState>) => setF((s) => ({ ...s, loan: { ...s.loan, ...patch } }));
 
-  // "Đơn vị nhận tiền" của phiếu CHI khớp tài khoản của một công ty khác trong tập đoàn
-  // → đây là chuyển tiền nội bộ (A → B); server cũng tự phát hiện và đánh dấu khi lưu.
-  const internalTarget =
-    kind === 'spend'
-      ? (payeeAccounts.data?.items ?? []).find((o) => o.value === f.payee_name && o.company_id !== currentCompany)
-      : undefined;
+  // Prefill: sửa (từ hồ sơ đã lưu) hoặc tạo mới với query (?partner_id, ?kind, ?loan=borrow). Một lần duy nhất.
+  useEffect(() => {
+    if (prefilled.current) return;
+    if (id) {
+      if (!existing.data) return;
+      prefilled.current = true;
+      setF(formFromDocument(existing.data, kind));
+      return;
+    }
+    prefilled.current = true;
+    const kindParam = query.get('kind');
+    if (kindParam && kindParam !== kind) return; // link sai form: bỏ qua prefill
+    const pid = query.get('partner_id');
+    const borrow = kind === 'income' && query.get('loan') === 'borrow';
+    // Lập phương án đảo hạn từ chi tiết khoản vay: ?loan_id= (+ partner_id ngân hàng) gắn sẵn khoản.
+    const loanParam = kind === 'rollover' ? query.get('loan_id') : null;
+    setF((s) => ({
+      ...s,
+      partnerId: pid || s.partnerId,
+      loan: borrow ? { ...s.loan, on: true } : s.loan,
+      rolloverLoanId: loanParam || s.rolloverLoanId,
+    }));
+  }, [id, existing.data, kind, query]);
 
+  /**
+   * Điều khoản vay gửi lên: ô để trống ⇒ KHÔNG gửi số mặc định cứng. Server dùng tham số của công ty và tính lại
+   * hạn theo ngày giải ngân thực tế (§11.4 (a)); chỉ ô người dùng đã nhập mới là điều khoản riêng.
+   */
+  const termsOf = (loan: LoanState): LoanTermsValues => ({
+    contractNo: loan.contractNo,
+    interestRate: loan.interestRate,
+    termMonths: loan.termMonths,
+    dueDate: loan.dueDate,
+    repaymentPeriod: loan.repaymentPeriod,
+    repaymentMethod: loan.repaymentMethod,
+    collateral: loan.collateral,
+  });
 
-  const buildBody = () => {
-    // Hồ sơ thuộc công ty đang chọn ở bộ chuyển phạm vi (§7.5), không phải công ty
-    // "active" của phiên (có thể lệch khi người dùng đổi phạm vi).
+  const buildBody = (): Record<string, unknown> => {
+    // Hồ sơ thuộc công ty đang chọn ở bộ chuyển phạm vi (§7.5), không phải công ty "active" của phiên.
     const company = currentCompany;
+    const loanBody =
+      kind === 'income' && f.loan.on
+        ? loanOptionsBody({
+            kind: 'borrow',
+            mode: f.loan.mode,
+            lenderPartnerId: f.partnerId,
+            receiveAccountId: null,
+            amountMinor: null,
+            existingLoanId: f.loan.existingLoanId || null,
+            terms: termsOf(f.loan),
+          })
+        : kind === 'spend' && f.loan.on
+          ? loanOptionsBody({
+              kind: 'fund',
+              mode: 'new',
+              lenderPartnerId: f.loan.lenderId,
+              receiveAccountId: f.loan.receiveAccountId || null,
+              amountMinor: f.loan.amount ? f.loan.amount.minor.toString() : null,
+              existingLoanId: null,
+              terms: termsOf(f.loan),
+            })
+          : null;
+    const transfer = transferTargetBody(f.transferOn, f.transferCompanyId, f.transferAccountId);
     const body: Record<string, unknown> = {
       kind,
       company_id: company,
-      title: f.title || defaultTitle(kind, f.payee_name, f.amount),
+      title: f.title || defaultTitle(kind, partnerName, f.amount),
       purpose: f.purpose,
-      payee:
-        kind === 'rollover'
-          ? { name: f.payee_name || 'Ngân hàng', is_internal: false }
-          : { name: f.payee_name, is_internal: false, bank_name: f.payee_bank || undefined, counterparty_id: selectedPartner?.counterparty_id },
+      partner_id: f.partnerId,
       amount: f.amount ? { amount_minor: f.amount.minor.toString(), currency: f.amount.currency } : undefined,
-      source: { fund: f.fund, account_id: f.account_id || null, group_managed: false },
-      planned_date: f.planned_date,
+      source: { fund: f.fund, account_id: f.accountId || null, group_managed: false },
+      planned_date: f.plannedDate,
       priority: f.priority,
-      contract: { code: f.contract_code || undefined },
+      category_id: f.categoryId,
+      budget: { budget_id: f.budgetId, line_id: f.budgetLineId, in_plan: f.inPlan },
+      debt_code: f.debtCode || undefined,
+      contract: {
+        code: f.contractCode || undefined,
+        value: f.contractValue ? { amount_minor: f.contractValue.minor.toString(), currency: f.contractValue.currency } : undefined,
+        signed_at: f.contractSignedAt || undefined,
+      },
       note: f.note || undefined,
-      create_bank_debt: kind === 'income' ? f.create_bank_debt : undefined,
+      tag_ids: f.tagIds,
+      options: { loan: loanBody },
+      transfer_target: transfer,
     };
     if (kind === 'rollover') {
+      // Phương án gắn khoản vay (server kiểm công ty, ngân hàng, trạng thái) và ngày đáo hạn mới đề xuất.
+      body.loan_id = f.rolloverLoanId || null;
       body.rollover = {
         need_amount: f.amount ? { amount_minor: f.amount.minor.toString(), currency: f.amount.currency } : undefined,
         plan: f.plan,
-        new_rate: f.new_rate || undefined,
-        collateral: f.collateral || undefined,
+        new_maturity_date: f.rolloverMaturity || undefined,
+        new_rate: f.newRate || undefined,
+        collateral: f.rolloverCollateral || undefined,
       };
     }
     return body;
@@ -154,57 +410,83 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
       message.error('Chưa chọn công ty — chọn công ty ở bộ chuyển phạm vi (góc trên) trước khi lưu phiếu');
       return;
     }
+    // Kiểm tra nhanh các trường v2 bắt buộc; server vẫn kiểm lần cuối và trả lỗi theo field.
+    const clientErrors: Record<string, string> = {};
+    if (!f.amount) clientErrors.amount = 'Nhập số tiền';
+    if (partnerRequired && !f.partnerId) clientErrors.partner_id = 'Chọn đối tác';
+    if (kind === 'rollover') {
+      if (!f.rolloverLoanId) clientErrors.loan_id = 'Chọn khoản vay đang đảo hạn (cùng ngân hàng)';
+      if (!f.rolloverMaturity) clientErrors['rollover.new_maturity_date'] = 'Chọn ngày đáo hạn mới';
+    }
+    if (isBorrow && f.loan.mode === 'existing' && !f.loan.existingLoanId) clientErrors['options.loan.existing_loan_id'] = 'Chọn khoản vay đã có';
+    if (isFund && !f.loan.lenderId) clientErrors['options.loan.lender_partner_id'] = 'Chọn ngân hàng cho vay';
+    if (isFund && !f.loan.receiveAccountId) clientErrors['options.loan.receive_account_id'] = 'Chọn tài khoản nhận giải ngân';
+    if (f.transferOn && !f.transferCompanyId) clientErrors['transfer_target.company_id'] = 'Chọn công ty nhận';
+    if (f.transferOn && f.transferCompanyId && !f.transferAccountId) clientErrors['transfer_target.account_id'] = 'Chọn tài khoản nhận';
+    // Gửi duyệt cần tài khoản nguồn (server: FG-WF-008) và danh mục (US-VOU-01): chặn ngay ở client, không tạo nháp rồi mới lỗi.
+    if (submitNow) {
+      if (!f.accountId) clientErrors['source.account_id'] = 'Chọn tài khoản trước khi gửi duyệt';
+      if (categoryRequired && !f.categoryId) clientErrors.category_id = 'Chọn danh mục trước khi gửi duyệt';
+    }
+    if (Object.keys(clientErrors).length) {
+      setErrors(clientErrors);
+      message.error('Kiểm tra lại các trường còn thiếu');
+      return;
+    }
     setBusy(true);
     setErrors({});
     try {
       const body = buildBody();
-      if (id && existing.data) {
-        await apiData(`/documents/${id}`, { method: 'PATCH', body: { ...body, if_match: existing.data.version } });
-        message.success('Đã lưu bản nháp');
-        navigate(`/ho-so/${pathKind(kind)}/${id}`);
+      // Đã có phiếu (sửa) hoặc nháp vừa tạo ở lượt trước (gửi duyệt lỗi): SỬA phiếu đó, KHÔNG tạo nháp thứ hai.
+      const knownId = id ?? draftRef.current?.id ?? null;
+      let docId: string;
+      let version: number;
+      if (knownId) {
+        const ifMatch = id ? existing.data?.version ?? 1 : draftRef.current?.version ?? 1;
+        const res = await apiCall<{ version?: number }>(`/documents/${knownId}`, { method: 'PATCH', body: { ...body, if_match: ifMatch } });
+        docId = knownId;
+        version = res.version ?? ifMatch;
       } else {
         const created = await apiData<{ _id: string; version: number }>('/documents', { method: 'POST', body });
-        message.success(submitAsDraft ? `Đã tạo nháp ${created._id ? '' : ''}` : 'Đã gửi duyệt');
-        if (!submitAsDraft) {
-          await apiData(`/documents/${created._id}/transition`, {
-            method: 'POST',
-            body: { action: 'submit', if_match: created.version },
-          });
-        }
-        navigate(`/ho-so/${pathKind(kind)}/${created._id}`);
+        docId = created._id;
+        version = created.version;
       }
+      if (!id) draftRef.current = { id: docId, version };
+      if (submitNow) {
+        // gửi duyệt: lỗi ở đây giữ nguyên nháp (draftRef) để lần bấm sau không tạo trùng
+        await apiData(`/documents/${docId}/transition`, { method: 'POST', body: { action: 'submit', if_match: version } });
+        draftRef.current = null;
+        message.success('Đã gửi duyệt');
+      } else {
+        message.success(id ? 'Đã lưu bản nháp' : 'Đã tạo nháp');
+      }
+      navigate(`/ho-so/${pathKind(kind)}/${docId}`);
     } catch (e) {
       if (e instanceof ApiRequestError) {
         setErrors(e.problem.errors ?? {});
         message.error(e.problem.title + (e.problem.detail ? ` — ${e.problem.detail}` : ''));
       } else message.error('Không lưu được');
+      if (submitNow && draftRef.current) {
+        message.warning('Phiếu đã lưu thành nháp nhưng chưa gửi duyệt — sửa theo thông báo rồi bấm lại (không tạo thêm nháp)');
+      }
     } finally {
       setBusy(false);
     }
   };
 
-  // prefill khi sửa
   const loaded = id ? existing.data : null;
-  if (loaded && !f.payee_name && loaded.payee?.name) {
-    setF({
-      ...f,
-      title: loaded.title,
-      purpose: loaded.purpose,
-      payee_name: loaded.payee.name,
-      amount: moneyFromWire(loaded.amount),
-      planned_date: normalizePlannedDate(loaded.planned_date),
-      fund: loaded.source.fund,
-      account_id: loaded.source.account_id ?? '',
-      contract_code: loaded.contract.code ?? '',
-      note: loaded.note ?? '',
-      create_bank_debt: loaded.create_bank_debt ?? false,
-      plan: loaded.rollover?.plan ?? '',
-    });
-  }
-
   const canEdit = !id || loaded ? (loaded?.can.edit ?? true) : true;
   const titlePrefix = `${id ? 'Sửa' : 'Tạo mới'} ${DOC_KIND_LABEL[kind].toLowerCase()}`;
   const pageTitle = !scopeAll && companyName ? `${titlePrefix} cho ${companyName}` : titlePrefix;
+
+  /** Chọn TK nhận giải ngân: mặc định cũng là TK nguồn của phiếu chi (sửa được) — §11.5. */
+  const pickReceiveAccount = (accountId: string) =>
+    setF((s) => ({
+      ...s,
+      loan: { ...s.loan, receiveAccountId: accountId },
+      accountId: s.accountId === '' || s.accountId === s.loan.receiveAccountId ? accountId : s.accountId,
+      fund: 'bank',
+    }));
 
   return (
     <>
@@ -220,14 +502,6 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
           style={{ marginBottom: 16 }}
         />
       ) : null}
-      {internalTarget ? (
-        <FgAlert
-          tone="info"
-          title="Chuyển tiền nội bộ trong tập đoàn"
-          description={`${companyName ?? 'Công ty nguồn'} chuyển cho ${internalTarget.is_group ? `Tập đoàn ${internalTarget.company_name || ''}`.trim() : internalTarget.company_name || internalTarget.company_code}. Khi phiếu chi được duyệt xong và thực thi, hệ thống tự động tạo phiếu thu tương ứng tại ${internalTarget.company_code} và tự duyệt — KHÔNG tính vào chi phí/doanh thu.`}
-          style={{ marginBottom: 16 }}
-        />
-      ) : null}
       <div className="fg-form-grid">
         <FgCard>
           <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))' }}>
@@ -236,28 +510,25 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
                 <FgTextarea value={f.purpose} onChange={(e) => set('purpose', e.target.value)} placeholder="VD: Thanh toán đợt 2 hợp đồng 45/2026 theo biên bản nghiệm thu" disabled={!canEdit} />
               </FgField>
             </div>
-            <FgField label={`Tiêu đề (bỏ trống sẽ tự sinh)`} error={errors.title}>
+            <FgField label="Tiêu đề (bỏ trống sẽ tự sinh)" error={errors.title}>
               <FgInput value={f.title} onChange={(e) => set('title', e.target.value)} disabled={!canEdit} />
             </FgField>
-            <FgField
-              label={kind === 'income' ? 'Khách hàng trả tiền *' : 'Đơn vị nhận tiền *'}
-              error={errors['payee.name']}
-              help={
-                kind === 'spend'
-                  ? 'Chọn tài khoản tiền (Mã công ty - Tên ngân hàng/quỹ - Số tài khoản/mã quỹ) để khi thực thi tự sinh phiếu thu, hoặc chọn đối tác/khách hàng trong danh bạ, hoặc gõ đối tượng khác'
-                  : 'Chọn đối tác/khách hàng trong danh bạ (Tên - Ngân hàng - Số tài khoản), chọn đối tượng đã có ở phiếu khác, hoặc gõ tên mới'
-              }
-            >
-              <FgFreeSelect
-                options={payeeOptions}
-                value={f.payee_name}
-                onChange={(v) => set('payee_name', v)}
-                placeholder="Chọn hoặc nhập mới…"
-                loading={payees.isLoading || counterparties.isLoading || (kind === 'spend' && payeeAccounts.isLoading)}
-                style={{ width: '100%' }}
-                disabled={!canEdit}
-              />
-            </FgField>
+            {hasPartnerField ? (
+              <div style={{ gridColumn: 'span 1' }}>
+                <PartnerPicker
+                  label={partnerLabel}
+                  required={partnerRequired}
+                  value={f.partnerId}
+                  onChange={(id) => set('partnerId', id)}
+                  allowedTypes={partnerAllowed}
+                  defaultType={partnerDefault}
+                  companyId={currentCompany}
+                  disabled={!canEdit || scopeAll || !currentCompany}
+                  error={errors.partner_id ?? null}
+                  placeholder={kind === 'income' ? 'Tìm khách hàng / ngân hàng…' : kind === 'spend' ? 'Tìm nhà cung cấp / đối tác…' : 'Tìm ngân hàng…'}
+                />
+              </div>
+            ) : null}
             <FgField label="Số tiền *" error={errors.amount ?? (f.amount === null ? 'Chưa nhập' : null)} help={f.amount ? formatMoney(f.amount, { mode: 'full' }) : 'Gõ "2,5 tỷ" hoặc "850 tr" — hệ thống hiểu cả hai'}>
               <FgMoneyInput value={f.amount} onChange={(m) => set('amount', m)} disabled={!canEdit} />
             </FgField>
@@ -265,8 +536,8 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
               <DatePicker
                 showTime={{ format: 'HH:mm' }}
                 format="DD/MM/YYYY HH:mm"
-                value={f.planned_date ? dayjs(f.planned_date) : null}
-                onChange={(v) => set('planned_date', v ? v.format('YYYY-MM-DDTHH:mm') : '')}
+                value={f.plannedDate ? dayjs(f.plannedDate) : null}
+                onChange={(v) => set('plannedDate', v ? v.format('YYYY-MM-DDTHH:mm') : '')}
                 disabled={!canEdit}
                 style={{ width: '100%' }}
                 placeholder="Chọn ngày giờ"
@@ -280,8 +551,8 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
                 ]}
                 value={f.fund}
                 onChange={(v) => {
-                  set('fund', v ?? 'bank');
-                  set('account_id', '');
+                  set('fund', v === 'cash' ? 'cash' : 'bank');
+                  set('accountId', '');
                 }}
                 style={{ width: '100%' }}
                 disabled={!canEdit}
@@ -293,9 +564,9 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
               help={kind === 'income' ? 'Tiền thu về tài khoản của công ty lập phiếu' : 'Chỉ tài khoản của công ty lập phiếu'}
             >
               <FgSelect
-                options={accountOptions}
-                value={f.account_id}
-                onChange={(v) => set('account_id', v ?? '')}
+                options={sourceAccountOptions}
+                value={f.accountId}
+                onChange={(v) => set('accountId', v ?? '')}
                 placeholder={f.fund === 'cash' ? 'Chọn quỹ tiền mặt' : 'Chọn tài khoản ngân hàng'}
                 allowClear
                 style={{ width: '100%' }}
@@ -303,11 +574,12 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
               />
             </FgField>
             <FgField label="Hợp đồng / căn cứ" error={errors['contract.code']}>
-              <FgInput value={f.contract_code} onChange={(e) => set('contract_code', e.target.value)} placeholder="HĐ 45/2026" disabled={!canEdit} />
+              <FgInput value={f.contractCode} onChange={(e) => set('contractCode', e.target.value)} placeholder="HĐ 45/2026" disabled={!canEdit} />
             </FgField>
-            <FgField label="Độ khẩn">
+            <FgField label="Mức ưu tiên">
               <FgSelect
                 options={[
+                  { value: 'low', label: 'Thấp' },
                   { value: 'normal', label: 'Thường' },
                   { value: 'high', label: 'Cao' },
                   { value: 'urgent', label: 'Khẩn' },
@@ -318,40 +590,109 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
                 disabled={!canEdit}
               />
             </FgField>
+            {hasVoucherFinance ? (
+              <>
+                <FgField
+                  label={categoryRequired ? 'Danh mục *' : 'Danh mục'}
+                  error={errors.category_id ?? null}
+                  help={categoryOptions.length ? 'Quyết định chứng từ bắt buộc và cấp duyệt' : 'Chưa cấu hình danh mục cho loại phiếu này'}
+                >
+                  <FgSelect
+                    options={categoryOptions}
+                    value={f.categoryId ?? undefined}
+                    onChange={(v) => set('categoryId', v ?? null)}
+                    placeholder="Chọn danh mục"
+                    allowClear
+                    style={{ width: '100%' }}
+                    disabled={!canEdit}
+                  />
+                </FgField>
+                <FgField
+                  label="Ngân sách / dòng ngân sách"
+                  error={errors['budget.line_id'] ?? errors['budget.budget_id'] ?? null}
+                  help={budgetLineOptions.length ? undefined : 'Không có dòng ngân sách trong phạm vi (cần quyền xem ngân sách)'}
+                >
+                  <FgSelect
+                    options={budgetLineOptions}
+                    value={f.budgetId && f.budgetLineId ? `${f.budgetId}|${f.budgetLineId}` : undefined}
+                    onChange={(v) => {
+                      const [budgetId, lineId] = (v ?? '').split('|');
+                      setF((s) => ({ ...s, budgetId: budgetId || null, budgetLineId: lineId || null }));
+                    }}
+                    placeholder="Chọn dòng ngân sách"
+                    allowClear
+                    style={{ width: '100%' }}
+                    disabled={!canEdit}
+                  />
+                </FgField>
+                <FgField label="Trong kế hoạch" help={f.inPlan ? 'Khoản trong kế hoạch ngân sách' : 'Ngoài kế hoạch: người duyệt phải gõ lại số tiền để xác nhận'}>
+                  <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, cursor: canEdit ? 'pointer' : 'not-allowed' }}>
+                    <input type="checkbox" checked={f.inPlan} onChange={(e) => set('inPlan', e.target.checked)} style={{ width: 18, height: 18 }} disabled={!canEdit} />
+                    Khoản trong kế hoạch
+                  </label>
+                </FgField>
+                <FgField label="Mã công nợ" error={errors.debt_code ?? null}>
+                  <FgInput value={f.debtCode} onChange={(e) => set('debtCode', e.target.value)} placeholder="VD: CN-2026-014" maxLength={60} disabled={!canEdit} />
+                </FgField>
+                <FgField label="Giá trị hợp đồng" error={errors['contract.value'] ?? null} help={f.contractValue ? formatMoney(f.contractValue, { mode: 'full' }) : 'Bỏ trống nếu không có hợp đồng'}>
+                  <FgMoneyInput value={f.contractValue} onChange={(m) => set('contractValue', m)} disabled={!canEdit} placeholder="Giá trị HĐ" ariaLabel="Giá trị hợp đồng" />
+                </FgField>
+                <FgField label="Ngày ký hợp đồng" error={errors['contract.signed_at'] ?? null}>
+                  <DatePicker
+                    value={f.contractSignedAt ? dayjs(f.contractSignedAt) : null}
+                    onChange={(d) => set('contractSignedAt', d ? d.format('YYYY-MM-DD') : '')}
+                    format="DD/MM/YYYY"
+                    style={{ width: '100%' }}
+                    disabled={!canEdit}
+                    placeholder="Chọn ngày"
+                  />
+                </FgField>
+              </>
+            ) : null}
+            <div style={{ gridColumn: '1/-1' }}>
+              <FgField label="Tag" help="Gõ để tìm tag có sẵn hoặc tạo tag mới (nhãn tự do: dự án, công trình, đợt…)" error={errors.tag_ids}>
+                <TagInput value={f.tagIds} onChange={(ids) => set('tagIds', ids)} companyId={currentCompany} disabled={!canEdit || scopeAll} knownTags={loaded?.tags} />
+              </FgField>
+            </div>
             {kind === 'rollover' ? (
               <>
+                <FgField label="Khoản vay đang đảo hạn *" error={errors.loan_id} help="Chỉ khoản đang vay / quá hạn của ngân hàng đã chọn">
+                  <FgSelect
+                    value={f.rolloverLoanId || undefined}
+                    onChange={(v) => {
+                      const picked = rolloverLoanOptions.find((l) => l._id === v);
+                      setF((s) => ({ ...s, rolloverLoanId: String(v ?? ''), partnerId: picked?.partner_id ?? s.partnerId }));
+                    }}
+                    options={rolloverLoanOptions.map((l) => ({
+                      value: l._id,
+                      label: `${l.code} · gốc ${formatMoney(moneyFromWire(l.principal) ?? money('0'), { mode: 'compact' })} · đáo hạn ${l.maturity_date}`,
+                    }))}
+                    placeholder={f.partnerId ? 'Chọn khoản vay của ngân hàng này' : 'Chọn ngân hàng cho vay trước'}
+                    disabled={!canEdit || !f.partnerId}
+                    style={{ width: '100%' }}
+                  />
+                </FgField>
+                <FgField label="Ngày đáo hạn mới *" error={errors['rollover.new_maturity_date']} help="Ngày đáo hạn sau khi ngân hàng gia hạn">
+                  <DatePicker
+                    value={f.rolloverMaturity ? dayjs(f.rolloverMaturity) : null}
+                    onChange={(d) => set('rolloverMaturity', d ? d.format('YYYY-MM-DD') : '')}
+                    format="DD/MM/YYYY"
+                    style={{ width: '100%' }}
+                    disabled={!canEdit}
+                  />
+                </FgField>
                 <div style={{ gridColumn: '1/-1' }}>
                   <FgField label="Phương án đảo hạn *" error={errors['rollover.plan']}>
                     <FgTextarea value={f.plan} onChange={(e) => set('plan', e.target.value)} placeholder="VD: Gia hạn 12 tháng tại BIDV, tài sản đảm bảo giữ nguyên, phí 0,3%" disabled={!canEdit} />
                   </FgField>
                 </div>
                 <FgField label="Lãi suất mới (%/năm)">
-                  <FgInput value={f.new_rate} onChange={(e) => set('new_rate', e.target.value)} placeholder="9,50" disabled={!canEdit} />
+                  <FgInput value={f.newRate} onChange={(e) => set('newRate', e.target.value)} placeholder="9,50" disabled={!canEdit} />
                 </FgField>
                 <FgField label="Tài sản đảm bảo">
-                  <FgInput value={f.collateral} onChange={(e) => set('collateral', e.target.value)} disabled={!canEdit} />
+                  <FgInput value={f.rolloverCollateral} onChange={(e) => set('rolloverCollateral', e.target.value)} disabled={!canEdit} />
                 </FgField>
               </>
-            ) : null}
-            {kind === 'income' ? (
-              <div style={{ gridColumn: '1/-1' }}>
-                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, cursor: canEdit ? 'pointer' : 'not-allowed' }}>
-                  <input
-                    type="checkbox"
-                    checked={f.create_bank_debt}
-                    onChange={(e) => setF((s) => ({ ...s, create_bank_debt: e.target.checked }))}
-                    style={{ width: 18, height: 18, marginTop: 1 }}
-                    disabled={!canEdit}
-                  />
-                  <span>
-                    Tạo phiếu nợ ngân hàng khi phiếu thu được duyệt &amp; thực thi
-                    <br />
-                    <span style={{ color: 'var(--fg-text-muted)' }}>
-                      Số tiền vay = số tiền thu · Ngân hàng = khách hàng trả tiền · Kỳ hạn 12 tháng · Hạn thanh toán + 11 tháng
-                    </span>
-                  </span>
-                </label>
-              </div>
             ) : null}
             <div style={{ gridColumn: '1/-1' }}>
               <FgField label="Ghi chú">
@@ -359,6 +700,216 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
               </FgField>
             </div>
           </div>
+
+          {/* ---------- Phiếu thu: đi vay ngân hàng (R2) ---------- */}
+          {kind === 'income' ? (
+            <Section title="Khoản vay ngân hàng">
+              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, cursor: canEdit ? 'pointer' : 'not-allowed' }}>
+                <input
+                  type="checkbox"
+                  checked={f.loan.on}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    // bật "đi vay" ⇒ bên nộp tiền phải là Ngân hàng: bỏ đối tác không phải ngân hàng (chọn lại)
+                    const wrongType = on && !!partnerQ.data && partnerQ.data.type !== 'bank';
+                    if (wrongType) message.info('Phiếu thu đi vay: bên nộp tiền phải là Ngân hàng — chọn lại đối tác');
+                    setF((s) => ({ ...s, loan: { ...s.loan, on }, partnerId: wrongType ? null : s.partnerId }));
+                  }}
+                  style={{ width: 18, height: 18, marginTop: 1 }}
+                  disabled={!canEdit}
+                />
+                <span>
+                  Đây là khoản vay ngân hàng (đi vay)
+                  <br />
+                  <span style={{ color: 'var(--fg-text-muted)' }}>
+                    Bên nộp tiền là Ngân hàng cho vay. Khi phiếu được duyệt &amp; thực thi, khoản nợ ngân hàng được tạo hoặc kích hoạt (gốc = số tiền thu).
+                  </span>
+                </span>
+              </label>
+              {f.loan.on ? (
+                <div style={{ display: 'grid', gap: 'var(--fg-space-3)', marginTop: 'var(--fg-space-3)' }}>
+                  <FgSegmented
+                    value={f.loan.mode}
+                    onChange={(v) => setLoan({ mode: v as LoanState['mode'] })}
+                    options={LOAN_MODES.map((m) => ({ value: m, label: LOAN_MODE_LABEL[m] }))}
+                    disabled={!canEdit}
+                  />
+                  {f.loan.mode === 'new' ? (
+                    <FgText style="caption" color="muted">
+                      Gốc khoản vay = số tiền phiếu thu{f.amount ? ` (${formatMoney(f.amount, { mode: 'full' })})` : ''}. Hạn thanh toán mặc định = ngày giải ngân
+                      {loanDefaults.data ? ` + ${loanDefaults.data.borrow.due_offset_months} tháng` : ' + theo cấu hình công ty'}; sửa được.
+                    </FgText>
+                  ) : null}
+                  {f.loan.mode === 'new' ? (
+                    <LoanTermsFields
+                      value={f.loan}
+                      onChange={setLoan}
+                      baseDate={f.plannedDate}
+                      disabled={!canEdit}
+                      errors={errors}
+                      defaults={loanDefaults.data?.borrow ?? null}
+                    />
+                  ) : null}
+                  {f.loan.mode === 'existing' ? (
+                    <FgField
+                      label="Khoản vay có sẵn *"
+                      error={errors['options.loan.existing_loan_id'] ?? null}
+                      help={
+                        !f.partnerId
+                          ? 'Chọn ngân hàng cho vay trước'
+                          : openLoans.length
+                            ? 'Khoản của cùng ngân hàng, đang chờ giải ngân hoặc đang vay'
+                            : 'Ngân hàng này chưa có khoản vay chờ giải ngân / đang vay'
+                      }
+                    >
+                      <FgSelect
+                        options={openLoans.map((l) => ({
+                          value: l._id,
+                          label: `${l.code} · ${bankDebtStatusLabel(l.status)} · gốc ${formatMoney(moneyFromWire(l.principal) ?? money('0'), { mode: 'compact' })}`,
+                        }))}
+                        value={f.loan.existingLoanId || undefined}
+                        onChange={(v) => setLoan({ existingLoanId: v ?? '' })}
+                        placeholder="Chọn khoản vay"
+                        style={{ width: '100%' }}
+                        disabled={!canEdit || !f.partnerId}
+                      />
+                    </FgField>
+                  ) : null}
+                  {f.loan.mode === 'later' ? (
+                    <FgText style="caption" color="muted">
+                      Phiếu chỉ mang cờ. Gán khoản vay sau từ tab Liên kết của phiếu hoặc từ khoản vay.
+                    </FgText>
+                  ) : null}
+                </div>
+              ) : null}
+            </Section>
+          ) : null}
+
+          {/* ---------- Phiếu chi: vay ngân hàng để chi (R3) ---------- */}
+          {kind === 'spend' ? (
+            <Section title="Vay ngân hàng để chi">
+              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, cursor: canEdit ? 'pointer' : 'not-allowed' }}>
+                <input
+                  type="checkbox"
+                  checked={f.loan.on}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setF((s) => ({
+                      ...s,
+                      loan: { ...s.loan, on },
+                      // vay để chi: TK nguồn mặc định = TK nhận giải ngân (vẫn sửa được)
+                      fund: on ? 'bank' : s.fund,
+                      accountId: on && !s.accountId && s.loan.receiveAccountId ? s.loan.receiveAccountId : s.accountId,
+                    }));
+                  }}
+                  style={{ width: 18, height: 18, marginTop: 1 }}
+                  disabled={!canEdit}
+                />
+                <span>
+                  Vay ngân hàng để chi
+                  <br />
+                  <span style={{ color: 'var(--fg-text-muted)' }}>
+                    Tiền do ngân hàng giải ngân về tài khoản của công ty, rồi công ty chi từ tài khoản đó. Khoản vay được tạo khi phiếu được duyệt.
+                  </span>
+                </span>
+              </label>
+              {f.loan.on ? (
+                <div style={{ display: 'grid', gap: 'var(--fg-space-3)', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', marginTop: 'var(--fg-space-3)' }}>
+                  <PartnerPicker
+                    label="Ngân hàng cho vay"
+                    required
+                    value={f.loan.lenderId}
+                    onChange={(id) => setLoan({ lenderId: id })}
+                    allowedTypes={['bank']}
+                    defaultType="bank"
+                    companyId={currentCompany}
+                    disabled={!canEdit || scopeAll || !currentCompany}
+                    error={errors['options.loan.lender_partner_id'] ?? null}
+                    placeholder="Chỉ chọn đối tác Ngân hàng…"
+                  />
+                  <FgField
+                    label="Tài khoản nhận giải ngân *"
+                    error={errors['options.loan.receive_account_id'] ?? null}
+                    help="Tài khoản ngân hàng của công ty. Mặc định cũng là tài khoản nguồn của phiếu chi."
+                  >
+                    <FgSelect
+                      options={receiveAccountOptions}
+                      value={f.loan.receiveAccountId || undefined}
+                      onChange={(v) => pickReceiveAccount(v ?? '')}
+                      placeholder="Chọn tài khoản ngân hàng"
+                      style={{ width: '100%' }}
+                      disabled={!canEdit}
+                    />
+                  </FgField>
+                  <FgField
+                    label="Số tiền vay"
+                    error={errors['options.loan.amount_minor'] ?? null}
+                    help={f.amount ? `Bỏ trống = bằng số tiền phiếu chi (${formatMoney(f.amount, { mode: 'compact' })})` : 'Bỏ trống = bằng số tiền phiếu chi'}
+                  >
+                    <FgMoneyInput value={f.loan.amount} onChange={(m) => setLoan({ amount: m })} disabled={!canEdit} placeholder="Bằng số tiền phiếu chi" />
+                  </FgField>
+                  <div style={{ gridColumn: '1/-1' }}>
+                    <LoanTermsFields value={f.loan} onChange={setLoan} baseDate={f.plannedDate} disabled={!canEdit} errors={errors} defaults={loanDefaults.data?.fund ?? null} />
+                  </div>
+                </div>
+              ) : null}
+            </Section>
+          ) : null}
+
+          {/* ---------- Chuyển tiền nội bộ theo ID (phiếu chi "Nhận: tài khoản nội bộ"; phiếu chuyển nội bộ) ---------- */}
+          {kind === 'spend' || kind === 'internal' ? (
+            <Section title={kind === 'internal' ? 'Chuyển tiền nội bộ' : 'Nhận: tài khoản nội bộ'}>
+              {kind === 'spend' ? (
+                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, cursor: canEdit ? 'pointer' : 'not-allowed' }}>
+                  <input
+                    type="checkbox"
+                    checked={f.transferOn}
+                    onChange={(e) => set('transferOn', e.target.checked)}
+                    style={{ width: 18, height: 18, marginTop: 1 }}
+                    disabled={!canEdit}
+                  />
+                  <span>
+                    Tiền chuyển cho tài khoản nội bộ của công ty khác trong tập đoàn
+                    <br />
+                    <span style={{ color: 'var(--fg-text-muted)' }}>Chọn theo tài khoản, không nhập chuỗi. Khi thực thi, công ty nhận tự sinh phiếu thu; không tính vào chi phí/doanh thu.</span>
+                  </span>
+                </label>
+              ) : (
+                <FgText style="caption" color="muted">
+                  Chọn công ty và tài khoản nhận. Khi thực thi, hai bên ghi sổ đối ứng (ra/vào), không tính vào chi phí/doanh thu. Công ty nhận KHÔNG tự sinh phiếu thu: muốn
+                  bên nhận có phiếu thu tự động, lập phiếu chi và chọn “Nhận: tài khoản nội bộ”.
+                </FgText>
+              )}
+              {f.transferOn ? (
+                <div style={{ display: 'grid', gap: 'var(--fg-space-3)', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', marginTop: 'var(--fg-space-3)' }}>
+                  <FgField
+                    label="Công ty nhận *"
+                    error={errors['transfer_target.company_id'] ?? null}
+                    help={companyOptions.length ? undefined : 'Không có công ty khác trong phạm vi đang xem — công ty nhận phải nằm trong phạm vi (server §7.5)'}
+                  >
+                    <FgSelect
+                      options={companyOptions}
+                      value={f.transferCompanyId || undefined}
+                      onChange={(v) => setF((s) => ({ ...s, transferCompanyId: v ?? '', transferAccountId: '' }))}
+                      placeholder="Chọn công ty"
+                      style={{ width: '100%' }}
+                      disabled={!canEdit}
+                    />
+                  </FgField>
+                  <FgField label="Tài khoản nhận *" error={errors['transfer_target.account_id'] ?? null} help={f.transferCompanyId ? undefined : 'Chọn công ty nhận trước'}>
+                    <FgSelect
+                      options={transferAccountOptions}
+                      value={f.transferAccountId || undefined}
+                      onChange={(v) => set('transferAccountId', v ?? '')}
+                      placeholder="Chọn tài khoản nhận"
+                      style={{ width: '100%' }}
+                      disabled={!canEdit || !f.transferCompanyId}
+                    />
+                  </FgField>
+                </div>
+              ) : null}
+            </Section>
+          ) : null}
         </FgCard>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)' }}>
           <FgCard title="Trạng thái">
@@ -394,6 +945,109 @@ export function DocumentFormScreen({ kind }: { kind: 'spend' | 'income' | 'rollo
         </div>
       </div>
     </>
+  );
+}
+
+/** Tiêu đề khối phụ trong thẻ form (tách bằng đường kẻ). */
+function Section({ title, children }: { title: string; children: ReactNode }): ReactNode {
+  return (
+    <section style={{ marginTop: 'var(--fg-space-5)', paddingTop: 'var(--fg-space-4)', borderTop: '1px solid var(--fg-border-subtle)', display: 'grid', gap: 'var(--fg-space-3)' }}>
+      <FgText style="h4">{title}</FgText>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * Điều khoản khoản vay (contract `loanTerms`). Trống ⇒ theo tham số của công ty (`defaults`, từ server);
+ * chưa tải được tham số thì không hiện số cụ thể.
+ */
+function LoanTermsFields({
+  value,
+  onChange,
+  baseDate,
+  disabled,
+  errors,
+  defaults,
+}: {
+  value: LoanState;
+  onChange: (patch: Partial<LoanState>) => void;
+  baseDate: string;
+  disabled?: boolean;
+  errors: Record<string, string>;
+  defaults: { term_months: number; due_offset_months: number } | null;
+}): ReactNode {
+  const defaultDue = defaults ? defaultLoanDueDate(baseDate, defaults.due_offset_months) : '';
+  const shownDue = value.dueDate || defaultDue;
+  const err = (k: string): string | null => errors[`options.loan.terms.${k}`] ?? errors[`options.loan.${k}`] ?? null;
+  return (
+    <div style={{ display: 'grid', gap: 'var(--fg-space-3)', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}>
+      <FgField label="Số HĐ tín dụng" error={err('contract_no')}>
+        <FgInput value={value.contractNo} onChange={(e) => onChange({ contractNo: e.target.value })} placeholder="VD: HĐTD 123/2026" maxLength={80} disabled={disabled} />
+      </FgField>
+      <FgField label="Lãi suất (%/năm)" error={err('interest_rate')}>
+        <FgInput value={value.interestRate} onChange={(e) => onChange({ interestRate: e.target.value })} placeholder="9,5" disabled={disabled} />
+      </FgField>
+      <FgField label="Kỳ hạn (tháng)" help={defaults ? `Mặc định của công ty: ${defaults.term_months} tháng` : 'Mặc định theo cấu hình công ty'} error={err('term_months')}>
+        <FgNumber
+          min={1}
+          max={600}
+          precision={0}
+          value={value.termMonths ?? undefined}
+          placeholder={defaults ? String(defaults.term_months) : undefined}
+          onChange={(v) => onChange({ termMonths: typeof v === 'number' ? v : null })}
+          disabled={disabled}
+          style={{ width: '100%' }}
+        />
+      </FgField>
+      <FgField
+        label="Hạn thanh toán"
+        help={
+          value.dueDate
+            ? 'Đã sửa — xoá ngày để về mặc định'
+            : defaults
+              ? `Mặc định: ${defaultDue ? dayjs(defaultDue).format('DD/MM/YYYY') : '—'} (ngày gốc + ${defaults.due_offset_months} tháng)`
+              : 'Mặc định theo cấu hình công ty'
+        }
+        error={err('due_date')}
+      >
+        <DatePicker
+          value={shownDue ? dayjs(shownDue) : null}
+          onChange={(d) => onChange({ dueDate: d ? d.format('YYYY-MM-DD') : '' })}
+          format="DD/MM/YYYY"
+          style={{ width: '100%' }}
+          disabled={disabled}
+          placeholder="Chọn ngày"
+        />
+      </FgField>
+      <FgField label="Kỳ trả lãi / gốc" error={err('repayment_period')}>
+        <FgSelect
+          options={REPAYMENT_PERIODS.map((p) => ({ value: p, label: REPAYMENT_PERIOD_LABEL[p] }))}
+          value={value.repaymentPeriod || undefined}
+          onChange={(v) => onChange({ repaymentPeriod: v ?? '' })}
+          placeholder="Chọn kỳ trả"
+          allowClear
+          style={{ width: '100%' }}
+          disabled={disabled}
+        />
+      </FgField>
+      <FgField label="Phương thức trả nợ gốc" error={err('repayment_method')}>
+        <FgSelect
+          options={REPAYMENT_METHODS.map((m) => ({ value: m, label: REPAYMENT_METHOD_LABEL[m] }))}
+          value={value.repaymentMethod || undefined}
+          onChange={(v) => onChange({ repaymentMethod: v ?? '' })}
+          placeholder="Chọn phương thức"
+          allowClear
+          style={{ width: '100%' }}
+          disabled={disabled}
+        />
+      </FgField>
+      <div style={{ gridColumn: '1/-1' }}>
+        <FgField label="Tài sản bảo đảm (TSĐB)" error={err('collateral')}>
+          <FgInput value={value.collateral} onChange={(e) => onChange({ collateral: e.target.value })} maxLength={1000} disabled={disabled} />
+        </FgField>
+      </div>
+    </div>
   );
 }
 

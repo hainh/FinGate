@@ -189,6 +189,10 @@ export interface DocPermissions {
   attach: boolean;
   export: boolean;
   delete: boolean;
+  /** v2: sửa tag của phiếu (kể cả sau khi duyệt) — cần xem + `doc:create` hoặc `tag:create`. */
+  tag: boolean;
+  /** v2: gán / gỡ liên kết thủ công từ phiếu — cần `link:manage`. */
+  link: boolean;
   reason?: string;
   amount_limit_minor: string;
   over_limit: boolean;
@@ -285,11 +289,12 @@ export function documentPermissions(
     // có ai từ KTT trở lên duyệt; riêng phiếu đã bị từ chối thì ai có doc:delete cũng xoá được;
     // Chủ tịch / Tổng Giám đốc xoá được ở mọi trạng thái.
     delete: has('doc:delete') && deletable,
-    approve: approveAllowed,
+    // v2 §7.2 — duyệt thường chỉ khi ĐẾN LƯỢT (bước `current` của mình); bước `waiting` chỉ duyệt vượt cấp
+    approve: approveAllowed && iAmStep.some((s) => s.state === 'current'),
     reject: approveAllowed,
     request_changes: approveAllowed,
-    // fast-track (blueprint §IV): mọi cấp trong quy trình đều duyệt ngay được →
-    // `can approve` đã bao gồm step `waiting` của chính mình
+    // fast-track (blueprint §IV, v2 §7.2): bước của mình còn `waiting` trong khi cấp thấp hơn đang `current`
+    // → chỉ "Duyệt trước" (approve_with_reason, có lý do) mới được; server (workflow.transition) cũng chặn `approve` thường
     fast_track:
       approveAllowed && !!current && iAmStep.some((s) => s.state === 'waiting'),
     // "Thực thi" phiếu đã duyệt xong: kế toán viên (payment:mark) thực hiện, KHÔNG giới hạn
@@ -298,6 +303,8 @@ export function documentPermissions(
     override: has('approval:override'),
     attach: (doc.status === 'draft' || doc.status === 'changes_requested' || has('doc:create')) && has('doc:read'),
     export: has('report:export'),
+    tag: inScope && has('doc:read') && (has('doc:create') || has('tag:create')),
+    link: has('link:manage') && inScope,
     amount_limit_minor: actor.amount_limit_minor.toString(),
     over_limit: overLimit,
     step_order: iAmStep[0]?.order ?? null,

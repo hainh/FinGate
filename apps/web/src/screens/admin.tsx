@@ -18,25 +18,30 @@ import {
   money,
   ddmmyyyy,
   dateTimeLabel,
+  moneyFromWire,
   moneyToWire,
   PERMISSION_GROUPS,
   PERMISSION_LABEL,
   permissionsForRole,
   ROLE_LEVEL,
+  today,
+  type PartnerRef,
   type Permission,
   type Role,
   type Money,
 } from '@fingate/shared';
-import { useApprovalThreshold, useApprovalThresholdUpsert, useAuditLog, useCompanies, useDepartments, useMatrix, useMatrixUpsert, usePersonnel, type DepartmentRow } from '../app/queries.ts';
+import { useApprovalThreshold, useApprovalThresholdUpsert, useAuditLog, useBankAccounts, useCompanies, useDepartments, useMatrix, useMatrixUpsert, usePersonnel, type DepartmentRow } from '../app/queries.ts';
 import { useAuth, useUi, useCurrentCompanyId } from '../app/store.tsx';
 import { FgAlert, FgButton, FgField, FgInput, FgMoneyStack, FgMoneyInput, FgMultiSelect, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonTable, FgTable, FgTabs, FgTag } from '../components/uitk.tsx';
 import { FgApprovalTimeline } from '../components/finance.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
-import { FgQuery, toastOk } from '../components/pagekit.tsx';
+import { FgQuery, toastOk, useToast } from '../components/pagekit.tsx';
+import { PartnerPicker } from '../components/partner-picker.tsx';
 import { AUDIT_ACTION_LABEL, ROLES_LABEL } from '../components/labels.ts';
 import { ApiRequestError, apiCall } from '../app/api.ts';
+import { RECURRING_PARTNER_TYPES, useCreateRecurring, useRecurringRules, type RecurringCadence, type RecurringCreateInput, type RecurringRow } from '../app/v2/exec.ts';
 import { APPROVAL_ORDER, DOC_KIND_LABEL, DOC_KINDS, type DocKind } from '@fingate/shared';
 import type { ApprovalThresholdCompany, ApprovalThresholdResult, CompanyRow, InviteLinkResult, MatrixEntry, PersonnelRow, AuditRow } from '../app/types.ts';
 
@@ -53,12 +58,17 @@ const GROUP_ROLE_OPTIONS = ROLE_OPTIONS.filter((o) => isGroupOnlyRole(o.value));
 
 /* ================= Khu Quản trị — điều hướng chung ================= */
 
-/** Các tab trong khu Quản trị; chỉ tab người dùng có quyền mới hiện. */
-const ADMIN_TABS: { to: string; label: string; perm: string }[] = [
+/** Các tab trong khu Quản trị; chỉ tab người dùng có quyền mới hiện (một trong các quyền liệt kê). */
+const ADMIN_TABS: { to: string; label: string; perm: string | string[] }[] = [
   { to: '/quantri/nguoidung', label: 'Nhân sự', perm: 'hr:invite' },
   { to: '/quantri/cong-ty', label: 'Công ty & bộ phận', perm: 'admin:settings' },
   { to: '/quantri/quy-trinh-duyet', label: 'Ma trận duyệt', perm: 'admin:matrix' },
   { to: '/quantri/nguong-duyet', label: 'Ngưỡng duyệt', perm: 'admin:settings' },
+  // v2 §13: khoản chi định kỳ (tạo: doc:create) và quy trình tự động (cấu hình / xem lượt chạy).
+  { to: '/quantri/dinh-ky', label: 'Chi định kỳ', perm: 'doc:create' },
+  { to: '/quantri/tu-dong', label: 'Tự động hoá', perm: ['automation:config', 'audit:read'] },
+  // v2 §13: quản lý tag theo công ty (cũng có mục riêng ngay dưới "Quản trị" ở rail).
+  { to: '/quantri/tags', label: 'Quản lý tag', perm: 'tag:manage' },
   { to: '/quantri/audit', label: 'Audit log', perm: 'audit:read' },
   { to: '/quantri/sao-luu', label: 'Sao lưu', perm: 'admin:backup' },
 ];
@@ -67,7 +77,7 @@ export function AdminNav(): ReactNode {
   const { can } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const items = ADMIN_TABS.filter((t) => can(t.perm)).map((t) => ({ key: t.to, label: t.label }));
+  const items = ADMIN_TABS.filter((t) => (Array.isArray(t.perm) ? t.perm.some((p) => can(p)) : can(t.perm))).map((t) => ({ key: t.to, label: t.label }));
   // Người chỉ có 1 mục (VD KTT) → không cần thanh tab.
   if (items.length <= 1) return null;
   const active = ADMIN_TABS.find((t) => location.pathname.startsWith(t.to))?.to ?? items[0]?.key ?? '';
@@ -1981,5 +1991,281 @@ export function SettingsScreen(): ReactNode {
         ]}
       />
     </>
+  );
+}
+
+/* ================= CHI-08/09 · Khoản chi định kỳ (v2 §13, §14.2) ================= */
+
+const CADENCE_OPTIONS: { value: RecurringCadence; label: string }[] = [
+  { value: 'monthly', label: 'Hàng tháng' },
+  { value: 'quarterly', label: 'Hàng quý' },
+  { value: 'semi_annual', label: 'Nửa năm' },
+  { value: 'annual', label: 'Hàng năm' },
+  { value: 'weekly', label: 'Hàng tuần' },
+];
+
+/** Khoản chi định kỳ (lương, thuê nhà, lãi vay…): tạo phiếu nháp đúng kỳ (R5) và nhắc trước 7 / 3 / 1 ngày. */
+export function RecurringScreen(): ReactNode {
+  const { can } = useAuth();
+  const query = useRecurringRules();
+  const [open, setOpen] = useState(false);
+  const canCreate = can('doc:create');
+  return (
+    <>
+      <AdminNav />
+      <FgPageHeader
+        title="Khoản chi định kỳ"
+        meta="Lương, thuê nhà, lãi vay… tự tạo phiếu nháp theo kỳ và nhắc trước 7 / 3 / 1 ngày. Bên nhận chọn từ danh bạ đối tác."
+        actions={
+          canCreate ? (
+            <FgButton variant="primary" onClick={() => setOpen(true)}>
+              + Thêm khoản định kỳ
+            </FgButton>
+          ) : null
+        }
+      />
+      <FgQuery query={query} skeleton={<FgSkeletonTable rows={5} cols={6} />}>
+        {(data) =>
+          !data.items.length ? (
+            <div className="fg-card">
+              <FgEmptyState glyph="↻" title="Chưa có khoản chi định kỳ" description="Thêm khoản chi lặp lại để hệ thống nhắc và tạo phiếu nháp đúng kỳ." />
+            </div>
+          ) : (
+            <div className="fg-card" style={{ padding: 0 }}>
+              <FgTable<RecurringRow>
+                rowKey="_id"
+                dataSource={data.items}
+                columns={[
+                  {
+                    title: 'Khoản chi',
+                    key: 'title',
+                    render: (_v, r) => (
+                      <div>
+                        <FgText strong>{r.title}</FgText>
+                        <br />
+                        <FgText style="caption" color="muted">
+                          {r.company_name}
+                          {r.category_name ? ` · ${r.category_name}` : ''}
+                        </FgText>
+                      </div>
+                    ),
+                  },
+                  { title: 'Số tiền mỗi kỳ', key: 'amt', align: 'right', render: (_v, r) => <FgMoneyStack value={moneyFromWire(r.amount)} /> },
+                  { title: 'Chu kỳ', key: 'cad', render: (_v, r) => r.cadence_label },
+                  {
+                    title: 'Kỳ kế tiếp',
+                    key: 'next',
+                    render: (_v, r) =>
+                      r.next_date ? (
+                        <div>
+                          <span className="fg-num">{ddmmyyyy(r.next_date)}</span>
+                          <br />
+                          <FgText style="caption" color="muted">
+                            {r.days_until < 0 ? 'đã qua kỳ' : r.days_until === 0 ? 'hôm nay' : `còn ${r.days_until} ngày`}
+                          </FgText>
+                        </div>
+                      ) : (
+                        '—'
+                      ),
+                  },
+                  { title: 'Nhắc trước', key: 'remind', render: (_v, r) => (r.remind_in.length ? `${r.remind_in.join(' / ')} ngày` : '—') },
+                  {
+                    title: 'Trạng thái',
+                    key: 'st',
+                    render: (_v, r) => <FgTag tone={r.status === 'active' ? 'success' : 'neutral'}>{r.status === 'active' ? 'Đang chạy' : 'Tạm dừng'}</FgTag>,
+                  },
+                ]}
+              />
+            </div>
+          )
+        }
+      </FgQuery>
+      <RecurringFormModal open={open} onClose={() => setOpen(false)} />
+    </>
+  );
+}
+
+/** Tạo khoản chi định kỳ. Bên nhận là ĐỐI TÁC chọn từ danh bạ (PartnerPicker), không nhập tự do. */
+function RecurringFormModal({ open, onClose }: { open: boolean; onClose: () => void }): ReactNode {
+  const currentCompanyId = useCurrentCompanyId();
+  const companies = useCompanies();
+  const create = useCreateRecurring();
+  const { message } = useToast();
+  const [companyPick, setCompanyPick] = useState('');
+  const [title, setTitle] = useState('');
+  const [purpose, setPurpose] = useState('');
+  const [partner, setPartner] = useState<PartnerRef | null>(null);
+  const [amount, setAmount] = useState<Money | null>(null);
+  const [cadence, setCadence] = useState<RecurringCadence>('monthly');
+  const [dayOfPeriod, setDayOfPeriod] = useState('1');
+  const [effectiveFrom, setEffectiveFrom] = useState('');
+  const [effectiveTo, setEffectiveTo] = useState('');
+  const [fund, setFund] = useState<'bank' | 'cash'>('bank');
+  const [accountId, setAccountId] = useState('');
+  const [autoDraft, setAutoDraft] = useState(true);
+  const [status, setStatus] = useState<'active' | 'paused'>('active');
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const companyList = companies.data?.items ?? [];
+  const companyId = companyPick || currentCompanyId || companyList[0]?._id || '';
+  const accounts = useBankAccounts(companyId || null);
+  const accountOptions = (accounts.data?.items ?? [])
+    .filter((a) => a.kind === fund && a.status === 'active')
+    .map((a) => ({ value: a._id, label: a.label }));
+
+  useEffect(() => {
+    if (!open) return;
+    setCompanyPick('');
+    setTitle('');
+    setPurpose('');
+    setPartner(null);
+    setAmount(null);
+    setCadence('monthly');
+    setDayOfPeriod('1');
+    setEffectiveFrom(today());
+    setEffectiveTo('');
+    setFund('bank');
+    setAccountId('');
+    setAutoDraft(true);
+    setStatus('active');
+    setErrors({});
+  }, [open]);
+
+  const submit = (): void => {
+    const next: Record<string, string> = {};
+    const day = Number(dayOfPeriod);
+    if (!companyId) next.company_id = 'Chọn công ty';
+    if (title.trim().length < 3) next.title = 'Tối thiểu 3 ký tự';
+    if (purpose.trim().length < 3) next.purpose = 'Tối thiểu 3 ký tự';
+    if (!partner) next.partner_id = 'Chọn bên nhận từ danh bạ đối tác';
+    if (!amount || amount.minor <= 0n) next.amount = 'Nhập số tiền lớn hơn 0';
+    if (!Number.isInteger(day) || day < 1 || day > 31) next.day_of_period = 'Từ 1 đến 31';
+    if (!effectiveFrom) next.effective_from = 'Chọn ngày bắt đầu';
+    if (effectiveTo && effectiveFrom && effectiveTo < effectiveFrom) next.effective_to = 'Phải sau ngày bắt đầu';
+    setErrors(next);
+    if (Object.keys(next).length || !partner || !amount) return;
+
+    const body: RecurringCreateInput = {
+      company_id: companyId,
+      title: title.trim(),
+      purpose: purpose.trim(),
+      partner_id: partner._id,
+      amount: { amount_minor: amount.minor.toString(), currency: amount.currency },
+      source: { fund, account_id: accountId || null },
+      cadence,
+      day_of_period: day,
+      remind_days: [7, 3, 1],
+      effective_from: effectiveFrom,
+      effective_to: effectiveTo || null,
+      auto_create_draft: autoDraft,
+      status,
+    };
+    create.mutate(body, {
+      onSuccess: () => {
+        toastOk('Đã tạo khoản chi định kỳ');
+        onClose();
+      },
+      onError: (e) => {
+        if (e instanceof ApiRequestError) {
+          setErrors(e.problem.errors ?? {});
+          message.error(e.problem.detail ?? e.problem.title);
+        } else {
+          message.error('Không tạo được khoản chi định kỳ');
+        }
+      },
+    });
+  };
+
+  return (
+    <FgModal open={open} title="Khoản chi định kỳ mới" onCancel={onClose} onOk={submit} okText="Tạo khoản định kỳ" confirmLoading={create.isPending} width={680}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 'var(--fg-space-4)', paddingTop: 8 }}>
+        <FgField label="Công ty" required error={errors.company_id ?? null}>
+          <FgSelect
+            options={companyList.map((c) => ({ value: c._id, label: `${c.code} · ${c.name}` }))}
+            value={companyId}
+            onChange={(v) => {
+              setCompanyPick(v ?? '');
+              setPartner(null);
+              setAccountId('');
+            }}
+            style={{ width: '100%' }}
+          />
+        </FgField>
+        <FgField label="Trạng thái">
+          <FgSelect
+            options={[
+              { value: 'active', label: 'Đang chạy' },
+              { value: 'paused', label: 'Tạm dừng' },
+            ]}
+            value={status}
+            onChange={(v) => setStatus(v === 'paused' ? 'paused' : 'active')}
+            style={{ width: '100%' }}
+          />
+        </FgField>
+        <FgField label="Tiêu đề" required error={errors.title ?? null}>
+          <FgInput value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Thuê văn phòng quận 1" />
+        </FgField>
+        <FgField label="Mục đích / ghi chú" required error={errors.purpose ?? null}>
+          <FgInput value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="Tiền thuê mặt bằng tháng" />
+        </FgField>
+        <div style={{ gridColumn: '1/-1' }}>
+          <PartnerPicker
+            value={partner?._id ?? null}
+            onChange={(id, p) => setPartner(id ? (p ?? partner) : null)}
+            allowedTypes={RECURRING_PARTNER_TYPES}
+            companyId={companyId || null}
+            required
+            label="Bên nhận"
+            error={errors.partner_id ?? null}
+          />
+          {partner ? (
+            <FgText style="caption" color="muted">
+              Tên bên nhận lấy từ đối tác đã chọn: {partner.name}
+            </FgText>
+          ) : null}
+        </div>
+        <FgField label="Số tiền mỗi kỳ" required error={errors.amount ?? null}>
+          <FgMoneyInput value={amount} onChange={setAmount} ariaLabel="Số tiền mỗi kỳ" />
+        </FgField>
+        <FgField label="Chu kỳ">
+          <FgSelect options={CADENCE_OPTIONS} value={cadence} onChange={(v) => setCadence((v as RecurringCadence) ?? 'monthly')} style={{ width: '100%' }} />
+        </FgField>
+        <FgField label="Ngày phát sinh trong kỳ" help="Từ 1 đến 31" required error={errors.day_of_period ?? null}>
+          <FgInput type="number" min={1} max={31} value={dayOfPeriod} onChange={(e) => setDayOfPeriod(e.target.value)} />
+        </FgField>
+        <FgField label="Hiệu lực từ" required error={errors.effective_from ?? null}>
+          <FgInput type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} />
+        </FgField>
+        <FgField label="Đến ngày" help="Bỏ trống nếu không có ngày kết thúc" error={errors.effective_to ?? null}>
+          <FgInput type="date" value={effectiveTo} onChange={(e) => setEffectiveTo(e.target.value)} />
+        </FgField>
+        <FgField label="Nguồn tiền">
+          <FgSelect
+            options={[
+              { value: 'bank', label: 'Ngân hàng' },
+              { value: 'cash', label: 'Tiền mặt' },
+            ]}
+            value={fund}
+            onChange={(v) => {
+              setFund(v === 'cash' ? 'cash' : 'bank');
+              setAccountId('');
+            }}
+            style={{ width: '100%' }}
+          />
+        </FgField>
+        <FgField label="Tài khoản nguồn" help="Tuỳ chọn — có thể chọn khi lập phiếu">
+          <FgSelect options={[{ value: '', label: 'Chưa chọn' }, ...accountOptions]} value={accountId} onChange={(v) => setAccountId(v ?? '')} style={{ width: '100%' }} />
+        </FgField>
+        <div style={{ gridColumn: '1/-1' }}>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+            <input type="checkbox" checked={autoDraft} onChange={(e) => setAutoDraft(e.target.checked)} style={{ width: 18, height: 18 }} />
+            Tự tạo phiếu nháp đến kỳ (đứng tên kế toán trưởng của công ty)
+          </label>
+          <FgText style="caption" color="muted">
+            Nhắc trước 7 / 3 / 1 ngày. Bên nhận và số tiền lấy từ khoản này khi tạo phiếu nháp.
+          </FgText>
+        </div>
+      </div>
+    </FgModal>
   );
 }
