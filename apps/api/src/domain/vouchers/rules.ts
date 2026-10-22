@@ -294,6 +294,20 @@ export function assertTransferTargetFits(
   }
 }
 
+/**
+ * Đích chuyển nội bộ có công ty nhận thì phải có TK đích theo ID (§11.6). Thiếu TK ⇒ R1 sau này không có nơi ghi
+ * phiếu thu, trong khi tiền của phiếu chi đã ra khỏi công ty nguồn lúc thực thi — nên chặn ngay khi lưu.
+ * `target` = null (không có chuyển nội bộ) ⇒ không kiểm.
+ */
+export function assertTransferTargetAccount(target: { account_id?: string | null } | null): void {
+  if (!target || target.account_id) return;
+  throw new ApiError({
+    code: 'FG-VAL-001',
+    detail: 'Chọn tài khoản nhận của công ty đích',
+    errors: { 'transfer_target.account_id': 'Chọn tài khoản nhận của công ty đích' },
+  });
+}
+
 /* ================================================================== *
  * Sửa số tiền sau khi đã sinh khoản vay tự động (§11.5 — ngoại lệ)
  * ================================================================== */
@@ -328,4 +342,35 @@ export type ManualRelation = 'offset' | 'repayment' | 'disbursement';
 /** Cấn trừ → khoản công nợ; trả nợ / giải ngân → khoản nợ ngân hàng. */
 export function manualLinkTargetType(relation: ManualRelation): 'debt_voucher' | 'bank_debt' {
   return relation === 'offset' ? 'debt_voucher' : 'bank_debt';
+}
+
+/* ================================================================== *
+ * Gỡ liên kết giải ngân theo lựa chọn vay trên phiếu (§11.2, §11.4 (b))
+ * ================================================================== */
+
+/** Lựa chọn vay đã lưu trên phiếu (`options.loan`) — chỉ các trường cần để kiểm. */
+export interface StoredLoanChoice {
+  kind?: unknown;
+  mode?: unknown;
+  existing_loan_id?: unknown;
+}
+
+/**
+ * Liên kết giải ngân thủ công tới khoản vay ĐANG CHỌN trên phiếu thu ("Gắn khoản vay đã có") không gỡ tay, từ phiếu lẫn
+ * từ màn khoản vay (cùng quy tắc FG-WF-005 như liên kết tự động): lần lưu phiếu sau gán lại theo lựa chọn, nên gỡ là vô
+ * nghĩa và lựa chọn vay sẽ lệch với liên kết. Muốn gỡ thì đổi lựa chọn vay trên phiếu. Liên kết khác ⇒ không chặn.
+ */
+export function assertDisbursementNotChosenLoan(
+  link: { origin?: unknown; relation?: unknown; to_type?: unknown; to_id?: unknown },
+  storedLoan: StoredLoanChoice | null | undefined,
+): void {
+  if (link.origin !== 'manual' || link.relation !== 'disbursement' || link.to_type !== 'bank_debt') return;
+  if (storedLoan?.kind !== 'borrow' || storedLoan.mode !== 'existing') return;
+  if (storedLoan.existing_loan_id === null || storedLoan.existing_loan_id === undefined) return;
+  if (String(storedLoan.existing_loan_id) !== String(link.to_id)) return;
+  throw new ApiError({
+    code: 'FG-WF-005',
+    title: 'Khoản vay đang được chọn trên phiếu — không gỡ tay',
+    detail: 'Liên kết giải ngân này theo lựa chọn "Gắn khoản vay đã có" của phiếu. Đổi lựa chọn vay trên phiếu để gỡ liên kết.',
+  });
 }

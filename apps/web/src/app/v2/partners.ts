@@ -206,6 +206,16 @@ export function debtDirectionOf(row: { direction?: DebtDirection | null; side?: 
   return row.side === 'credit' ? 'payable' : 'receivable';
 }
 
+/**
+ * Danh sách gợi ý của ô chọn đối tác đang trống vì: đang tải / LỖI tải / thật sự không có đối tác khớp.
+ * Lỗi tải không được báo như "không có đối tác" (người dùng dễ tưởng chưa có đối tác rồi tạo trùng).
+ */
+export function partnerOptionsEmptyState(q: { isFetching: boolean; isError: boolean }): 'loading' | 'error' | 'none' {
+  if (q.isFetching) return 'loading';
+  if (q.isError) return 'error';
+  return 'none';
+}
+
 /* ================= hooks ================= */
 
 /** Ô chọn đối tác (PartnerPicker). Mặc định chỉ đối tác "Hoạt động". */
@@ -215,6 +225,9 @@ export function usePartnerOptions(params: PartnerOptionsParams, enabled = true) 
     queryKey: ['partner-options', scope, params],
     enabled,
     staleTime: 30_000,
+    // Không giữ kết quả của chữ CŨ khi chữ mới đang tải (placeholder mặc định của app): danh sách phải trống
+    // ("Đang tìm…") chứ không liệt kê đối tác không khớp chữ đang gõ (v2/v2.md §5.2). Cùng cách với tags.ts.
+    placeholderData: undefined,
     queryFn: () => apiCall<{ items: PartnerRef[] }>('/partners/options', { query: { scope, ...params } }),
   });
 }
@@ -225,6 +238,8 @@ export function usePartner(id: string | null | undefined) {
   return useQuery({
     queryKey: ['partner', scope, id ?? ''],
     enabled: !!id,
+    // Chi tiết của đối tác TRƯỚC không được thay cho đối tác mới khi đang tải (xem detailForValue ở ô chọn).
+    placeholderData: undefined,
     queryFn: () => apiData<PartnerDetailData>(`/partners/${id}`, { query: { scope } }),
   });
 }
@@ -276,6 +291,8 @@ export function usePartnerDuplicateCheck(body: PartnerDuplicateCheckBody | null)
     enabled: !!body,
     retry: false,
     staleTime: 0,
+    // Cảnh báo của nội dung CŨ không được giữ khi đang kiểm nội dung mới (popup phải phản ánh tên hiện tại).
+    placeholderData: undefined,
     queryFn: () => apiData<{ warnings: PartnerDuplicateWarning[] }>('/partners/check-duplicates', { method: 'POST', body: { ...body } }),
   });
 }
@@ -286,6 +303,8 @@ export function usePartnerVouchers(partnerId: string | undefined) {
   return useQuery({
     queryKey: ['partner-vouchers', scope, partnerId ?? ''],
     enabled: !!partnerId,
+    // đổi đối tác: không hiện phiếu của đối tác trước trong lúc tải
+    placeholderData: undefined,
     queryFn: () => apiCall<{ items: PartnerVoucherRow[]; total: number }>(`/partners/${partnerId}/documents`, { query: { scope, limit: 100 } }),
   });
 }
@@ -296,6 +315,8 @@ export function usePartnerDebts(partnerId: string | undefined) {
   return useQuery({
     queryKey: ['partner-debts', scope, partnerId ?? ''],
     enabled: !!partnerId,
+    // đổi đối tác: không hiện công nợ của đối tác trước trong lúc tải (hộp thoại "Trả nợ" dựa trên danh sách này)
+    placeholderData: undefined,
     queryFn: () => apiCall<{ items: PartnerDebtRow[]; total: number }>(`/partners/${partnerId}/debts`, { query: { scope } }),
   });
 }
@@ -306,6 +327,8 @@ export function usePartnerLoans(partnerId: string | undefined) {
   return useQuery({
     queryKey: ['partner-loans', scope, partnerId ?? ''],
     enabled: !!partnerId,
+    // đổi đối tác: không hiện khoản vay của đối tác trước trong lúc tải (hộp thoại "Trả nợ" dựa trên danh sách này)
+    placeholderData: undefined,
     queryFn: () => apiCall<{ items: PartnerLoanRow[]; total: number }>(`/partners/${partnerId}/loans`, { query: { scope } }),
   });
 }

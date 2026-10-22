@@ -15,7 +15,8 @@
  *  1. create_loan    — tạo / đồng bộ / phục hồi khoản vay tự sinh (chỉ phiếu đi vay chế độ `new`);
  *  2. activate_loan  — phiếu ĐÃ THỰC THI: mọi liên kết `disbursement` hiệu lực (kể cả gán tay, kể cả phiếu
  *                      không có cờ vay) ⇒ khoản vay `Đang vay`, ngày giải ngân = ngày thực thi (§10.2);
- *  3. link           — `disbursement` phiếu thu → khoản vay tự sinh (chế độ `new`).
+ *  3. link           — `disbursement` phiếu thu → khoản vay: khoản tự sinh (chế độ `new`, nguồn Tự động) hoặc khoản
+ *                      đã có người dùng chọn (chế độ `existing`, nguồn Thủ công — v2 §11.2).
  */
 
 import { today } from '@fingate/shared';
@@ -28,7 +29,6 @@ import {
   r2CreateAtOf,
   resolveLoanTerms,
   type LoanTermsInput,
-  type ResolvedLoanTerms,
 } from '../policy.ts';
 import { actorOfEvent, big, type AutoActor } from '../actions/common.ts';
 import { bankPartnerOrThrow, loadVoucher, type VoucherRow } from '../actions/lookup.ts';
@@ -44,7 +44,7 @@ import {
   syncAutoLoan,
   type LoanView,
 } from '../actions/loan.ts';
-import { ensureAutomationLink, unlinkAutomationLink } from '../actions/link.ts';
+import { ensureAutomationLink, ensureManualLink, unlinkAutomationLink } from '../actions/link.ts';
 import { activateLoanOnDisbursement } from '../../debt/loans.ts';
 
 const RULE = 'R2';
@@ -91,14 +91,6 @@ function receiptAmountOf(doc: VoucherRow): bigint {
 /** Ngày gốc tính hạn: ngày thực thi nếu đã giải ngân, không thì ngày dự kiến của phiếu. */
 function baseDateOf(doc: VoucherRow): string {
   return loanBaseDate({ paidDate: doc.status === 'paid' ? (doc.execution?.paid_at ?? null) : null, plannedDate: doc.planned_date, fallback: today() });
-}
-
-/** Ghi chú khoản vay: số HĐ, TSĐB (khoản vay chưa có trường riêng), nguồn sinh. */
-function loanNoteOf(terms: ResolvedLoanTerms, base: string): string {
-  const parts = [base];
-  if (terms.contract_no) parts.push(`Số HĐ tín dụng: ${terms.contract_no}`);
-  if (terms.collateral) parts.push(`TSĐB: ${terms.collateral}`);
-  return parts.join(' · ');
 }
 
 const out = (loanId: string): StepOutput => ({ output_type: 'bank_debt', output_id: loanId });
@@ -155,7 +147,6 @@ async function createLoanStep(ctx: StepContext): Promise<StepOutput> {
         bankName: bank.name,
         principalMinor: receiptAmountOf(doc),
         terms,
-        note: loanNoteOf(terms, `Tự động tạo khi lập phiếu thu ${doc.code}`),
         requestId: ctx.stepKey,
         actor,
       });
@@ -174,7 +165,7 @@ async function createLoanStep(ctx: StepContext): Promise<StepOutput> {
     principalMinor: receiptAmountOf(doc),
     currency: doc.amount.currency ?? 'VND',
     terms,
-    note: loanNoteOf(terms, `Tự động tạo khi lập phiếu thu ${doc.code}`),
+    note: `Tự động tạo khi lập phiếu thu ${doc.code}`,
     runId: ctx.runId,
     ruleCode: RULE,
     source: { id: sourceId, code: doc.code },
@@ -199,10 +190,13 @@ async function activateLoanStep(ctx: StepContext): Promise<StepOutput> {
   const loanIds = new Set((await activeLoanLinks(String(doc._id), 'disbursement')).map((l) => l.loanId));
   if (ctx.outputs.create_loan?.output_id) loanIds.add(ctx.outputs.create_loan.output_id);
 
-  let first: string | null = null;
+  // đối tượng "đã tạo" của lượt chỉ là khoản do R2 sinh ra; khoản người dùng gắn tay chỉ được kích hoạt, không liệt kê
+  let generated: string | null = null;
+  let activated = false;
   for (const loanId of loanIds) {
     const loan = await loadLoan(loanId);
     if (!loan || !LINKABLE_LOAN_STATUSES.includes(loan.status)) continue; // đã huỷ / đã đang vay: không kích hoạt lại
+    activated = true;
     if (loan.origin === 'automation' && loan.rule_code === RULE) {
       // khoản do R2 tạo: gốc = số thực thu; hạn mặc định = ngày giải ngân + lệch tháng (§11.4 (a)); người dùng đã nhập hạn thì giữ
       const terms = resolveLoanTerms({ terms: opt?.terms as LoanTermsInput | null, baseDate: paidAt, params: ctx.params });
@@ -214,13 +208,14 @@ async function activateLoanStep(ctx: StepContext): Promise<StepOutput> {
         actor,
         requestId: ctx.stepKey,
       });
+      generated ??= loanId;
     } else {
       // khoản tạo tay (hoặc do quy tắc khác): đường chuẩn của nợ ngân hàng — idempotent (chỉ chuyển khi còn chờ)
       await activateLoanOnDisbursement(loanId, actor);
     }
-    first ??= loanId;
   }
-  return first ? out(first) : { skipped: true };
+  if (generated) return out(generated);
+  return activated ? {} : { skipped: true };
 }
 
 /* ------------------------------------------------------------------ *
@@ -260,15 +255,28 @@ async function linkStep(ctx: StepContext): Promise<StepOutput> {
   if (!target) return { skipped: true }; // để sau / không cờ vay
   if (mode === 'new' && !LINKABLE_LOAN_STATUSES.includes(target.status)) return { skipped: true }; // đã huỷ theo phiếu — chờ gửi lại
 
-  await ensureAutomationLink({
-    from: { type: 'document', id: sourceId },
-    to: { type: 'bank_debt', id: target.id },
-    relation: 'disbursement',
+  const disbursement = {
+    from: { type: 'document' as const, id: sourceId },
+    to: { type: 'bank_debt' as const, id: target.id },
+    relation: 'disbursement' as const,
     amountMinor: receiptAmountOf(doc),
-    runId: ctx.runId,
-    ruleCode: RULE,
     actor,
     requestId: ctx.stepKey,
-  });
+  };
+  // khoản người dùng đã chọn ("Gắn khoản vay đã có") ⇒ nguồn Thủ công và R2 KHÔNG sinh khoản nào: không liệt kê là "đã tạo"
+  if (mode === 'existing') {
+    await ensureManualLink(disbursement);
+    return {};
+  }
+  try {
+    await ensureAutomationLink({ ...disbursement, runId: ctx.runId, ruleCode: RULE });
+  } catch (err) {
+    // khoản VỪA tạo ở create_loan của lượt này mà không gắn được phiếu (vd phiếu hết sức chứa) ⇒ huỷ luôn,
+    // không để khoản "Chờ giải ngân" mồ côi thiếu liên kết giải ngân (v2 §10.2)
+    if (ctx.outputs.create_loan?.output_id === target.id) {
+      await cancelLoan({ loanId: target.id, reason: `Không gắn được phiếu thu ${doc.code} — huỷ khoản vay vừa tạo`, actor, requestId: ctx.stepKey });
+    }
+    throw err;
+  }
   return out(target.id);
 }

@@ -12,6 +12,7 @@ import { Models } from '../db/models.ts';
 import { entriesForPayment, postCashEntries, recomputeAccountBalances, sourceAccountOf } from './ledger/index.ts';
 import { cacheInvalidate } from '../lib/cache.ts';
 import { mailTemplates, sendMail } from '../mail/sender.ts';
+import { BADGE_CACHE_PREFIX } from './queries/badge-cache.ts';
 import type { DomainDoc } from './types.ts';
 
 /* ------------------------------------------------------------------ *
@@ -128,11 +129,17 @@ export async function syncBalancesForDocument(input: {
   }
 }
 
+/**
+ * Xoá cache số liệu sau mutation. Badge "Chờ tôi duyệt" đếm phiếu của NHIỀU người (cấp kế tiếp, người thực thi)
+ * theo từng phạm vi công ty, nên xoá TOÀN BỘ badge — không chỉ của người thao tác. Đếm lại khi đọc chỉ là một lượt đếm theo phạm vi.
+ */
 export function invalidateFor(companyId?: string | null, userId?: string | null): void {
   cacheInvalidate('dashboard:');
   cacheInvalidate('overview:');
+  cacheInvalidate('dash-extras:');
   if (companyId) cacheInvalidate(`balances:${companyId}`);
-  if (userId) cacheInvalidate(`badge:${userId}`);
+  cacheInvalidate(BADGE_CACHE_PREFIX);
+  void userId; // giữ để tương thích với nơi gọi; người thao tác đã nằm trong nhóm badge bị xoá ở trên
 }
 
 /* ------------------------------------------------------------------ *
@@ -150,6 +157,9 @@ export async function notifyNextApprover(input: {
 }): Promise<void> {
   try {
     const { doc } = input;
+    // Badge "Chờ tôi duyệt" đổi ngay khi bước duyệt đổi. Xoá TRƯỚC nhánh không có người nhận bên dưới:
+    // duyệt xong (không còn bước) phiếu chuyển sang hàng thực thi của kế toán — badge của họ cũng phải đổi.
+    invalidateFor(String(doc.company_id));
     const steps = (doc.approval?.steps ?? []) as { order: number; role: Role; user_id: string | null; state: string }[];
     const recipients = [...new Set(steps.filter((s) => (s.state === 'current' || s.state === 'waiting') && s.user_id).map((s) => s.user_id as string))];
     if (!recipients.length) return;
@@ -195,9 +205,6 @@ export async function notifyNextApprover(input: {
         });
       }
     }
-    invalidateFor(String(doc.company_id));
-    // Badge "Chờ tôi duyệt" của các cấp kế tiếp đổi ngay; không xoá thì họ thấy số cũ tới hết TTL.
-    for (const id of recipients) cacheInvalidate(`badge:${id}`);
   } catch (err) {
     console.warn('[notify] thất bại (bỏ qua — web vẫn còn qua poll 30s):', (err as Error).message);
   }

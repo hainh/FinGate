@@ -38,6 +38,7 @@ import {
 import type { DocumentDetail } from '../app/types.ts';
 import { useAuth } from '../app/store.tsx';
 import { usePartner, usePartnerDebts, usePartnerLoans, debtDirectionOf, type PartnerDebtRow, type PartnerLoanRow } from '../app/v2/partners.ts';
+import { interestRateText } from '../app/v2/debts.ts';
 import {
   LOAN_DEFAULT_TERM_MONTHS,
   LOAN_OPEN_STATUSES,
@@ -96,7 +97,7 @@ export function LoanBanner({ loan, style }: { loan: DocLoanView; style?: CSSProp
   const due = dayLabel(loan.terms?.due_date);
   if (due) lines.push(`Hạn thanh toán: ${due}`);
   if (loan.terms?.contract_no) lines.push(`Số HĐ tín dụng: ${loan.terms.contract_no}`);
-  if (loan.terms?.interest_rate) lines.push(`Lãi suất: ${loan.terms.interest_rate}%/năm`);
+  if (loan.terms?.interest_rate) lines.push(`Lãi suất: ${interestRateText(loan.terms.interest_rate)}%/năm`);
   const period = periodLabel(loan.terms?.repayment_period ?? null);
   const method = methodLabel(loan.terms?.repayment_method ?? null);
   if (period || method) lines.push(`Trả nợ: ${[period, method].filter(Boolean).join(' · ')}`);
@@ -240,7 +241,8 @@ const RUN_GLYPH: Record<string, string> = { done: '✔', failed: '✕', running:
 
 function RunLine({ run, canRerun, onRerun, busy }: { run: AutomationRunView; canRerun: boolean; onRerun: (id: string) => void; busy: boolean }): ReactNode {
   const def = AUTOMATION_RUN_STATUS_REGISTRY[run.status as keyof typeof AUTOMATION_RUN_STATUS_REGISTRY];
-  const generated = run.generated ?? [];
+  // mục null (phản hồi cũ) bị bỏ: không để một mục hỏng làm sập panel quy trình tự động
+  const generated = (run.generated ?? []).filter((g): g is NonNullable<typeof g> => !!g);
   const failedSteps = run.steps.filter((s) => s.status === 'failed');
   const glyph = RUN_GLYPH[run.status] ?? '○';
   return (

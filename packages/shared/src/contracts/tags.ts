@@ -58,12 +58,16 @@ export const tagRow = z.object({
 });
 export type TagRow = z.infer<typeof tagRow>;
 
-/** GET /tags — gợi ý khi gõ; mặc định ẩn tag đã ẩn. */
+/**
+ * GET /tags — gợi ý khi gõ / danh bạ; mặc định ẩn tag đã ẩn. Sắp theo tên chuẩn hoá; trang tiếp theo
+ * lấy bằng `offset` (+ `limit` ≤ 500). Phản hồi `total` = số dòng khớp bộ lọc (không tính phân trang).
+ */
 export const tagListQuery = z.object({
   company_id: objectId.optional(),
   scope: z.string().max(64).optional(),
   q: z.string().max(200).optional(),
   include_hidden: z.enum(['true', 'false']).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
+  offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
 });
 export type TagListQuery = z.infer<typeof tagListQuery>;

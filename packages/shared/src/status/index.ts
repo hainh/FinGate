@@ -301,6 +301,16 @@ export function daysLabel(days: number): string {
   return `còn ${Math.round(days / 30)} tháng`;
 }
 
+/**
+ * Hai phần hiển thị của chip đáo hạn (DS §3.3, §4.1): biểu tượng mức + nhãn số ngày.
+ * Chip chỉ hiện MỘT biểu tượng — không ghép thêm glyph vào `maturityLabel` (nhãn đó đã có sẵn glyph → "⛔⛔").
+ * Mức "sau 30 ngày" không có biểu tượng → '·' làm chỗ giữ cột.
+ */
+export function maturityChipParts(days: number): { glyph: string; text: string } {
+  return { glyph: maturity(days).glyph || '·', text: daysLabel(days) };
+}
+
+/** Nhãn đầy đủ có biểu tượng (`⛔ qua hạn 15 ngày`) — dùng cho aria-label và trường `label` của API. */
 export function maturityLabel(days: number): string {
   const b = maturity(days);
   const label = daysLabel(days);

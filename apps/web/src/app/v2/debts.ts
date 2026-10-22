@@ -20,7 +20,9 @@ import {
   type BankDebtStatus,
   type BusinessLinkRelation,
   type DebtDirection,
+  formatMoney,
   type LinkOrigin,
+  type Money,
   type MoneyWire,
   type PartnerRef,
 } from '@fingate/shared';
@@ -478,13 +480,19 @@ export interface HistoryChangeRow {
 export interface HistoryRow {
   at: string | null;
   actor: string;
+  /** Mã thao tác thô (`create`, `update`, `rollover_result`…). */
   action: string;
+  /** Nhãn tiếng Việt của thao tác (cột "Thao tác" hiển thị nhãn này). */
+  actionLabel: string;
   ip: string | null;
   changes: HistoryChangeRow[];
 }
 
-/** Dòng lịch sử hiển thị: ai, khi nào, thao tác, và các trường đổi trước → sau (`fields.changes`). */
-export function historyRowsOf(history: Record<string, unknown>[] | undefined | null): HistoryRow[] {
+/**
+ * Dòng lịch sử hiển thị: ai, khi nào, thao tác, và các trường đổi trước → sau (`fields.changes`).
+ * `actionLabelOf` đổi mã thao tác thành nhãn (khoản vay / công nợ dùng bảng nhãn riêng); mặc định giữ nguyên mã.
+ */
+export function historyRowsOf(history: Record<string, unknown>[] | undefined | null, actionLabelOf: (action: string) => string = (a) => a): HistoryRow[] {
   return (history ?? []).map((raw) => {
     const e = raw as {
       at?: unknown;
@@ -499,14 +507,54 @@ export function historyRowsOf(history: Record<string, unknown>[] | undefined | n
       from: v?.from === null || v?.from === undefined ? null : String(v.from),
       to: v?.to === null || v?.to === undefined ? null : String(v.to),
     }));
+    const action = String(e.action ?? '');
     return {
       at: e.at ? String(e.at) : null,
       actor: String(e.actor?.name ?? '') || 'Hệ thống',
-      action: String(e.action ?? ''),
+      action,
+      actionLabel: actionLabelOf(action) || action,
       ip: e.ip ? String(e.ip) : null,
       changes,
     };
   });
+}
+
+/** Trường lịch sử là số tiền (minor units) — hiển thị dạng tiền đầy đủ. */
+const HISTORY_MONEY_FIELDS: ReadonlySet<string> = new Set(['value_minor', 'principal_minor', 'credit_limit_minor']);
+/** Trường lịch sử là ngày nghiệp vụ (server lưu `YYYY-MM-DD`) — hiển thị `DD/MM/YYYY` (DS §4.3). */
+const HISTORY_DATE_FIELDS: ReadonlySet<string> = new Set(['due_date', 'maturity_date']);
+const BUSINESS_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Giá trị hiển thị của một trường trong lịch sử (trước → sau): số tiền → tiền đầy đủ; ngày nghiệp vụ →
+ * `DD/MM/YYYY` (không để lộ ISO `yyyy-mm-dd`); còn lại giữ nguyên chuỗi. Null / rỗng ⇒ "—".
+ * Ngày được ghép trực tiếp từ chuỗi đã lưu (`Date` chỉ dùng để kiểm tra hợp lệ), nên không lệch ngày theo múi giờ.
+ */
+export function historyValueText(field: string, v: string | null): string {
+  if (v === null || v === '') return '—';
+  if (HISTORY_MONEY_FIELDS.has(field) && /^-?\d+$/.test(v)) {
+    const money: Money = { minor: BigInt(v), currency: 'VND', decimals: 0 };
+    return formatMoney(money, { mode: 'full' });
+  }
+  const day = BUSINESS_DATE_RE.exec(v);
+  // Cùng quy tắc `businessDate` phía server: không phải ngày hợp lệ ⇒ giữ nguyên chuỗi đã lưu.
+  if (HISTORY_DATE_FIELDS.has(field) && day && !Number.isNaN(Date.parse(`${v}T00:00:00Z`))) return `${day[3]}/${day[2]}/${day[1]}`;
+  if (field === 'partner_id') return 'đổi đối tác';
+  // lãi suất theo dấu phẩy VN như màn khoản vay (dữ liệu lưu trước đây có thể là "9.5")
+  if (field === 'interest_rate') return interestRateText(v) || '—';
+  return v;
+}
+
+/**
+ * Lãi suất hiển thị theo quy ước VN (DS §4: phân cách thập phân là dấu phẩy). Dữ liệu cũ lẫn `9.5`, `9,5`, `09,5`
+ * (API chấp nhận cả hai dấu) ⇒ đưa về một dạng: `9,5`. Rỗng ⇒ "" (người gọi tự quyết hiển thị "—"); không đọc được ⇒ giữ nguyên.
+ */
+export function interestRateText(raw: string | null | undefined): string {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  const n = Number(s.replace(',', '.'));
+  if (!Number.isFinite(n)) return s;
+  return String(Number(n.toFixed(4))).replace('.', ',');
 }
 
 /** Mã yêu cầu (chống gửi lặp): dùng cùng một mã cho mọi lần gửi lại của cùng một lần lưu. */
@@ -548,9 +596,34 @@ export function bankTotalsOf(items: LoanRow[]): BankTotalRow[] {
   return [...map.values()].sort((a, b) => (a.outstanding === b.outstanding ? 0 : a.outstanding > b.outstanding ? -1 : 1));
 }
 
+/**
+ * Trạng thái phiếu đã NHẢ sức chứa cấn trừ: huỷ / từ chối / hết hạn (khớp `RELEASED_DOCUMENT_STATUSES` phía server,
+ * v2 §9.2 "huỷ phiếu → số còn lại tính lại ngay").
+ */
+export const RELEASED_DOC_STATUSES: readonly string[] = ['cancelled', 'rejected', 'expired'];
+
+/**
+ * Hiệu lực của một dòng cấn trừ trên khoản công nợ (v2 §9.2):
+ *  · `released` — phiếu đã huỷ / từ chối / hết hạn: không bao giờ trừ, không còn giữ sức chứa;
+ *  · `applied`  — phiếu đã thực thi (paid): đã trừ vào "Đã cấn trừ";
+ *  · `pending`  — còn lại (chờ duyệt / chờ thực thi): chưa trừ, sẽ tự trừ khi thực thi.
+ */
+export type OffsetEffect = 'applied' | 'pending' | 'released';
+
+export function offsetEffectOf(link: Pick<OffsetLinkRow, 'document_status' | 'executed'>): OffsetEffect {
+  if (RELEASED_DOC_STATUSES.includes(link.document_status)) return 'released';
+  return link.executed ? 'applied' : 'pending';
+}
+
+export const OFFSET_EFFECT_LABEL: Record<OffsetEffect, { label: string; tone: string }> = {
+  applied: { label: 'Đã cấn trừ', tone: 'success' },
+  pending: { label: 'Chờ thực thi — chưa trừ', tone: 'warning' },
+  released: { label: 'Không còn hiệu lực', tone: 'neutral' },
+};
+
 /** Liên kết tới phiếu đã huỷ / từ chối / hết hạn: không còn giữ sức chứa (cảnh báo trên chi tiết). */
 export function hasDeadOffsetLink(links: { document_status: string }[]): boolean {
-  return links.some((l) => ['cancelled', 'rejected', 'expired'].includes(l.document_status));
+  return links.some((l) => RELEASED_DOC_STATUSES.includes(l.document_status));
 }
 
 /** Nhãn nguồn gốc: "Tự động · R2" hoặc "Thủ công". */

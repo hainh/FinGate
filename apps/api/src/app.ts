@@ -76,7 +76,7 @@ export async function build(overrides: Record<string, string | undefined> = {}):
   await app.register(cookie, { secret: env.SESSION_SECRET });
   await app.register(helmet, { contentSecurityPolicy: csp(env), global: true });
   await app.register(rateLimit, {
-    max: 300,
+    max: env.RATE_LIMIT_MAX,
     timeWindow: '1 minute',
     // store in-memory: 1 instance (K-6)
     errorResponseBuilder: (_req, ctx) => ({

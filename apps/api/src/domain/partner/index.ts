@@ -14,8 +14,9 @@ import { mirrorAudit } from '../audit/index.ts';
 import { toBig } from '../links/index.ts';
 import { nextPartnerCode } from '../numbering/index.ts';
 import { acquireClaim, claimKeyOf, completeClaim, releaseClaim, type ClaimHandle } from './claims.ts';
-import { findDuplicatePartners, type DuplicateHit } from './duplicates.ts';
+import { findDuplicatePartners, identifierSearchPattern, type DuplicateHit } from './duplicates.ts';
 import { defaultPeriod, loadPartnerLedgers, maturityInfo, numbersOf, type LedgerPartner, type LoanView, type DebtView, type Period, type PartnerLedger, type SummaryVisibility } from './summary.ts';
+import { accountCodeOfPartnerType } from '../debt/rules.ts';
 import { assertPartnerTypeChange, loadPartnerTypeUsage } from './type-guard.ts';
 import {
   asPartnerType,
@@ -252,6 +253,14 @@ export async function updatePartner(input: {
     } as never,
   ).exec();
   if (result.matchedCount === 0) throw new ApiError({ code: 'FG-WF-011' });
+  // khoản công nợ lưu loại / TK kế toán lúc lập: đổi KH ↔ NCC thì đồng bộ lại để lọc & báo cáo đúng (v2 §5.1, §9.1)
+  const debtAccountCode = next.type ? accountCodeOfPartnerType(next.type) : null;
+  if (changes.type && next.type && debtAccountCode) {
+    await Models.DebtVoucher.updateMany(
+      { partner_id: input.id } as never,
+      { $set: { party_type: next.type, account_code: debtAccountCode } } as never,
+    ).exec();
+  }
 
   await mirrorAudit({
     at: now,
@@ -623,7 +632,11 @@ function partnerFilter(input: { companyIds: string[] | null; type?: PartnerType[
   const q = input.q?.trim();
   if (q) {
     const rx = { $regex: escapeRegex(q), $options: 'i' };
-    filter.$or = [{ name: rx }, { account_number: rx }, { tax_code: rx }];
+    // STK / MST: gõ có hoặc không có dấu cách / gạch / chấm đều tìm thấy (cùng quy tắc với cảnh báo trùng §5.1).
+    // Chữ gõ không còn ký tự nào sau chuẩn hoá (vd. chỉ dấu gạch) ⇒ giữ nguyên khớp chuỗi thường.
+    const idPattern = identifierSearchPattern(q);
+    const idRx = idPattern ? { $regex: idPattern, $options: 'i' } : rx;
+    filter.$or = [{ name: rx }, { account_number: idRx }, { tax_code: idRx }];
   }
   return filter;
 }

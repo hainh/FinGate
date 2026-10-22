@@ -22,7 +22,6 @@ import {
   resolveLoanTerms,
   submittedAmountOf,
   type LoanTermsInput,
-  type ResolvedLoanTerms,
 } from '../policy.ts';
 import { actorOfEvent, big } from '../actions/common.ts';
 import { bankPartnerOrThrow, fundOfAccount, loadVoucher, type VoucherRow } from '../actions/lookup.ts';
@@ -56,13 +55,6 @@ async function fundPaymentOf(ctx: StepContext): Promise<{ doc: VoucherRow; opt: 
 /** Ngày duyệt cuối của phiếu chi (ngày VN) — ngày giải ngân và ngày gốc hạn. */
 function finalDateOf(doc: VoucherRow): string {
   return finalApprovalDateOf(doc.history, vnDate());
-}
-
-function loanNoteOf(terms: ResolvedLoanTerms, base: string): string {
-  const parts = [base];
-  if (terms.contract_no) parts.push(`Số HĐ tín dụng: ${terms.contract_no}`);
-  if (terms.collateral) parts.push(`TSĐB: ${terms.collateral}`);
-  return parts.join(' · ');
 }
 
 async function loanIdOf(ctx: StepContext, doc: VoucherRow): Promise<string | null> {
@@ -120,7 +112,7 @@ async function createLoanStep(ctx: StepContext): Promise<StepOutput> {
     principalMinor: amount,
     currency: doc.amount.currency ?? 'VND',
     terms,
-    note: loanNoteOf(terms, `Tự động tạo cho phiếu chi ${doc.code}`),
+    note: `Tự động tạo cho phiếu chi ${doc.code}`,
     runId: ctx.runId,
     ruleCode: RULE,
     source: { id: sourceId, code: doc.code },

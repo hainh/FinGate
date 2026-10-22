@@ -4,7 +4,7 @@
 
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
-import { EVIDENCE_LABEL, daysLabel, formatMoney, maturity, maturityLabel, money, moneyFromWire, pct, type Money } from '@fingate/shared';
+import { EVIDENCE_LABEL, formatMoney, maturity, maturityChipParts, maturityLabel, money, moneyFromWire, pct, type Money } from '@fingate/shared';
 import type {
   ApprovalStep,
   DecisionPack,
@@ -118,15 +118,21 @@ export function FgExceptionList({ items, dense }: { items: ExceptionItem[]; dens
 
 /* ================= maturity ladder (DS §3.3) ================= */
 
+/**
+ * Chip đáo hạn: đúng MỘT biểu tượng + nhãn số ngày (DS §3.3, §4.1).
+ * `label` là nhãn đầy đủ đã có biểu tượng (`maturityLabel`, từ API) — chỉ dùng cho aria-label,
+ * không hiển thị lại để tránh lặp "⛔⛔ qua hạn 15 ngày".
+ */
 export function FgMaturityCell({ days, tone, label }: { days: number; tone?: string; label?: string }): ReactNode {
   const band = maturity(days);
+  const { glyph, text } = maturityChipParts(days);
   const t = toneStyle(tone ?? band.tone);
   return (
     <span className="fg-chip" style={{ ...t, background: 'transparent' }} role="status" aria-label={label ?? maturityLabel(days)}>
       <span aria-hidden style={{ color: t.color }}>
-        {band.glyph || '·'}
-      </span>
-      {label ?? daysLabel(days)}
+        {glyph}
+      </span>{' '}
+      {text}
     </span>
   );
 }

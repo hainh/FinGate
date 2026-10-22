@@ -125,7 +125,9 @@ async function rerunOne(doc: DomainDoc, input: RerunInput): Promise<RerunChange 
   // không tự chuyển "duyệt xong" (tránh hồ sơ nhảy thẳng sang đã duyệt ngoài ý muốn).
   if (!roles.length) return null;
 
-  const assigned = await assignUsers(roles.map((role, i) => newStep(i + 1, role, 'waiting')), doc);
+  const assigned = await assignUsers(roles.map((role, i) => newStep(i + 1, role, 'waiting')), doc, {
+    decidedApprover: frozen.some((s) => s.state === 'done'),
+  });
   const { steps: pending, dropped } = dropVacantSteps(assigned);
   // Không còn ai phụ trách bất kỳ cấp nào → giữ nguyên hồ sơ (không tự duyệt).
   if (!pending.length) return null;

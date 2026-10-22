@@ -52,6 +52,41 @@ export function ReportLibraryScreen(): ReactNode {
   );
 }
 
+/** Đối tác và tag đang chọn, kèm công ty mà lựa chọn đó thuộc về (`null` = toàn tập đoàn). */
+export interface CompanyPicks {
+  companyId: string | null;
+  partnerId: string | null;
+  tagIds: string[];
+}
+
+/**
+ * Lựa chọn hiệu lực cho công ty `companyId`. Đối tác và tag không dùng chung giữa các công ty (v2 §5, §6.2):
+ * lựa chọn của công ty khác coi như chưa chọn gì, nên không gửi id của công ty cũ cho công ty mới.
+ */
+export function picksForCompany(stored: CompanyPicks, companyId: string | null): CompanyPicks {
+  return stored.companyId === companyId ? stored : { companyId, partnerId: null, tagIds: [] };
+}
+
+/** Đối tác / tag của màn báo cáo, đặt lại NGAY trong lần render khi đổi công ty. */
+function useCompanyPicks(companyId: string | null): {
+  partnerId: string | null;
+  tagIds: string[];
+  setPartnerId: (id: string | null) => void;
+  setTagIds: (ids: string[]) => void;
+} {
+  const [stored, setStored] = useState<CompanyPicks>({ companyId, partnerId: null, tagIds: [] });
+  const picks = picksForCompany(stored, companyId);
+  if (picks !== stored) setStored(picks);
+  // Cập nhật từ bản mới nhất (không dùng `picks` của lần render): hai thay đổi trong cùng một lần bấm vẫn đều được giữ.
+  const patch = (next: Partial<Omit<CompanyPicks, 'companyId'>>) => setStored((s) => ({ ...picksForCompany(s, companyId), ...next }));
+  return {
+    partnerId: picks.partnerId,
+    tagIds: picks.tagIds,
+    setPartnerId: (id) => patch({ partnerId: id }),
+    setTagIds: (ids) => patch({ tagIds: ids }),
+  };
+}
+
 /**
  * runner chung cho MỌI preset. Bộ lọc: kỳ · đối tác · tag (v2 §12).
  * Lọc đối tác / tag áp dụng cho báo cáo phiếu, công nợ, vay; ô chọn theo công ty đang chọn
@@ -63,9 +98,8 @@ export function ReportRunnerScreen(): ReactNode {
   const { message } = useToast();
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
-  const [partnerId, setPartnerId] = useState<string | null>(null);
-  const [tagIds, setTagIds] = useState<string[]>([]);
   const companyId = scope === SCOPE_ALL ? null : scope;
+  const { partnerId, tagIds, setPartnerId, setTagIds } = useCompanyPicks(companyId);
   const waitingPartner = preset === PARTNER_LEDGER_PRESET && !partnerId;
   const filtered = !!partnerId || tagIds.length > 0;
   // File Excel áp dụng đúng bộ lọc (đối tác, tag, kỳ) đang chọn; sổ chi tiết đối tác cần chọn đối tác trước.

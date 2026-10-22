@@ -50,3 +50,24 @@ describe('documentPermissions — link (v2 §11.2)', () => {
     expect(perms(['link:manage'], { inCompany: false }).link).toBe(false);
   });
 });
+
+describe('documentPermissions — đưa vào hàng thanh toán (v2 §7.1: DaDuyet → DangThanhToan)', () => {
+  it('phiếu đã duyệt + payment:mark ⇒ được đưa vào hàng thanh toán', () => {
+    expect(perms(['doc:read', 'payment:mark'], { status: 'approved' }).queue_payment).toBe(true);
+  });
+
+  it('thiếu payment:mark ⇒ không (cùng quyền với thực thi)', () => {
+    expect(perms(['doc:read', 'doc:create'], { status: 'approved' }).queue_payment).toBe(false);
+  });
+
+  it('đang thanh toán (processing) ⇒ không đưa vào hàng nữa, nhưng vẫn được thực thi', () => {
+    const p = perms(['doc:read', 'payment:mark'], { status: 'processing' });
+    expect(p.queue_payment).toBe(false);
+    expect(p.pay).toBe(true);
+  });
+
+  it('phiếu chưa duyệt / đã thực thi ⇒ không', () => {
+    expect(perms(['doc:read', 'payment:mark'], { status: 'pending.ktt' }).queue_payment).toBe(false);
+    expect(perms(['doc:read', 'payment:mark'], { status: 'paid' }).queue_payment).toBe(false);
+  });
+});

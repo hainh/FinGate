@@ -14,6 +14,8 @@ import { businessDate, moneyWire, objectId, uuid } from './common.js';
 export const dashboardQuery = z.object({
   scope: z.string().max(64).optional(),
   date: businessDate.optional(),
+  /** v2 §6.2: lọc số liệu theo phiếu (thu–chi hôm nay, chờ duyệt, thiếu chứng từ) theo tag — ID ngăn cách dấu phẩy. */
+  tag_ids: z.string().max(1000).optional(),
 });
 
 export const kpiBlock = z.object({

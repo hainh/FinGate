@@ -33,9 +33,13 @@ import { waitingDays } from '../calendar/index.ts';
 import { parseRate, simpleInterest } from '../loan-schedule/index.ts';
 import type { ScopeLike } from '../types.ts';
 import { bookedBalance } from '../ledger/index.ts';
+import { findRuleByCode, isRuleEnabledFor } from '../automation/engine.ts';
+import { resolveLoanAmount, submittedAmountOf, type HistoryLike } from '../automation/policy.ts';
 import { PLANNED_FLOW_STATUSES } from '../ledger/planned.ts';
 import { executedSum } from '../reports/aggregate.ts';
 import { groupSettlements, loadDebtSettlements, loadLoanSettlements } from '../reports/refs.ts';
+import { tagFilterSuffix } from './dashboard-tags.ts';
+import { badgeCacheKey } from './badge-cache.ts';
 
 /** Tiền trên wire: minor là STRING (arch §6). */
 export interface WireAmount {
@@ -86,6 +90,16 @@ export function scopeOf(scope: ScopeLike): Scope {
 /** Không còn che số tài khoản — trả về nguyên số đầy đủ. */
 export function maskAccount(number: string): string {
   return String(number ?? '');
+}
+
+/**
+ * Nhãn tài khoản ngân hàng hiển thị trên phiếu / màn duyệt: `BIDV · 105461439723 · TK giải ngân A`.
+ * CÓ TÊN TK để phân biệt các TK cùng ngân hàng (cùng quy ước với `bankAccountOptionLabel` phía web).
+ */
+export function bankAccountLabelOf(a: { bank_name?: unknown; account_number?: unknown; account_name?: unknown }): string {
+  const head = [String(a.bank_name ?? '').trim(), maskAccount(String(a.account_number ?? '')).trim()].filter(Boolean).join(' · ');
+  const name = String(a.account_name ?? '').trim();
+  return [head, name].filter(Boolean).join(' · ');
 }
 
 /* ================================================================== *
@@ -454,11 +468,16 @@ export async function awaitingBadge(
   userId: string,
   role?: Role,
   canPay = false,
+  /** [v2 §6.2] chỉ đếm phiếu có ÍT NHẤT MỘT trong các tag (rỗng = không lọc). */
+  tagIds: string[] = [],
 ): Promise<{ count: number; total_minor: bigint }> {
-  return cacheThrough(`badge:${userId}:${role ?? ''}:${canPay ? 'pay' : ''}`, async () => {
+  // Khoá gồm PHẠM VI công ty: số đếm phụ thuộc công ty đang chọn (withScope), không được dùng chung giữa các công ty.
+  const key = badgeCacheKey({ userId, companyIds: scope.companyIds, role, canPay, tagIds });
+  return cacheThrough(key, async () => {
     const f = withScope(scopeOf(scope), {
       ...toApproveFilter({ userId, role, canPay }),
       status: { $in: [...DECISION_STATUSES, ...(canPay ? EXECUTION_STATUSES : [])] },
+      ...(tagIds.length ? { tag_ids: { $in: tagIds } } : {}),
     });
     const [count, rows] = await Promise.all([
       Models.Document.countDocuments(f as never),
@@ -562,7 +581,7 @@ export async function accountSnapshots(
       company_id: companyId,
       company_name: cname.get(companyId) ?? (a.is_group ? 'Tập đoàn' : '—'),
       company_code: a.is_group ? groupCode : (ccode.get(companyId) ?? ''),
-      label: `${a.bank_name} ${maskAccount(String(a.account_number ?? ''))}`,
+      label: bankAccountLabelOf(a),
       account_number_masked: maskAccount(String(a.account_number ?? '')),
       kind: String(a.kind ?? 'bank'),
       currency: String(a.currency ?? 'VND'),
@@ -719,6 +738,67 @@ async function balanceAroundExecution(accountId: string, docId: string): Promise
   return { before: after - signed, after };
 }
 
+/** Trạng thái CHƯA duyệt cuối: R3 (vay để chi) chưa chạy ⇒ khoản giải ngân chưa vào sổ cái. */
+const BEFORE_FINAL_APPROVAL_STATUSES: readonly string[] = [...DECISION_STATUSES, 'draft', 'changes_requested'];
+
+/** Tuỳ chọn vay trên phiếu (`options.loan`) — các trường R3 cần. */
+interface FundLoanOptionsLike {
+  kind?: unknown;
+  receive_account_id?: unknown;
+  amount_minor?: unknown;
+}
+
+/**
+ * Tiền giải ngân của khoản vay ĐỂ CHI (R3) sẽ về TK nhận giải ngân TRƯỚC khi phiếu chi được thực thi
+ * (v2 §11.5). R3 chạy khi duyệt cuối, nên khi phiếu còn trước duyệt cuối khoản này CHƯA có trong sổ cái
+ * ⇒ số dư sau giao dịch của TK nguồn phải cộng thêm khoản này, khi TK nhận giải ngân chính là TK nguồn.
+ * Trả 0 khi không áp dụng: không phải phiếu chi vay để chi, TK nhận khác TK nguồn, hoặc đã duyệt cuối
+ * (R3 đã ghi sổ — tránh đếm trùng). Số tiền vay theo đúng quy tắc R3; số tiền sai ⇒ R3 lỗi ⇒ 0.
+ */
+export function pendingFundingInflowOf(doc: Record<string, unknown>, sourceAccountId: string | null): bigint {
+  if (doc.kind !== 'spend' || !sourceAccountId) return 0n;
+  if (!BEFORE_FINAL_APPROVAL_STATUSES.includes(String(doc.status))) return 0n;
+  const loan = (doc.options as { loan?: FundLoanOptionsLike | null } | null | undefined)?.loan;
+  if (!loan || loan.kind !== 'fund' || !loan.receive_account_id) return 0n;
+  if (String(loan.receive_account_id) !== sourceAccountId) return 0n;
+  const finalMinor = asBigInt(wireOf(doc.amount)?.minor);
+  try {
+    return resolveLoanAmount({
+      requested: loan.amount_minor === null || loan.amount_minor === undefined ? null : asBigInt(loan.amount_minor),
+      originalMinor: submittedAmountOf((doc.history as HistoryLike[] | null | undefined) ?? null) ?? finalMinor,
+      finalMinor,
+    }).amount;
+  } catch {
+    return 0n;
+  }
+}
+
+/** Phiếu thu giải ngân do R3 sinh cho phiếu chi này — có ⇒ R3 đã tới bước tạo phiếu thu (tiền đã / đang ghi sổ). */
+async function fundingReceiptExists(sourceDocId: string): Promise<boolean> {
+  const row = await Models.Document.findOne({
+    kind: 'income',
+    'origin.kind': 'automation',
+    'origin.rule_code': 'R3',
+    'origin.source_document_id': oid(sourceDocId),
+  } as never)
+    .select({ _id: 1 })
+    .lean<{ _id: unknown } | null>();
+  return row !== null;
+}
+
+/**
+ * Như `pendingFundingInflowOf`, nhưng chỉ khi khoản giải ngân còn CHƯA vào sổ: quy tắc R3 đang bật cho công ty
+ * của phiếu (tắt ⇒ không có giải ngân tự động) và R3 chưa sinh phiếu thu cho phiếu này. Đã có phiếu thu ⇒ tiền đã
+ * ghi sổ (hoặc đã bị đảo), không cộng thêm — phòng khi phiếu đã duyệt cuối quay lại trạng thái trước duyệt cuối.
+ */
+export async function pendingFundingInflowFor(doc: Record<string, unknown>, sourceAccountId: string | null): Promise<bigint> {
+  const amount = pendingFundingInflowOf(doc, sourceAccountId);
+  if (amount <= 0n) return 0n;
+  const rule = await findRuleByCode('R3');
+  if (rule?.enabled !== true || !isRuleEnabledFor(rule, String(doc.company_id))) return 0n;
+  return (await fundingReceiptExists(String(doc._id))) ? 0n : amount;
+}
+
 export async function decisionPack(doc: Record<string, unknown>, canReadTax: boolean): Promise<Record<string, unknown>> {
   const amount = wireOf(doc.amount) ?? wire(0n);
   const minor = asBigInt(amount.minor);
@@ -727,7 +807,7 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
 
   const [account, balanceNow, category, department, budget, partner] = await Promise.all([
     source.account_id
-      ? Models.BankAccount.findById(String(source.account_id)).select({ bank_name: 1, account_number: 1, min_balance_minor: 1 }).lean()
+      ? Models.BankAccount.findById(String(source.account_id)).select({ bank_name: 1, account_number: 1, account_name: 1, min_balance_minor: 1 }).lean()
       : Promise.resolve(null),
     source.account_id
       ? bookedBalance(String(source.account_id), today())
@@ -750,9 +830,11 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
   const isInflow = doc.kind === 'income';
   const delta = isInflow ? minor : -minor;
   // Số dư tại thời điểm TRƯỚC và SAU thực thi: phiếu đã ghi sổ (`paid`) → lấy đúng
-  // bút toán trong sổ cái; còn lại → số dư khả dụng hiện tại + dự kiến sau thực thi.
+  // bút toán trong sổ cái; còn lại → số dư sổ hiện tại + giải ngân vay để chi sắp về TK nguồn
+  // (chưa vào sổ tới duyệt cuối — §11.5) + dự kiến sau thực thi.
+  const pendingIn = await pendingFundingInflowFor(doc, source.account_id ? String(source.account_id) : null);
   let balanceBefore = balanceNow;
-  let after = balanceNow + delta;
+  let after = balanceNow + pendingIn + delta;
   if (doc.status === 'paid' && source.account_id) {
     const around = await balanceAroundExecution(String(source.account_id), String(doc._id));
     if (around) {
@@ -797,7 +879,7 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
     },
     q5_source: {
       fund: (source.fund as 'bank' | 'cash') ?? 'bank',
-      account_label: account ? `${account.bank_name} ${maskAccount(String(account.account_number ?? ''))}` : 'Tiền mặt',
+      account_label: account ? bankAccountLabelOf(account) : 'Tiền mặt',
       group_account_label: source.group_account_id ? 'Tài khoản Tập đoàn' : null,
       group_managed: Boolean(source.group_managed),
     },
@@ -1144,28 +1226,34 @@ export async function cashflowHistory(
  * 6. DASH-01 — overview: MỘT endpoint gộp, Promise.all, ETag ở route (§8.3)
  * ================================================================== */
 
-export async function dashboardOverview(scope: ScopeLike, userId: string, role?: Role, canPay = false): Promise<Record<string, unknown>> {
+/**
+ * [v2 §6.2] `tagIds` lọc các số liệu THEO PHIẾU: dự kiến thu/chi hôm nay, chờ tôi duyệt (KPI, hàng chờ,
+ * cảnh báo) và thiếu chứng từ. Tiền hiện có, dự báo, công nợ, vay NH và đáo hạn không gắn tag nên luôn
+ * tính theo toàn phạm vi (màn hình ghi chú điều này cho người dùng).
+ */
+export async function dashboardOverview(scope: ScopeLike, userId: string, role?: Role, canPay = false, tagIds: string[] = []): Promise<Record<string, unknown>> {
   const scopeKey = scope.companyIds === null ? 'all' : scope.companyIds.join(',');
   return cacheThrough(
-    `overview:${userId}:${role ?? ''}:${scopeKey}:${today()}:${canPay ? 'pay' : ''}`,
-    () => buildOverview(scope, userId, role, canPay),
+    `overview:${userId}:${role ?? ''}:${scopeKey}:${today()}:${canPay ? 'pay' : ''}${tagFilterSuffix(tagIds)}`,
+    () => buildOverview(scope, userId, role, canPay, tagIds),
     20_000,
   );
 }
 
-async function buildOverview(scope: ScopeLike, userId: string, role?: Role, canPay = false): Promise<Record<string, unknown>> {
+async function buildOverview(scope: ScopeLike, userId: string, role?: Role, canPay = false, tagIds: string[] = []): Promise<Record<string, unknown>> {
   const day = today();
   const [accounts, awaiting, queue, income, spend, overdue, maturities, missing, unread] = await Promise.all([
     accountSnapshots(scope),
-    awaitingBadge(scope, userId, role, canPay),
-    queryQueue({ scope, userId, role, canPay, mine: 'to_approve', limit: 8, sort: '-waiting' }),
-    sumByDateAndKind(scope, 'income', day),
-    sumByDateAndKind(scope, 'spend', day),
+    awaitingBadge(scope, userId, role, canPay, tagIds),
+    queryQueue({ scope, userId, role, canPay, mine: 'to_approve', limit: 8, sort: '-waiting', tagIds }),
+    sumByDateAndKind(scope, 'income', day, tagIds),
+    sumByDateAndKind(scope, 'spend', day, tagIds),
     overdueReceivable(scope),
     maturityLadder(scope, { horizonDays: 30 }),
     scopedCount(Models.Document, scopeOf(scope), {
       'evidence.missing.0': { $exists: true },
       status: { $in: [...OPEN_STATUSES] },
+      ...(tagIds.length ? { tag_ids: { $in: tagIds } } : {}),
     }),
     Models.Notification.countDocuments({ user_id: userId, read_at: null }).exec(),
   ]);
@@ -1350,9 +1438,17 @@ function buildExceptions(input: {
   return items.sort((a, b) => Number(b.severity) - Number(a.severity));
 }
 
-async function sumByDateAndKind(scope: ScopeLike, kind: DocKind, date: string): Promise<bigint> {
+async function sumByDateAndKind(scope: ScopeLike, kind: DocKind, date: string, tagIds: string[] = []): Promise<bigint> {
   const rows = await scopedAggregate<{ total: unknown }>(Models.Document, scopeOf(scope), [
-    { $match: { kind, planned_date: { $gte: dayStartOf(date), $lte: dayEndOf(date) }, status: { $in: [...PLANNED_FLOW_STATUSES] } } },
+    {
+      $match: {
+        kind,
+        planned_date: { $gte: dayStartOf(date), $lte: dayEndOf(date) },
+        status: { $in: [...PLANNED_FLOW_STATUSES] },
+        // aggregate không tự ép chuỗi → ObjectId (xem scopeFilter trong lib/mongo.ts)
+        ...(tagIds.length ? { tag_ids: { $in: tagIds.map((t) => oid(t)) } } : {}),
+      },
+    },
     { $group: { _id: null, total: { $sum: '$amount.minor' } } },
   ]);
   return asBigInt(rows[0]?.total ?? 0n);

@@ -219,14 +219,23 @@ export function dropVacantSteps<T extends VacantFilterableStep>(
 }
 
 /**
- * Bước CAO NHẤT của matrix khuyết chức danh → không được bỏ hẳn (nếu bỏ hết thì hồ sơ
- * "duyệt xong ngay khi gửi"). Thay vào đó đẩy yêu cầu duyệt lên chức danh cao hơn kế tiếp
- * CÓ người phụ trách (theo `APPROVAL_ORDER`). Trả `null` khi không còn cấp nào cao hơn.
+ * Khi cả chuỗi KHÔNG còn ai có người phụ trách, bước CAO NHẤT khuyết không được bỏ hẳn (nếu bỏ hết
+ * thì hồ sơ "duyệt xong ngay khi gửi"): đẩy yêu cầu duyệt lên chức danh cao hơn kế tiếp CÓ người
+ * phụ trách (theo `APPROVAL_ORDER`). Trả `null` khi không còn cấp nào cao hơn.
+ *
+ * Khi chuỗi còn cấp có người (vd KTT), người gọi KHÔNG dùng hàm này: cấp khuyết chỉ bị bỏ, không thêm
+ * cấp ngoài ma trận (v2 §7.2). Chủ tịch chỉ vào chuỗi khi hồ sơ VƯỢT NGƯỠNG (`withChairman`, matrix.ts),
+ * nên chỉ đẩy lên Chủ tịch khi `allowChairman` (cả chuỗi trống người).
  */
-export function escalatedTopRole(topRole: Role, availableRoles: Iterable<Role>): Role | null {
+export function escalatedTopRole(
+  topRole: Role,
+  availableRoles: Iterable<Role>,
+  opts: { allowChairman?: boolean } = {},
+): Role | null {
   const available = availableRoles instanceof Set ? availableRoles : new Set(availableRoles);
   for (let i = APPROVAL_ORDER.indexOf(topRole) + 1; i < APPROVAL_ORDER.length; i++) {
     const role = APPROVAL_ORDER[i]!;
+    if (role === 'chairman' && !opts.allowChairman) continue;
     if (available.has(role)) return role;
   }
   return null;

@@ -6,7 +6,8 @@
  *   · đầu kỳ = sổ cái thực tế đến hết ngày bắt đầu (đã gồm phiếu đã thực thi trong ngày);
  *   · dòng dự kiến = phiếu đang chờ thực thi (`pending.*`, `approved`, `processing`) — KHÔNG gồm `paid`;
  *   · phiếu thu giải ngân vay (borrow) tách bucket `disbursement_in`; khoản vay chờ giải ngân
- *     CHƯA có phiếu thu trong pipeline thì nằm ở danh sách "chưa có ngày" (không cộng vào dòng);
+ *     CHƯA có phiếu thu giải ngân CÓ HIỆU LỰC (phiếu trong pipeline hoặc đã thực thi; phiếu nháp chưa tính)
+ *     thì nằm ở danh sách "chưa có ngày" (không cộng vào dòng);
  *   · lịch trả nợ = kỳ CHƯA đến hạn của khoản vay đang vay, trừ phần đã có phiếu trả nợ trong pipeline.
  *     Kỳ đã qua KHÔNG được dự báo (không biết kỳ nào đã trả qua phiếu không gắn kỳ).
  *
@@ -16,7 +17,7 @@
 import { addDays, today } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
 import { oid } from '../../lib/mongo.ts';
-import { loadPipelineDocs, plannedFlowsOf, type PlannedFlow, type PipelineDoc } from '../ledger/planned.ts';
+import { loadPipelineDocs, PLANNED_FLOW_STATUSES, plannedFlowsOf, type PlannedFlow, type PipelineDoc } from '../ledger/planned.ts';
 import { buildRemainingSchedule } from '../loan-schedule/index.ts';
 import { docHref, wire, type WireAmount } from '../queries/index.ts';
 import { toBig } from '../links/index.ts';
@@ -492,13 +493,35 @@ async function plannedRepaymentsByLoan(loanIds: string[], pipelineById: Map<stri
   return out;
 }
 
-/** Khoản vay đã có phiếu thu giải ngân (liên kết `disbursement`) — không đưa vào "chưa có ngày". */
+/**
+ * Hàm thuần: khoản vay đã có phiếu thu giải ngân CÓ HIỆU LỰC trong dự báo (v2 §11.2, §12).
+ * Liên kết `disbursement` tới phiếu đang trong pipeline (đã có ngày dự kiến) hoặc đã thực thi
+ * (`PLANNED_FLOW_STATUSES`). Phiếu nháp / trả về / từ chối… CHƯA có hiệu lực ⇒ khoản vay vẫn "chưa có ngày".
+ */
+export function loansCoveredByReceipts(links: { loanId: string; receiptId: string }[], statusByReceiptId: ReadonlyMap<string, string>): Set<string> {
+  const out = new Set<string>();
+  for (const l of links) {
+    if (PLANNED_FLOW_STATUSES.includes(statusByReceiptId.get(l.receiptId) ?? '')) out.add(l.loanId);
+  }
+  return out;
+}
+
+/** Khoản vay chờ giải ngân đã có phiếu thu giải ngân có hiệu lực — không đưa vào "chưa có ngày". */
 async function loansWithReceipt(loanIds: string[]): Promise<Set<string>> {
   if (!loanIds.length) return new Set();
   const links = await Models.BusinessLink.find({ to_type: 'bank_debt', to_id: { $in: loanIds }, relation: 'disbursement', status: 'active' } as never)
-    .select({ to_id: 1 })
-    .lean<{ to_id: unknown }[]>();
-  return new Set(links.map((l) => String(l.to_id)));
+    .select({ to_id: 1, from_id: 1 })
+    .lean<{ to_id: unknown; from_id: unknown }[]>();
+  if (!links.length) return new Set();
+  const receiptIds = [...new Set(links.map((l) => String(l.from_id)))];
+  const receipts = await Models.Document.find({ _id: { $in: receiptIds.map((id) => oid(id)) } } as never)
+    .select({ status: 1 })
+    .lean<{ _id: unknown; status?: unknown }[]>();
+  const statusByReceiptId = new Map(receipts.map((r) => [String(r._id), String(r.status ?? '')]));
+  return loansCoveredByReceipts(
+    links.map((l) => ({ loanId: String(l.to_id), receiptId: String(l.from_id) })),
+    statusByReceiptId,
+  );
 }
 
 /** Dòng dự kiến của một công ty, gồm cả trả nợ vay đã trừ kỳ (theo công ty của khoản vay). */

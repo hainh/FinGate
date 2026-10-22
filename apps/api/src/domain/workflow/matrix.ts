@@ -50,47 +50,68 @@ function big(v: unknown): bigint {
   return /^-?\d+$/.test(s) ? BigInt(s) : 0n;
 }
 
-/** Quy trình mặc định khi chưa cấu hình gì (blueprint §XX) — vẫn là dữ liệu, không hard-code nghiệp vụ ở route. */
-export const DEFAULT_STEPS: Record<DocKind, { amount: string; steps: MatrixStep[]; label: string }> = {
-  spend: {
-    amount: '0',
-    label: 'Mặc định: KTT → PGĐ → GĐ → P.TGĐ',
+/** Bước mặc định: SLA KTT/PGĐ 24h, GĐ/P.TGĐ 48h (blueprint §XX). */
+const defaultStep = (order: number, role: Role, sla_hours: number): MatrixStep => ({ order, role, sla_hours, mandatory: true });
+
+/** Mốc khoảng tiền của chuỗi mặc định phiếu chi (v2 §7.2; đơn vị minor = VND): 50 triệu và 5 tỷ. */
+const SPEND_MEDIUM_FROM_MINOR = 50_000_000n;
+const SPEND_LARGE_ABOVE_MINOR = 5_000_000_000n;
+
+/**
+ * Chuỗi mặc định của PHIẾU CHI theo khoảng tiền (v2 §7.2, bảng "Ví dụ mặc định"):
+ * < 50 triệu → KTT → PGĐ · 50 triệu – 5 tỷ → KTT → PGĐ → GĐ · > 5 tỷ → KTT → PGĐ → GĐ → P.TGĐ.
+ * Chủ tịch KHÔNG nằm trong chuỗi mặc định: `withChairman` thêm khi vượt ngưỡng Chủ tịch.
+ * Cấp khuyết chức danh do `assignUsers` + `dropVacantSteps` xử lý (bỏ cấp đó khỏi chuỗi).
+ */
+export function defaultSpendSteps(amountMinor: bigint): { label: string; steps: MatrixStep[] } {
+  if (amountMinor < SPEND_MEDIUM_FROM_MINOR) {
+    return {
+      label: 'Mặc định: dưới 50 triệu — KTT → PGĐ',
+      steps: [defaultStep(1, 'chief_accountant', 24), defaultStep(2, 'deputy_director', 24)],
+    };
+  }
+  if (amountMinor <= SPEND_LARGE_ABOVE_MINOR) {
+    return {
+      label: 'Mặc định: 50 triệu – 5 tỷ — KTT → PGĐ → GĐ',
+      steps: [defaultStep(1, 'chief_accountant', 24), defaultStep(2, 'deputy_director', 24), defaultStep(3, 'director', 48)],
+    };
+  }
+  return {
+    label: 'Mặc định: trên 5 tỷ — KTT → PGĐ → GĐ → P.TGĐ',
     steps: [
-      { order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true },
-      { order: 2, role: 'deputy_director', sla_hours: 24, mandatory: true },
-      { order: 3, role: 'director', sla_hours: 48, mandatory: true },
-      { order: 4, role: 'deputy_chairman', sla_hours: 48, mandatory: true },
+      defaultStep(1, 'chief_accountant', 24),
+      defaultStep(2, 'deputy_director', 24),
+      defaultStep(3, 'director', 48),
+      defaultStep(4, 'deputy_chairman', 48),
     ],
-  },
+  };
+}
+
+/** Quy trình mặc định cố định của các loại còn lại (blueprint §XX). Phiếu chi xem `defaultSpendSteps`. */
+const DEFAULT_STEPS: Record<Exclude<DocKind, 'spend'>, { label: string; steps: MatrixStep[] }> = {
   income: {
-    amount: '0',
     label: 'Mặc định: KTT → GĐ → P.TGĐ',
-    steps: [
-      { order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true },
-      { order: 2, role: 'director', sla_hours: 48, mandatory: true },
-      { order: 3, role: 'deputy_chairman', sla_hours: 48, mandatory: true },
-    ],
+    steps: [defaultStep(1, 'chief_accountant', 24), defaultStep(2, 'director', 48), defaultStep(3, 'deputy_chairman', 48)],
   },
   rollover: {
-    amount: '0',
     label: 'Đảo hạn: KTT → PGĐ → GĐ → P.TGĐ',
     steps: [
-      { order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true },
-      { order: 2, role: 'deputy_director', sla_hours: 24, mandatory: true },
-      { order: 3, role: 'director', sla_hours: 48, mandatory: true },
-      { order: 4, role: 'deputy_chairman', sla_hours: 48, mandatory: true },
+      defaultStep(1, 'chief_accountant', 24),
+      defaultStep(2, 'deputy_director', 24),
+      defaultStep(3, 'director', 48),
+      defaultStep(4, 'deputy_chairman', 48),
     ],
   },
   internal: {
-    amount: '0',
     label: 'Chuyển nội bộ: KTT → GĐ → P.TGĐ (2 công ty)',
-    steps: [
-      { order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true },
-      { order: 2, role: 'director', sla_hours: 48, mandatory: true },
-      { order: 3, role: 'deputy_chairman', sla_hours: 48, mandatory: true },
-    ],
+    steps: [defaultStep(1, 'chief_accountant', 24), defaultStep(2, 'director', 48), defaultStep(3, 'deputy_chairman', 48)],
   },
 };
+
+/** Chuỗi mặc định khi chưa có dòng ma trận khớp: phiếu chi theo khoảng tiền (§7.2), các loại khác cố định. */
+export function defaultStepsFor(kind: DocKind, amountMinor: bigint): { label: string; steps: MatrixStep[] } {
+  return kind === 'spend' ? defaultSpendSteps(amountMinor) : DEFAULT_STEPS[kind];
+}
 
 /** Ngưỡng Chairman mặc định > 5 tỷ — thêm bước cuối nếu vượt (blueprint §XX, cấu hình được qua matrix). */
 function withChairman(steps: MatrixStep[], amountMinor: bigint, thresholdMinor: bigint): MatrixStep[] {
@@ -143,7 +164,6 @@ export async function resolveMatrix(input: {
   });
 
   const chairmanThreshold = await chairmanThresholdFor(input.company_id, input.kind);
-  const baseSteps = DEFAULT_STEPS[input.kind].steps;
 
   if (inRange.length) {
     const best = inRange.sort((a, b) => matchSpecificity(b) - matchSpecificity(a))[0]!;
@@ -159,12 +179,13 @@ export async function resolveMatrix(input: {
     };
   }
 
-  // chưa có matrix nào khớp → mặc định + ngưỡng chairman (vẫn báo được label để UI giải thích)
+  // chưa có matrix nào khớp → mặc định theo khoảng tiền (§7.2) + ngưỡng chairman (vẫn báo được label để UI giải thích)
+  const fallback = defaultStepsFor(input.kind, input.amount_minor);
   return {
     matrix_id: null,
     matrix_version: 0,
-    label: DEFAULT_STEPS[input.kind].label,
-    steps: withChairman(baseSteps, input.amount_minor, chairmanThreshold),
+    label: fallback.label,
+    steps: withChairman(fallback.steps, input.amount_minor, chairmanThreshold),
   };
 }
 

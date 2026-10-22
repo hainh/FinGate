@@ -5,7 +5,7 @@
  * Rail là vùng điều khiển chính; nội dung cuộn độc lập.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { startTransition, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router';
 import { useIsFetching } from '@tanstack/react-query';
 import { LoadingOutlined } from '@ant-design/icons';
@@ -59,6 +59,23 @@ const NAV: NavItem[] = [
   // v2 §13 — quản lý tag theo công ty (KTT): nằm ngay dưới khu Quản trị, chỉ hiện với tag:manage.
   { to: '/quantri/tags', label: 'Quản lý tag', glyph: '#', perm: 'tag:manage', match: ['/quantri/tags'] },
 ];
+
+/**
+ * Bộ lọc trên URL gắn với công ty: tag và đối tác thuộc danh bạ riêng của từng công ty (v2 §5, §6.2),
+ * nên đổi phạm vi thì phải bỏ đi, không áp dụng cho công ty mới.
+ */
+export const COMPANY_FILTER_PARAMS = ['tag_ids', 'partner_id'] as const;
+
+/**
+ * Chuỗi query (có `?`) sau khi bỏ bộ lọc theo công ty. Trả về `null` khi URL không có bộ lọc nào cần bỏ.
+ */
+export function dropCompanyFilterParams(search: string): string | null {
+  const params = new URLSearchParams(search);
+  if (!COMPANY_FILTER_PARAMS.some((k) => params.has(k))) return null;
+  for (const k of COMPANY_FILTER_PARAMS) params.delete(k);
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
 
 /**
  * true sau khi `active` giữ nguyên liên tục `delay` ms — dùng để tránh nhấp nháy
@@ -172,6 +189,18 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
   const companies = me?.companies ?? [];
   const assignments = me?.assignments ?? [];
 
+  /**
+   * Đổi phạm vi dữ liệu. Bộ lọc tag/đối tác trên URL được bỏ CÙNG LÚC với phạm vi (một lần render nhờ
+   * transition), để danh sách và dashboard không gửi tag/đối tác của công ty cũ cho công ty mới.
+   */
+  const changeScope = (next: string): void => {
+    const search = next === scope ? null : dropCompanyFilterParams(location.search);
+    startTransition(() => {
+      setScope(next);
+      if (search !== null) navigate({ pathname: location.pathname, search }, { replace: true });
+    });
+  };
+
   return (
     <div className="fg-shell">
       <div
@@ -258,7 +287,7 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
               selectable: true,
               selectedKeys: [scope],
               onSelect: ({ key }) => {
-                setScope(key);
+                changeScope(key);
                 message.info('Đã đổi phạm vi dữ liệu — mọi số liệu vừa tải lại');
               },
             }}

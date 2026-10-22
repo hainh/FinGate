@@ -255,7 +255,8 @@ export const rolloverResultBody = z.object({
   /** v2 §10.3: ngày đáo hạn mới sau khi ngân hàng ký HĐ — cập nhật hạn thanh toán của khoản vay. */
   new_maturity_date: businessDate,
   new_limit: moneyField,
-  new_rate: z.string().regex(/^\d+(\.\d{1,2})?$/),
+  /** Lãi suất theo quy ước VN (dấu phẩy, DS §4) — vẫn nhận dấu chấm (dữ liệu / client cũ). */
+  new_rate: z.string().regex(/^\d+([.,]\d{1,2})?$/, 'Lãi suất tối đa 2 chữ số thập phân'),
   actual_fee: moneyField,
   note: z.string().max(1000).optional(),
   if_match: z.coerce.number().int().min(0),

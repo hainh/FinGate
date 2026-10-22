@@ -600,6 +600,8 @@ const stepTone = (s: string): string => (s === 'done' ? 'success' : s === 'faile
 /** Chi tiết một lượt: trạng thái, lỗi, từng bước và đối tượng đã sinh (có liên kết tới hồ sơ). */
 function RunDrawer({ run, canRerun, onClose, onRerun }: { run: AutomationRun | null; canRerun: boolean; onClose: () => void; onRerun: (r: AutomationRun) => void }): ReactNode {
   const def = run ? AUTOMATION_RUN_STATUS_REGISTRY[run.status] : null;
+  // mục null (phản hồi cũ / trùng tham chiếu trước đây) không được làm sập ngăn chi tiết
+  const generated = (run?.generated ?? []).filter((g): g is NonNullable<typeof g> => !!g);
   return (
     <FgDrawer
       open={!!run}
@@ -620,10 +622,10 @@ function RunDrawer({ run, canRerun, onClose, onRerun }: { run: AutomationRun | n
             </FgText>
           </div>
           {run.error ? <FgAlert tone="danger" title="Lượt chạy lỗi" description={run.error} /> : null}
-          {run.generated.length ? (
+          {generated.length ? (
             <FgCard title="Đối tượng đã sinh">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {run.generated.map((g) => (
+                {generated.map((g) => (
                   <div key={`${g.type}-${g.id}`} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                     <FgText style="bodyS" strong>
                       {g.code ?? g.id}

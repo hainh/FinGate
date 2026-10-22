@@ -2120,13 +2120,22 @@ async function assertGroupOnlyRoleCompany(role: string, companyIds: string[]): P
   }
 }
 
+/**
+ * Chuẩn hoá `diff_fields` cho màn ADM-12 (trước → sau). Hai quy ước đang có trong audit_log:
+ *  · `{ before, after }` (domain/audit diffFields, quy tắc chung);
+ *  · `{ from, to }` (domain/tags changedFields: đổi tên / màu / ẩn tag).
+ * Giá trị khác (mảng tên tag, danh sách trường đổi…) giữ nguyên, hiện ở cột "sau".
+ */
 function normaliseDiff(v: unknown): { field: string; before: unknown; after: unknown }[] {
   if (!v || typeof v !== 'object') return [];
   const out: { field: string; before: unknown; after: unknown }[] = [];
   for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-    if (val && typeof val === 'object' && ('before' in (val as object) || 'after' in (val as object))) {
+    if (val && typeof val === 'object' && !Array.isArray(val) && ('before' in (val as object) || 'after' in (val as object))) {
       const o = val as { before?: unknown; after?: unknown };
       out.push({ field: k, before: o.before ?? null, after: o.after ?? null });
+    } else if (val && typeof val === 'object' && !Array.isArray(val) && ('from' in (val as object) || 'to' in (val as object))) {
+      const o = val as { from?: unknown; to?: unknown };
+      out.push({ field: k, before: o.from ?? null, after: o.to ?? null });
     } else {
       out.push({ field: k, before: null, after: val });
     }
@@ -2188,16 +2197,21 @@ interface RecurringShape {
 
 /** Kỳ kế tiếp theo chu kỳ — task `recurring` dùng cùng hàm này để vật phiếu nháp. */
 export function nextOccurrence(rule: RecurringShape, from = today()): string | null {
-  for (const d of previewOccurrences({ ...rule, effective_from: from } as never, 3)) return d;
+  for (const d of previewOccurrences({ ...rule, effective_from: from } as never, 1)) return d;
   return null;
 }
+
+/** Độ dài (ngày) của MỘT chu kỳ — để quét đủ xa: kỳ kế tiếp có thể cách hàng tháng/quý/năm. */
+const CADENCE_SPAN_DAYS: Record<string, number> = { weekly: 7, monthly: 31, quarterly: 92, semi_annual: 183, annual: 366 };
 
 export function previewOccurrences(rule: RecurringShape & { effective_from: string }, n = 12): string[] {
   const out: string[] = [];
   let cursor = new Date(`${rule.effective_from}T00:00:00Z`);
   const day = rule.day_of_period ?? 1;
   const cadence = rule.cadence ?? 'monthly';
-  for (let i = 0; i < n * 3 && out.length < n; i++) {
+  // quét theo NGÀY đủ n chu kỳ + một chu kỳ dư (trước đây cận n*3 ngày ⇒ kỳ hàng tháng cách > 9 ngày bị bỏ sót)
+  const maxDays = Math.max(1, n) * (CADENCE_SPAN_DAYS[cadence] ?? 31) + 62;
+  for (let i = 0; i < maxDays && out.length < n; i++) {
     const iso = cursor.toISOString().slice(0, 10);
     const [, month, dom] = iso.split('-');
     const hit =

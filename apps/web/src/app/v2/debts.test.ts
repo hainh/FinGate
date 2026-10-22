@@ -12,8 +12,12 @@ import {
   directionFromSide,
   hasDeadOffsetLink,
   historyRowsOf,
+  historyValueText,
+  interestRateText,
+  OFFSET_EFFECT_LABEL,
   minorOf,
   newRequestId,
+  offsetEffectOf,
   originLabel,
   parseDirection,
   principalOfSplit,
@@ -167,9 +171,73 @@ describe('công nợ — tổng theo ngân hàng, lịch sử, chống gửi l�
     expect(rows[1]).toMatchObject({ actor: 'Hệ thống', changes: [] });
   });
 
+  it('historyRowsOf: cột "Thao tác" dùng nhãn từ bảng truyền vào; mã thô vẫn giữ ở `action`', () => {
+    const labels: Record<string, string> = { create: 'Tạo khoản vay', rollover_result: 'Kết quả đảo hạn' };
+    const rows = historyRowsOf(
+      [
+        { at: '2026-10-01T03:00:00.000Z', action: 'rollover_result', actor: { name: 'Giám đốc' }, fields: null },
+        { at: '2026-09-01T03:00:00.000Z', action: 'create', actor: null, fields: null },
+        { at: '2026-08-01T03:00:00.000Z', action: 'unknown_code', actor: null, fields: null },
+      ],
+      (a) => labels[a] ?? a,
+    );
+    expect(rows.map((r) => r.actionLabel)).toEqual(['Kết quả đảo hạn', 'Tạo khoản vay', 'unknown_code']);
+    expect(rows[0].action).toBe('rollover_result');
+  });
+
+  it('interestRateText: lãi suất theo dấu phẩy thập phân (DS §4); 9.5 / 9,5 / 09,5 đưa về một dạng', () => {
+    expect(interestRateText('9.5')).toBe('9,5');
+    expect(interestRateText('9,5')).toBe('9,5');
+    expect(interestRateText('09,5')).toBe('9,5');
+    expect(interestRateText('12.25')).toBe('12,25');
+    expect(interestRateText('0')).toBe('0');
+    expect(interestRateText(null)).toBe('');
+    expect(interestRateText('  ')).toBe('');
+  });
+
+  it('historyValueText: ngày hạn hiện DD/MM/YYYY (không ISO yyyy-mm-dd, DS §4.3); tiền định dạng đầy đủ; còn lại giữ nguyên', () => {
+    // Lịch sử khoản vay (đảo hạn) và công nợ (hạn thanh toán) đều phải hiện ngày dạng DD/MM/YYYY.
+    expect(historyValueText('maturity_date', '2026-11-11')).toBe('11/11/2026');
+    expect(historyValueText('maturity_date', '2027-11-11')).toBe('11/11/2027');
+    expect(historyValueText('due_date', '2026-01-05')).toBe('05/01/2026');
+    // Số tiền (minor) vẫn định dạng tiền, không hiện chuỗi số thô.
+    expect(historyValueText('principal_minor', '30000000')).toContain('30.000.000');
+    expect(historyValueText('value_minor', '1500')).toContain('1.500');
+    // Trống ⇒ "—".
+    expect(historyValueText('maturity_date', null)).toBe('—');
+    expect(historyValueText('due_date', '')).toBe('—');
+    // Trường không phải ngày giữ nguyên, kể cả khi giá trị trông giống ngày.
+    expect(historyValueText('note', '2026-11-11')).toBe('2026-11-11');
+    expect(historyValueText('contract_no', 'HDTD-001')).toBe('HDTD-001');
+    // Ngày hỏng không làm vỡ màn lịch sử: giữ nguyên chuỗi đã lưu.
+    expect(historyValueText('maturity_date', '2026-13-45')).toBe('2026-13-45');
+    expect(historyValueText('partner_id', 'bidv')).toBe('đổi đối tác');
+    // Lãi suất trong lịch sử theo dấu phẩy VN như màn khoản vay ("9.5" lưu trước đây ⇒ "9,5").
+    expect(historyValueText('interest_rate', '9.5')).toBe('9,5');
+    expect(historyValueText('interest_rate', '9,5')).toBe('9,5');
+  });
+
   it('hasDeadOffsetLink: phát hiện liên kết tới phiếu đã huỷ / từ chối / hết hạn', () => {
     expect(hasDeadOffsetLink([{ document_status: 'paid' }, { document_status: 'approved' }])).toBe(false);
     expect(hasDeadOffsetLink([{ document_status: 'paid' }, { document_status: 'cancelled' }])).toBe(true);
+    expect(hasDeadOffsetLink([{ document_status: 'rejected' }])).toBe(true);
+    expect(hasDeadOffsetLink([{ document_status: 'expired' }])).toBe(true);
+  });
+
+  it('offsetEffectOf: phiếu đã thực thi ⇒ đã cấn trừ; chờ ⇒ chưa trừ; huỷ / từ chối / hết hạn ⇒ không còn hiệu lực (v2 §9.2)', () => {
+    expect(offsetEffectOf({ document_status: 'paid', executed: true })).toBe('applied');
+    expect(offsetEffectOf({ document_status: 'approved', executed: false })).toBe('pending');
+    expect(offsetEffectOf({ document_status: 'draft', executed: false })).toBe('pending');
+    // Phiếu đã huỷ / từ chối / hết hạn không bao giờ trừ, kể cả khi không ở trạng thái đã thực thi.
+    expect(offsetEffectOf({ document_status: 'cancelled', executed: false })).toBe('released');
+    expect(offsetEffectOf({ document_status: 'rejected', executed: false })).toBe('released');
+    expect(offsetEffectOf({ document_status: 'expired', executed: false })).toBe('released');
+  });
+
+  it('OFFSET_EFFECT_LABEL: nhãn "Chờ thực thi — chưa trừ" chỉ cho phiếu còn chờ; phiếu đã huỷ không mang nhãn đó', () => {
+    expect(OFFSET_EFFECT_LABEL[offsetEffectOf({ document_status: 'cancelled', executed: false })].label).toBe('Không còn hiệu lực');
+    expect(OFFSET_EFFECT_LABEL[offsetEffectOf({ document_status: 'approved', executed: false })].label).toBe('Chờ thực thi — chưa trừ');
+    expect(OFFSET_EFFECT_LABEL[offsetEffectOf({ document_status: 'paid', executed: true })].label).toBe('Đã cấn trừ');
   });
 
   it('newRequestId: mã đủ dài (≥ 8 ký tự) và khác nhau giữa các lần gọi', () => {

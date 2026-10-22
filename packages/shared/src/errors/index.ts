@@ -93,7 +93,8 @@ export const PROBLEM_CATALOG: Record<ProblemCode, ProblemDef> = {
   'FG-WF-004': { code: 'FG-WF-004', status: 422, titleVi: 'Cần nhập ý kiến cho hành động này', hint: 'none' },
   'FG-WF-005': { code: 'FG-WF-005', status: 422, titleVi: 'Hồ sơ đã qua cấp duyệt, không sửa được nữa', hint: 'refetch' },
   'FG-WF-006': { code: 'FG-WF-006', status: 422, titleVi: 'Chưa cấu hình quy trình duyệt cho khoản này', hint: 'contact_admin' },
-  'FG-WF-007': { code: 'FG-WF-007', status: 422, titleVi: 'Khoản ngoài ngân sách — cần xác nhận', hint: 'none' },
+  // tiêu đề chung của mã; nơi ném lỗi truyền `title` riêng (ngoài ngân sách / vượt ngưỡng / tăng số tiền)
+  'FG-WF-007': { code: 'FG-WF-007', status: 422, titleVi: 'Cần xác nhận lại số tiền trước khi duyệt', hint: 'none' },
   'FG-WF-008': { code: 'FG-WF-008', status: 422, titleVi: 'Thiếu trường bắt buộc của loại phiếu', hint: 'none' },
   'FG-WF-009': { code: 'FG-WF-009', status: 403, titleVi: 'Không được tự duyệt hồ sơ mình tạo', hint: 'none' },
   'FG-WF-010': { code: 'FG-WF-010', status: 422, titleVi: 'Số dư khả dụng không đủ', hint: 'none' },
@@ -144,6 +145,11 @@ export interface ProblemJson {
 
 export interface ProblemInput {
   code: ProblemCode;
+  /**
+   * Tiêu đề riêng cho đúng tình huống khi một mã dùng chung cho nhiều nguyên nhân
+   * (vd FG-WF-007: tăng số tiền / ngoài ngân sách / vượt ngưỡng). Mặc định: `titleVi` của mã trong danh mục.
+   */
+  title?: string;
   detail?: string;
   errors?: Record<string, string>;
   data?: Record<string, unknown>;
@@ -154,16 +160,20 @@ export interface ProblemInput {
 export class ApiError extends Error {
   readonly code: ProblemCode;
   readonly status: number;
+  /** Tiêu đề hiển thị (RFC 7807 `title`): theo tình huống nếu có, không thì tiêu đề chung của mã. */
+  readonly title: string;
   readonly detail?: string;
   readonly errors?: Record<string, string>;
   readonly data?: Record<string, unknown>;
 
   constructor(input: ProblemInput) {
     const def = PROBLEM_CATALOG[input.code];
-    super(def.titleVi);
+    const title = input.title ?? def.titleVi;
+    super(title);
     this.name = 'ApiError';
     this.code = input.code;
     this.status = input.status ?? def.status;
+    this.title = title;
     this.detail = input.detail;
     this.errors = input.errors;
     this.data = input.data;
@@ -181,7 +191,7 @@ export function apiError(code: ProblemCode, extra: Omit<ProblemInput, 'code'> = 
 export function toProblem(err: ApiError, traceId?: string): ProblemJson {
   const problem: ProblemJson = {
     type: `https://fingate.local/errors/${err.code.toLowerCase()}`,
-    title: PROBLEM_CATALOG[err.code].titleVi,
+    title: err.title || PROBLEM_CATALOG[err.code].titleVi,
     status: err.status,
     code: err.code,
   };

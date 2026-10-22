@@ -13,22 +13,36 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ProblemJson } from '@fingate/shared';
 
-export function jsonSafe<T>(value: T, seen = new WeakSet<object>()): unknown {
+/**
+ * Chuyển payload thành JSON-an-toàn (BigInt → string, Date → ISO, ObjectId → hex).
+ *
+ * Chỉ cắt VÒNG LẶP thật (object đang nằm trên đường đi từ gốc tới nó — `ancestors`). Cùng một object/mảng
+ * có thể xuất hiện NHIỀU LẦN trong một response không phải vòng (vd. cùng một tag gắn cho hai phiếu,
+ * cùng một mảng vừa ở `funded_by_links` vừa ở `chain.funded_by`, cùng một output vừa ở `steps[]` vừa ở
+ * `generated[]`): mỗi lần đều phải serialize đầy đủ. Nếu dùng một tập "đã thấy" cho cả cây, lần thứ hai
+ * sẽ thành `null` và làm sập giao diện (TagList, RunLine, chi tiết khoản vay).
+ */
+export function jsonSafe<T>(value: T, ancestors = new WeakSet<object>()): unknown {
   if (typeof value === 'bigint') return value.toString();
   if (value === null || typeof value !== 'object') return value;
   if (value instanceof Date) return value.toISOString();
   // ObjectId (bson) từ `.lean()` — JSON.stringify mặc định sẽ thành {i0,i1,...}
   if (typeof (value as unknown as { toHexString?: unknown }).toHexString === 'function')
     return (value as unknown as { toHexString(): string }).toHexString();
-  if (seen.has(value as object)) return null; // vòng lặp (mongoose) — cắt
-  seen.add(value as object);
-  if (Array.isArray(value)) return value.map((v) => jsonSafe(v, seen));
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    if (k === '__v' || k === '$session') continue;
-    out[k] = jsonSafe(v, seen);
+  if (ancestors.has(value as object)) return null; // vòng lặp thật (object là tổ tiên của chính nó) — cắt
+  ancestors.add(value as object);
+  try {
+    if (Array.isArray(value)) return value.map((v) => jsonSafe(v, ancestors));
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (k === '__v' || k === '$session') continue;
+      out[k] = jsonSafe(v, ancestors);
+    }
+    return out;
+  } finally {
+    // rời nhánh: object này không còn là tổ tiên; lần xuất hiện sau (không vòng) vẫn được serialize đủ
+    ancestors.delete(value as object);
   }
-  return out;
 }
 
 export interface OkOptions {

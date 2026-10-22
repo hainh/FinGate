@@ -37,20 +37,29 @@ export function cacheSet<T>(key: string, value: T, ttlMs?: number): void {
   }
 }
 
+/**
+ * Số lần đã xoá cache. Một `load` đang chạy khi có lần xoá có thể đã đọc dữ liệu TRƯỚC mutation: kết quả đó
+ * vẫn trả cho người gọi đang chờ, nhưng KHÔNG được ghi vào cache (nếu không, số cũ sẽ nằm tới hết TTL sau mutation).
+ */
+let invalidations = 0;
+
 export async function cacheThrough<T>(key: string, load: () => Promise<T>, ttlMs?: number): Promise<T> {
   const hit = cacheGet<T>(key);
   if (hit !== undefined) return hit;
+  const before = invalidations;
   const fresh = await load();
-  cacheSet(key, fresh, ttlMs);
+  if (invalidations === before) cacheSet(key, fresh, ttlMs);
   return fresh;
 }
 
 /** Vô hiệu mọi key theo prefix (sau mutation làm số liệu đổi ngay). */
 export function cacheInvalidate(prefix: string): void {
+  invalidations++;
   for (const key of store.keys()) if (key.startsWith(prefix)) store.delete(key);
 }
 
 export function cacheClear(): void {
+  invalidations++;
   store.clear();
 }
 

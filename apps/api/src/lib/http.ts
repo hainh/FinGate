@@ -368,7 +368,8 @@ export function installHttpLayer(app: FastifyInstance): void {
 }
 
 function toProblem(err: ApiError, traceId: string): ProblemJson {
-  const problem = parseProblem(err.status, { code: err.code, detail: err.detail, errors: err.errors, data: err.data });
+  // tiêu đề theo tình huống (vd FG-WF-007 tăng số tiền) nếu có; không thì tiêu đề chung của mã
+  const problem = parseProblem(err.status, { code: err.code, title: err.title, detail: err.detail, errors: err.errors, data: err.data });
   if (traceId) problem.trace_id = traceId;
   return problem;
 }

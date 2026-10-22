@@ -3,6 +3,7 @@ import {
   accountSearchPattern,
   bankAccountKeyOf,
   findDuplicateHits,
+  identifierSearchPattern,
   normalizeAccountNumber,
   normalizeBankName,
   type DuplicateCandidate,
@@ -38,13 +39,43 @@ describe('chuẩn hoá khoá trùng', () => {
   });
 
   it('mẫu truy vấn khớp mọi cách ghi cùng số TK (phân cách, hoa/thường) và không khớp số khác', () => {
-    const rx = (v: string): RegExp => new RegExp(accountSearchPattern(v) as string, 'i');
+    const rx = (v: string): RegExp => new RegExp(accountSearchPattern(v) as string, 'iu');
     expect(rx('0123456789').test('0123-456-789')).toBe(true);
+    expect(rx('0123456789').test('0123\u00a0456\u3000789')).toBe(true); // NBSP / ideographic space
     expect(rx(' 0123 456 789 ').test('0123456789')).toBe(true);
     expect(rx('AB.12-cd').test('ab12CD')).toBe(true);
     expect(rx('0123456789').test('01234567890')).toBe(false);
     expect(rx('0123456789').test('x0123456789')).toBe(false);
     expect(accountSearchPattern('')).toBeNull();
+  });
+});
+
+describe('mẫu tìm STK / MST trong ô tìm đối tác (bỏ qua phân cách)', () => {
+  const rx = (q: string): RegExp => new RegExp(identifierSearchPattern(q) as string, 'iu');
+
+  it('gõ không có phân cách vẫn tìm thấy STK / MST lưu có dấu cách / gạch', () => {
+    expect(rx('123456789012').test('123-456 789 012')).toBe(true);
+    expect(rx('0101234567001').test('0101234567-001')).toBe(true);
+    expect(rx('123456789012').test('123\u00a0456\u202f789\u3000012')).toBe(true); // NBSP / narrow NBSP / ideographic
+  });
+
+  it('gõ có phân cách, hoặc chỉ một đoạn số (đầu / giữa), vẫn khớp', () => {
+    expect(rx('123-456 789').test('123456789012')).toBe(true);
+    expect(rx('456.789').test('123-456 789 012')).toBe(true);
+    expect(rx('0101234567').test('0101234567-001')).toBe(true);
+  });
+
+  it('không phân biệt hoa thường; không khớp số khác', () => {
+    expect(rx('ab-12').test('AB 12')).toBe(true);
+    expect(rx('123456789013').test('123-456 789 012')).toBe(false);
+  });
+
+  it('chữ gõ chỉ có phân cách hoặc rỗng ⇒ null; ký tự đặc biệt được escape, không ném lỗi', () => {
+    expect(identifierSearchPattern(' - . ')).toBeNull();
+    expect(identifierSearchPattern('')).toBeNull();
+    expect(identifierSearchPattern(null)).toBeNull();
+    expect(rx('a(b').test('x a-(b')).toBe(true);
+    expect(rx('a(b').test('a b')).toBe(false);
   });
 });
 

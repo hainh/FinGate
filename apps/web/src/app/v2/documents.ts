@@ -12,11 +12,14 @@
  * Tiền trên wire là chuỗi minor units; mọi hiển thị đi qua `money()`/`formatMoney()` của shared.
  */
 
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
-import { bankDebtStatusLabel, statusLabel, type PartnerRef } from '@fingate/shared';
+import { bankDebtStatusLabel, ddmmyyyy, formatMoney, money, moneyFromWire, statusLabel, type PartnerRef } from '@fingate/shared';
 import { apiData } from '../api.ts';
 import { useAuth } from '../store.tsx';
+import type { BankAccountRow, DocumentDetail } from '../types.ts';
+import { interestRateText, type LoanRow } from './debts.ts';
 
 /* ================= kiểu trên wire ================= */
 
@@ -175,10 +178,15 @@ export function defaultLoanDueDate(base: string | null | undefined, offsetMonths
   return d.isValid() ? d.add(offsetMonths, 'month').format('YYYY-MM-DD') : '';
 }
 
-/** Lãi suất nhập "9,5" → "9.5" (server nhận cả hai dấu; chuẩn hoá để so sánh/gửi nhất quán). */
+/**
+ * Lãi suất gửi lên dạng hiển thị VN "9,5" (phân cách thập phân là dấu phẩy — docs/02_design_system.md), cùng quy ước
+ * với nhập theo lô và kết quả đảo hạn (`interestRateText`). Gõ "9.5" cũng gửi "9,5". Rỗng ⇒ null. Không phải số thập
+ * phân thuần (VD "9%", "1e3") ⇒ giữ nguyên để server báo lỗi đúng ô, không âm thầm đổi thành số khác.
+ */
 export function normalizeInterestRate(text: string): string | null {
-  const t = text.trim().replace(',', '.');
-  return t ? t : null;
+  const t = text.trim();
+  if (!t) return null;
+  return /^\d+([.,]\d+)?$/.test(t) ? interestRateText(t) : t;
 }
 
 /** Quan hệ gán thủ công hợp lệ theo loại phiếu và loại đối tác (đối chiếu `RELATION_SPECS` của server). */
@@ -319,6 +327,28 @@ export function transferTargetBody(on: boolean, companyId: string, accountId: st
   return { company_id: companyId, account_id: accountId || null };
 }
 
+/**
+ * Nhãn một tài khoản trong ô chọn (tài khoản nguồn/đích, nhận giải ngân, TK đích chuyển nội bộ):
+ * "Ngân hàng · số TK che · TÊN TK". Tên TK phải có trong nhãn để phân biệt các TK cùng ngân hàng (v2 §11.5, US-AUTO-03).
+ * `withCompany`: thêm đầu nhãn tên công ty (hoặc "Tập đoàn") khi ô gộp TK của nhiều công ty.
+ */
+export function bankAccountOptionLabel(
+  a: Pick<BankAccountRow, 'bank_name' | 'account_number_masked' | 'account_name' | 'is_group' | 'company_name'>,
+  withCompany = false,
+): string {
+  const bank = `${a.bank_name} · ${a.account_number_masked}${a.account_name ? ` · ${a.account_name}` : ''}`;
+  return withCompany ? `${a.is_group ? 'Tập đoàn' : (a.company_name ?? '—')} · ${bank}` : bank;
+}
+
+/**
+ * Nhãn khoản vay trong ô "Khoản vay đang đảo hạn" (phương án đảo hạn): "mã · gốc (gọn) · đáo hạn DD/MM/YYYY".
+ * Ngày hiển thị DD/MM/YYYY như các màn khác (docs/02_design_system.md §4.3), không để chuỗi ISO yyyy-mm-dd.
+ */
+export function rolloverLoanOptionLabel(l: Pick<LoanRow, 'code' | 'principal' | 'maturity_date'>): string {
+  const due = l.maturity_date ? ddmmyyyy(l.maturity_date) : '—';
+  return `${l.code} · gốc ${formatMoney(moneyFromWire(l.principal) ?? money('0'), { mode: 'compact' })} · đáo hạn ${due}`;
+}
+
 /* ================= hook (react-query) ================= */
 
 /** Tham số vay mặc định của công ty (server: `GET /automation/loan-defaults`, US-AUTO-07). */
@@ -368,11 +398,46 @@ function invalidateLinkConsumers(qc: QueryClient): void {
 }
 
 /**
+ * Làm tươi sau khi LƯU hồ sơ từ form lập/sửa (PATCH/POST). Form chuyển ngay sang màn chi tiết: nếu không làm tươi,
+ * màn chi tiết dùng bản đệm TRƯỚC khi sửa (staleTime 10 s, polling 30 s) ⇒ banner khoản vay cũ tới lần tải kế tiếp.
+ * `saved` = chi tiết trả về cùng PATCH (cùng dạng GET) ⇒ đặt thẳng vào bản đệm. Lưu có thể gắn/gỡ khoản vay
+ * (R2/R3, liên kết Thủ công) nên làm tươi cả công nợ, khoản nợ NH và đối tác như khi đổi liên kết.
+ */
+export function refreshDocumentAfterSave(qc: QueryClient, scope: string, documentId: string, saved: DocumentDetail | null): void {
+  if (saved) qc.setQueryData<DocumentDetail>(['document', scope, documentId], saved);
+  invalidateLinkConsumers(qc);
+}
+
+/** Làm tươi nhanh (ms) khi có lượt đang chờ / đang chạy — khớp chú thích của hook: 3 giây. */
+export const AUTOMATION_FAST_POLL_MS = 3_000;
+/** Polling mặc định của app (store.tsx). Không được trả `false` — `false` sẽ TẮT luôn polling mặc định. */
+export const AUTOMATION_IDLE_POLL_MS = 30_000;
+/**
+ * Khoảng theo dõi sau khi mở hồ sơ: lượt do lần lưu / sự kiện vừa rồi có thể CHƯA kịp được bộ máy tạo
+ * (xử lý bất đồng bộ, "vài giây" — v2/v2.md §11.2), nên vẫn làm tươi nhanh dù danh sách đang rỗng.
+ */
+export const AUTOMATION_WATCH_MS = 2 * 60_000;
+
+/**
+ * Chu kỳ làm tươi danh sách lượt tự động của phiếu (hàm thuần, dùng trong `useAutomationRuns`):
+ * - có lượt đang chờ / đang chạy ⇒ nhanh;
+ * - còn trong khoảng theo dõi sau khi mở hồ sơ (kể cả danh sách rỗng hoặc chỉ có lượt đã xong) ⇒ nhanh;
+ * - còn lại ⇒ polling mặc định. Trước đây trả `false` ⇒ panel không bao giờ thấy lượt mới đến sau khi đã tải.
+ */
+export function automationRunsPollMs(runs: readonly Pick<AutomationRunView, 'status'>[] | undefined, watchSince: number, now: number): number {
+  const inFlight = (runs ?? []).some((r) => r.status === 'pending' || r.status === 'running');
+  return inFlight || now - watchSince < AUTOMATION_WATCH_MS ? AUTOMATION_FAST_POLL_MS : AUTOMATION_IDLE_POLL_MS;
+}
+
+/**
  * Lượt tự động của MỘT phiếu (cũ → mới, đã bỏ lượt mà mọi bước đều "bỏ qua").
- * Đang chờ / đang chạy thì làm tươi sau 3 giây để panel tự cập nhật khi sự kiện được xử lý.
+ * Làm tươi theo `automationRunsPollMs` để panel tự hiện lượt mới sinh sau khi hồ sơ đã mở (kể cả lúc mở chưa có lượt).
  */
 export function useAutomationRuns(documentId: string | undefined) {
   const { scope } = useAuth();
+  // mốc bắt đầu khoảng theo dõi của phiếu đang mở: mỗi lần mở hồ sơ (hoặc đổi sang phiếu khác) là một khoảng mới
+  const [watch, setWatch] = useState(() => ({ documentId, since: Date.now() }));
+  if (watch.documentId !== documentId) setWatch({ documentId, since: Date.now() });
   return useQuery({
     queryKey: ['automation-runs', 'document', documentId ?? ''],
     enabled: !!documentId,
@@ -380,7 +445,7 @@ export function useAutomationRuns(documentId: string | undefined) {
       apiData<AutomationRunView[]>('/automation/runs/by-source', {
         query: { scope, source_type: 'document', source_id: documentId ?? '' },
       }),
-    refetchInterval: (q) => (q.state.data?.some((r) => r.status === 'pending' || r.status === 'running') ? 3000 : false),
+    refetchInterval: (q) => automationRunsPollMs(q.state.data, watch.since, Date.now()),
   });
 }
 

@@ -129,12 +129,13 @@ function buildDebt(d: DebtRaw, ctx: DebtCtx) {
     code: String(d.code ?? ''),
     partner_id: d.partner_id ? String(d.partner_id) : null,
     partner,
-    party_type: d.party_type,
+    // v2 §5.1 / §9.1: loại và TK theo ĐỐI TÁC HIỆN TẠI (không giữ bản sao cũ); hướng do người dùng chọn, giữ nguyên
+    party_type: partner?.type || d.party_type,
     party_name: partner?.name ?? d.party_name ?? '',
     party_bank_name: partner?.bank_name ?? d.party_bank_name ?? null,
     party_bank_account: partner?.account_number ?? d.party_bank_account ?? null,
     direction: directionOf(d),
-    account_code: d.account_code,
+    account_code: (partner ? accountCodeOfPartnerType(partner.type) : null) ?? d.account_code,
     side: d.side,
     value: wireMoney(value, currency),
     settled: wireMoney(applied, currency),
@@ -263,7 +264,7 @@ export async function debtAgingMatrix(scope: ScopeLike, q: { party_type?: string
       counterparty: String(b.item.party_name ?? ''),
       partner_id: d.partner_id ? String(d.partner_id) : null,
       direction,
-      party_type: d.party_type,
+      party_type: String(b.item.party_type ?? d.party_type),
       cells: Object.fromEntries(AGING_COLUMNS.map((c) => [c, { amount: 0n, count: 0 }])),
     };
     const cell = g.cells[bucket] ?? { amount: 0n, count: 0 };

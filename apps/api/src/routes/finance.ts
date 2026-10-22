@@ -29,6 +29,7 @@ import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, internalTrans
 import { asBigInt, docHref, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
 import { bookedBalance } from '../domain/ledger/index.ts';
 import { ledgerAccountViews } from '../domain/accounts.ts';
+import { companyReachableByActor } from '../domain/entitlement/index.ts';
 import { loadPartnerRefs } from '../domain/reports/refs.ts';
 import { scopedFind } from '../lib/mongo.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
@@ -97,7 +98,8 @@ export function financeRoutes(app: FastifyInstance): void {
         // Tập đoàn; công ty con → KHÔNG thấy quỹ/tài khoản Tập đoàn (§VIII).
         let forCompanyOpt: { id: string; isGroup: boolean } | undefined;
         if (q.for_company) {
-          if (scope.companyIds !== null && !scope.companyIds.includes(q.for_company)) {
+          // công ty được gán (không chỉ công ty đang xem): chọn TK của công ty nhận chuyển nội bộ (§11.6)
+          if (!companyReachableByActor(requestCtx(req).identity, q.for_company)) {
             throw new ApiError({ code: 'FG-RBAC-002' });
           }
           const company = await Models.Company.findById(q.for_company)
@@ -124,6 +126,7 @@ export function financeRoutes(app: FastifyInstance): void {
               is_group: r.is_group,
               label: r.label,
               bank_name: r.bank_name,
+              account_name: r.account_name,
               account_number_masked: r.account_number_masked,
               account_number: r.account_number_masked,
               kind: r.kind,

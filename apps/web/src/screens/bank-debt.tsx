@@ -38,6 +38,7 @@ import {
   canCancelLoan,
   canEditLoan,
   hasDeadOffsetLink,
+  interestRateText,
   minorOf,
   newRequestId,
   originLabel,
@@ -73,6 +74,7 @@ import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useDebounced, useToast } from '../components/pagekit.tsx';
 import { problemText } from '../components/attachments.tsx';
 import { OwnerAttachmentSection, RemoveLinkModal } from './debt.tsx';
+import { parseVnDate } from '../app/v2/loan-import.ts';
 
 /* ================= nhãn & tiện ích ================= */
 
@@ -163,7 +165,7 @@ function loanColumns(): TableColumnsType<LoanRow> {
       dataIndex: 'interest_rate',
       key: 'ir',
       sorter: (a, b) => Number(a.interest_rate.replace(',', '.')) - Number(b.interest_rate.replace(',', '.')),
-      render: (v: string) => `${v} %/năm`,
+      render: (v: string) => `${interestRateText(v)} %/năm`,
     },
     {
       title: 'Hạn thanh toán',
@@ -220,16 +222,6 @@ function decodeTsvBuffer(buf: ArrayBuffer): string {
   return new TextDecoder('utf-8').decode(bytes).replace(/^\uFEFF/, '');
 }
 
-/** `09/12/2027` (ng/th/năm) hoặc `2027-12-09` → `YYYY-MM-DD`. */
-function parseVnDate(text: string): string | null {
-  const t = text.trim();
-  let m = /^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/.exec(t);
-  if (m) return `${m[3]}-${m[2]!.padStart(2, '0')}-${m[1]!.padStart(2, '0')}`;
-  m = /^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})$/.exec(t);
-  if (m) return `${m[1]}-${m[2]!.padStart(2, '0')}-${m[3]!.padStart(2, '0')}`;
-  return null;
-}
-
 /**
  * Phân tích .tsv: cột 1 = mã đối tác ngân hàng (DT-…); mã được đối chiếu với danh sách ngân hàng đang hoạt
  * động (nếu đã tải). Không khớp theo tên — server cũng chỉ nhận mã.
@@ -255,8 +247,9 @@ function parseImportTsv(text: string, bankByCode: Map<string, string>): ImportPr
     const limitRaw = (cells[2] ?? '').trim();
     const limit = limitRaw ? parseMoneyInput(limitRaw).minor : 0n;
 
-    const interest_rate = (cells[3] ?? '').trim().replace(',', '.') || '0';
-    if (!/^\d+(\.\d{1,2})?$/.test(interest_rate)) errors.push('Lãi suất không hợp lệ');
+    // giữ quy ước VN "9,5" như người nhập (không đổi thành "9.5"); rỗng ⇒ 0
+    const interest_rate = interestRateText(cells[3]) || '0';
+    if (!/^\d+([.,]\d{1,2})?$/.test(interest_rate)) errors.push('Lãi suất không hợp lệ');
 
     const maturity_date = parseVnDate((cells[4] ?? '').trim()) ?? '';
     if (!maturity_date) errors.push('Hạn thanh toán không hợp lệ');
@@ -284,7 +277,8 @@ function parseImportTsv(text: string, bankByCode: Map<string, string>): ImportPr
 function BankDebtImportModal({ open, onClose, onImported }: { open: boolean; onClose: () => void; onImported: () => void }): ReactNode {
   const company = useCurrentCompanyId();
   const imp = useImportLoans();
-  const banks = usePartnerOptions({ type: ['bank'], status: 'active', company_id: company ?? undefined, limit: 200 }, open);
+  // mọi ngân hàng đang hoạt động (không chỉ 200 đầu) — mã dòng lô không khớp danh sách bị báo sai "không có ngân hàng"
+  const banks = usePartnerOptions({ type: ['bank'], status: 'active', company_id: company ?? undefined, limit: 1000 }, open);
   const { message } = useToast();
   const [fileName, setFileName] = useState('');
   const [fileText, setFileText] = useState<string | null>(null);
@@ -410,7 +404,7 @@ function BankDebtImportModal({ open, onClose, onImported }: { open: boolean; onC
               { title: 'Ngân hàng', dataIndex: 'bank_name', key: 'bn', render: (v: string) => v || '—' },
               { title: 'Số tiền vay', key: 'amt', align: 'right', render: (_v, r) => (r.amount_minor && r.amount_minor !== '0' ? formatMoney(money(r.amount_minor), { mode: 'full' }) : '—') },
               { title: 'Hạn mức', key: 'cl', align: 'right', render: (_v, r) => (r.credit_limit_minor ? formatMoney(money(r.credit_limit_minor), { mode: 'full' }) : '—') },
-              { title: 'Lãi suất', dataIndex: 'interest_rate', key: 'ir', render: (v: string) => `${v} %` },
+              { title: 'Lãi suất', dataIndex: 'interest_rate', key: 'ir', render: (v: string) => `${interestRateText(v)} %` },
               { title: 'Hạn TT', dataIndex: 'maturity_date', key: 'md', render: (v: string) => (v ? dayjs(v).format('DD/MM/YYYY') : '—') },
               { title: 'Kỳ hạn', dataIndex: 'term_months', key: 'tm', render: (v: string) => (v ? `${v} tháng` : '—') },
               {
@@ -579,7 +573,7 @@ export function BankDebtFormScreen(): ReactNode {
       credit_limit: minorOf(detail.credit_limit) > 0n ? moneyFromWire(detail.credit_limit) : null,
       disbursed_date: detail.disbursed_at ? dayjs(detail.disbursed_at).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
       maturity_date: detail.maturity_date,
-      interest_rate: detail.interest_rate,
+      interest_rate: interestRateText(detail.interest_rate) || '0',
       term_months: detail.term_months != null ? String(detail.term_months) : '',
       payment_frequency: detail.payment_frequency,
       repayment_method: detail.repayment_method,
@@ -591,7 +585,7 @@ export function BankDebtFormScreen(): ReactNode {
     setPrefilled(true);
   }, [detail, prefilled]);
 
-  const chainCount = detail ? detail.chain.funded_by.length + detail.chain.disbursements.length + detail.chain.repayments.length : 0;
+  const chainCount = detail ? withChainDefaults(detail).chain.funded_by.length + (detail.chain?.disbursements?.length ?? 0) + (detail.chain?.repayments?.length ?? 0) : 0;
   const locked = chainCount > 0;
   const busy = create.isPending || update.isPending;
 
@@ -1017,6 +1011,12 @@ function CancelLoanModal({ loanId, code, onClose }: { loanId: string; code: stri
   );
 }
 
+/** Chuỗi khoản vay luôn là MẢNG (phản hồi thiếu/null không được làm sập màn chi tiết khi đọc `[0]`, `.length`). */
+function withChainDefaults(d: LoanDetail): LoanDetail {
+  const c = (d.chain ?? {}) as Partial<LoanDetail['chain']>;
+  return { ...d, chain: { funded_by: c.funded_by ?? [], disbursements: c.disbursements ?? [], repayments: c.repayments ?? [] } };
+}
+
 function ChainTable({
   rows,
   columns,
@@ -1060,7 +1060,8 @@ export function BankDebtDetailScreen(): ReactNode {
 
   return (
     <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={3} />}>
-      {(d: LoanDetail) => {
+      {(raw: LoanDetail) => {
+        const d = withChainDefaults(raw);
         const status = d.status;
         const source = d.chain.funded_by[0] ?? d.chain.disbursements.find((l) => l.origin === 'automation') ?? null;
         const chainTotal = d.chain.funded_by.length + d.chain.disbursements.length + d.chain.repayments.length;
@@ -1070,7 +1071,7 @@ export function BankDebtDetailScreen(): ReactNode {
           <>
             <FgPageHeader
               title={`${d.code} · ${bankNameOf(d)}`}
-              meta={`Hạn thanh toán ${ddmmyyyy(d.maturity_date)} · lãi suất ${d.interest_rate}%/năm`}
+              meta={`Hạn thanh toán ${ddmmyyyy(d.maturity_date)} · lãi suất ${interestRateText(d.interest_rate)}%/năm`}
               actions={
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <Link to={`/ngan-hang/khoan-vay/${d._id}/lich-tra`}>
@@ -1406,7 +1407,7 @@ export function LoanScheduleScreen(): ReactNode {
         <>
           <FgPageHeader
             title={`Lịch trả nợ · ${d.contract_code} — ${d.bank_name}`}
-            meta={`Kỳ hạn ${d.term_months} tháng · lãi suất ${d.interest_rate}%/năm · ${
+            meta={`Kỳ hạn ${d.term_months} tháng · lãi suất ${interestRateText(d.interest_rate)}%/năm · ${
               d.payment_frequency === 'monthly'
                 ? 'trả hàng tháng'
                 : d.payment_frequency === 'quarterly'

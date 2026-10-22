@@ -12,19 +12,24 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
+import { DatePicker } from 'antd';
+import dayjs from 'dayjs';
 import {
   EVIDENCE_LABEL,
   ACTION_LABEL,
   UI,
   dateTimeLabel,
+  ddmmyyyy,
   deadlineLabel,
   formatMoney,
   isDeadlinePast,
   moneyFromWire,
+  statusLabel,
   type EvidenceType,
   type Money,
 } from '@fingate/shared';
 import { useBankAccounts, useDecisionPack, useDocument, useRolloverResult } from '../app/queries.ts';
+import { interestRateText } from '../app/v2/debts.ts';
 import type { DocumentDetail, AttachmentRef } from '../app/types.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgPassword, FgStatusChip, FgText, FgTextarea, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -35,7 +40,7 @@ import { AutomationPanel, LinksTab, LoanBanner, PartnerCard, TagsCard } from '..
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useToast } from '../components/pagekit.tsx';
 import { ApprovalConfirmModal, useTransitionRunner } from './approve-modal.tsx';
-import { AUDIT_ACTION_LABEL, ROLES_LABEL } from '../components/labels.ts';
+import { ROLES_LABEL, documentHistoryActionLabel } from '../components/labels.ts';
 import { ApiRequestError, apiCall } from '../app/api.ts';
 
 const KIND_PATH: Record<string, string> = { spend: 'chi', income: 'thu', rollover: 'dao-han', internal: 'noi-bo' };
@@ -83,8 +88,8 @@ export function DocumentDetailScreen(): ReactNode {
     >
       {(d) => {
         const amount = moneyFromWire(d.amount)!;
-        const canAct = d.can.approve || d.can.reject || d.can.request_changes || d.can.submit || d.can.pay || d.can.fast_track;
-        const canMaintain = d.can.edit || d.can.delete;
+        const canAct = d.can.approve || d.can.reject || d.can.request_changes || d.can.submit || d.can.pay || d.can.fast_track || !!d.can.queue_payment;
+        const canMaintain = d.can.edit || d.can.delete || !!d.can.cancel;
         const showBar = canAct || canMaintain;
         const activeLinks = (d.links ?? []).filter((l) => l.status === 'active').length;
         return (
@@ -206,6 +211,12 @@ export function DocumentDetailScreen(): ReactNode {
                     Xoá phiếu
                   </FgButton>
                 ) : null}
+                {d.can.cancel ? (
+                  // v2 §7.1: Nháp / Yêu cầu bổ sung / Đã duyệt → Huỷ (lý do bắt buộc, xem ApprovalConfirmModal)
+                  <FgButton variant="danger" onClick={() => setConfirmAction('cancel')}>
+                    Hủy hồ sơ
+                  </FgButton>
+                ) : null}
                 {d.can.request_changes ? (
                   <FgButton onClick={() => setConfirmAction('request_changes')}>{ACTION_LABEL.request_changes}</FgButton>
                 ) : null}
@@ -221,6 +232,10 @@ export function DocumentDetailScreen(): ReactNode {
                   <FgButton variant="primary" onClick={() => setConfirmAction('submit')}>
                     Gửi duyệt
                   </FgButton>
+                ) : null}
+                {d.can.queue_payment ? (
+                  // v2 §7.1: DaDuyet → DangThanhToan; sau đó "Thực thi" (DangThanhToan → DaThanhToan)
+                  <FgButton onClick={() => setConfirmAction('queue_payment')}>Đưa vào hàng thanh toán</FgButton>
                 ) : null}
                 {d.can.pay ? (
                   <FgButton variant="primary" onClick={() => setConfirmAction('pay')}>
@@ -432,14 +447,46 @@ function AuditTab({ doc }: { doc: DocumentDetail }): ReactNode {
         columns={[
           { title: 'Thời gian', dataIndex: 'at', key: 'at', render: (v: string) => dateTimeLabel(v) },
           { title: 'Người', key: 'actor', render: (_v: unknown, r: DocumentDetail['history'][number]) => `${r.actor.name ?? r.actor.role ?? '—'}` },
-          { title: 'Hành động', dataIndex: 'action', key: 'action', render: (v: string) => AUDIT_ACTION_LABEL[v] ?? v },
-          { title: 'Chuyển trạng thái', key: 'st', render: (_v: unknown, r: DocumentDetail['history'][number]) => (r.from || r.to ? `${r.from ?? ''} → ${r.to ?? ''}` : '—') },
+          { title: 'Hành động', dataIndex: 'action', key: 'action', render: (v: string) => documentHistoryActionLabel(v) },
+          {
+            title: 'Chuyển trạng thái',
+            key: 'st',
+            // trạng thái lưu dạng mã (pending.ktt, changes_requested…) → nhãn tiếng Việt
+            render: (_v: unknown, r: DocumentDetail['history'][number]) =>
+              r.from || r.to ? `${r.from ? statusLabel(r.from) : ''} → ${r.to ? statusLabel(r.to) : ''}` : '—',
+          },
+          {
+            title: 'Chi tiết',
+            key: 'detail',
+            // "Sửa tag": nêu tên tag được thêm / bỏ (fields.added / fields.removed, v2 §6.2)
+            render: (_v: unknown, r: DocumentDetail['history'][number]) => historyDetailText(r),
+          },
           { title: 'Ý kiến', dataIndex: 'opinion', key: 'op', ellipsis: true, render: (v: string | null) => v ?? '—' },
         ]}
         pagination={false}
       />
     </FgCard>
   );
+}
+
+/** Tên các tag trong `fields.added` / `fields.removed` của lịch sử `tags_update` (mỗi phần tử `{ id, name }`). */
+function tagNamesIn(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.map((x) => {
+    if (x && typeof x === 'object') return String((x as { name?: unknown }).name ?? '').trim() || 'tag không rõ tên';
+    return String(x);
+  });
+}
+
+/** Chi tiết một dòng lịch sử hồ sơ: với "Sửa tag" nêu tên tag thêm / bỏ; các dòng khác để trống ("—"). */
+function historyDetailText(entry: Pick<DocumentDetail['history'][number], 'action' | 'fields'>): string {
+  if (entry.action !== 'tags_update') return '—';
+  const added = tagNamesIn(entry.fields?.added);
+  const removed = tagNamesIn(entry.fields?.removed);
+  const parts: string[] = [];
+  if (added.length) parts.push(`Thêm: ${added.join(', ')}`);
+  if (removed.length) parts.push(`Bỏ: ${removed.join(', ')}`);
+  return parts.join(' · ') || '—';
 }
 
 export { KIND_PATH };
@@ -586,10 +633,12 @@ function RolloverResultCard({ doc, onChanged }: { doc: DocumentDetail; onChanged
   const [newMaturity, setNewMaturity] = useState(existing?.new_maturity_date ?? doc.rollover?.new_maturity_date ?? '');
   const [contract, setContract] = useState(existing?.new_contract_code ?? '');
   const [limit, setLimit] = useState<Money | null>(existing?.new_limit ? moneyFromWire(existing.new_limit) : null);
-  const [rate, setRate] = useState(existing?.new_rate ?? '');
+  // lãi suất hiển thị theo dấu phẩy (9,5); gửi đi đổi lại dấu chấm (contract new_rate chỉ nhận dấu chấm)
+  const [rate, setRate] = useState(interestRateText(existing?.new_rate));
   const [fee, setFee] = useState<Money | null>(existing?.actual_fee ? moneyFromWire(existing.actual_fee) : null);
   const [note, setNote] = useState(existing?.note ?? '');
-  const canSubmit = (doc.status === 'approved' || doc.status === 'paid') && doc.can.pay;
+  // đúng quyền của server (POST /documents/:id/rollover-result): rollover:act, phiếu đã duyệt / đã thực thi
+  const canSubmit = doc.can.rollover_result === true;
 
   const submit = async (): Promise<void> => {
     if (!doneAt) {
@@ -618,7 +667,7 @@ function RolloverResultCard({ doc, onChanged }: { doc: DocumentDetail; onChanged
         new_maturity_date: newMaturity,
         new_contract_code: contract.trim(),
         new_limit: { amount_minor: limit.minor.toString(), currency: limit.currency },
-        new_rate: rate.replace(',', '.'),
+        new_rate: interestRateText(rate),
         actual_fee: { amount_minor: (fee?.minor ?? 0n).toString(), currency: fee?.currency ?? limit.currency },
         note: note.trim() || undefined,
         if_match: doc.version,
@@ -641,8 +690,9 @@ function RolloverResultCard({ doc, onChanged }: { doc: DocumentDetail; onChanged
         {existing && !canSubmit ? (
           <>
             <FgText style="bodyS">
-              ✓ Đã thực hiện {existing.done_at ?? '—'} · đáo hạn mới {existing.new_maturity_date ?? '—'} · HĐ {existing.new_contract_code ?? '—'} · LS{' '}
-              {existing.new_rate ?? '—'}%/năm
+              ✓ Đã thực hiện {existing.done_at ? ddmmyyyy(existing.done_at) : '—'} · đáo hạn mới{' '}
+              {existing.new_maturity_date ? ddmmyyyy(existing.new_maturity_date) : '—'} · HĐ {existing.new_contract_code ?? '—'} · LS{' '}
+              {interestRateText(existing.new_rate) || '—'}%/năm
             </FgText>
             {existing.new_limit ? (
               <FgText style="bodyS" color="muted">Hạn mức mới: {formatMoney(moneyFromWire(existing.new_limit) ?? 0n, { mode: 'full' })}</FgText>
@@ -653,11 +703,24 @@ function RolloverResultCard({ doc, onChanged }: { doc: DocumentDetail; onChanged
       </div>
       {canSubmit ? (
         <div style={{ display: 'grid', gap: 'var(--fg-space-3)', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}>
+          {/* ngày theo DS §7.8: hiển thị / nhập DD/MM/YYYY; state và gửi đi là YYYY-MM-DD (businessDate) */}
           <FgField label="Ngày thực hiện *">
-            <FgInput value={doneAt} onChange={(e) => setDoneAt(e.target.value)} placeholder="YYYY-MM-DD" />
+            <DatePicker
+              value={doneAt ? dayjs(doneAt) : null}
+              onChange={(d) => setDoneAt(d ? d.format('YYYY-MM-DD') : '')}
+              format="DD/MM/YYYY"
+              placeholder="DD/MM/YYYY"
+              style={{ width: '100%' }}
+            />
           </FgField>
-          <FgField label="Ngày đáo hạn mới *" help="Hạn thanh toán mới của khoản vay (YYYY-MM-DD)">
-            <FgInput value={newMaturity} onChange={(e) => setNewMaturity(e.target.value)} placeholder="YYYY-MM-DD" />
+          <FgField label="Ngày đáo hạn mới *" help="Hạn thanh toán mới của khoản vay (DD/MM/YYYY)">
+            <DatePicker
+              value={newMaturity ? dayjs(newMaturity) : null}
+              onChange={(d) => setNewMaturity(d ? d.format('YYYY-MM-DD') : '')}
+              format="DD/MM/YYYY"
+              placeholder="DD/MM/YYYY"
+              style={{ width: '100%' }}
+            />
           </FgField>
           <FgField label="Số hợp đồng mới *">
             <FgInput value={contract} onChange={(e) => setContract(e.target.value)} placeholder="HĐTD/2026/..." />

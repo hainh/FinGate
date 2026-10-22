@@ -152,19 +152,33 @@ export interface ListTagsOptions {
   q?: string | null;
   /** Mặc định false: tag đã ẩn không xuất hiện trong gợi ý. */
   includeHidden?: boolean;
+  /** Bỏ qua n dòng đầu (trang kế tiếp, theo thứ tự tên chuẩn hoá). */
+  offset?: number;
   limit: number;
 }
 
-/** Danh sách / gợi ý tag (sắp theo tên chuẩn hoá) kèm số phiếu đang gắn. */
-export async function listTags(scope: ScopeLike, opts: ListTagsOptions): Promise<TagRow[]> {
+export interface TagListPage {
+  items: TagRow[];
+  /** Số dòng khớp bộ lọc, không tính offset/limit — để client biết còn trang nào. */
+  total: number;
+}
+
+/**
+ * Danh sách / gợi ý tag kèm số phiếu đang gắn, phân trang bằng `offset` + `limit`.
+ * Sắp theo tên chuẩn hoá, `_id` làm khoá phụ để thứ tự giữa các trang ổn định.
+ */
+export async function listTags(scope: ScopeLike, opts: ListTagsOptions): Promise<TagListPage> {
   const filter: Record<string, unknown> = {};
   if (opts.companyId) filter.company_id = oid(opts.companyId);
   if (!opts.includeHidden) filter.hidden = { $ne: true };
   const q = normalizeNameKey(opts.q ?? '');
   if (q) filter.name_key = { $regex: escapeRegex(q) };
-  const rows = await scopedFind<TagLean>(Models.Tag, scope, filter, { sort: { name_key: 1 }, limit: opts.limit });
+  const [rows, total] = await Promise.all([
+    scopedFind<TagLean>(Models.Tag, scope, filter, { sort: { name_key: 1, _id: 1 }, skip: opts.offset ?? 0, limit: opts.limit }),
+    scopedCount(Models.Tag, scope, filter),
+  ]);
   const usage = await tagUsageByIds(scope, rows.map((r) => String(r._id)));
-  return rows.map((r) => toTagRow(r, usage.get(String(r._id)) ?? 0));
+  return { items: rows.map((r) => toTagRow(r, usage.get(String(r._id)) ?? 0)), total };
 }
 
 /** Chi tiết một tag kèm số phiếu đang gắn. */

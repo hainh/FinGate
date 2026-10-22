@@ -47,6 +47,7 @@ import {
   wireMoney,
   type LoanStatus,
 } from './rules.ts';
+import { assertDisbursementNotChosenLoan, type StoredLoanChoice } from '../vouchers/rules.ts';
 import {
   assertInScope,
   assertPartner,
@@ -227,7 +228,7 @@ function buildLoan(b: LoanRaw, ctx: LoanCtx) {
     created_at: b.created_at ? isoOf(b.created_at) : null,
     updated_at: b.updated_at ? isoOf(b.updated_at) : null,
   };
-  return { item, status, outstanding, principal, disbursedPlanned };
+  return { item, status, outstanding, principal, disbursedPlanned, disbursedPaid: figures.disbursed };
 }
 
 /** Danh sách nợ ngân hàng. Khoản chờ giải ngân nằm trong danh sách ("Sắp giải ngân") nhưng KHÔNG vào dư nợ. */
@@ -254,7 +255,10 @@ export async function listLoans(scope: ScopeLike, q: { status?: string; partner_
     if (x.status === 'active' || x.status === 'overdue') outstanding += x.outstanding;
     if (x.status === 'pending_disbursement') {
       pendingCount += 1;
-      pendingAmount += x.principal - x.disbursedPlanned > 0n ? x.principal - x.disbursedPlanned : 0n;
+      // v2 §10.2: "Chờ giải ngân" = khoản đã lập & liên kết phiếu thu nhưng TIỀN CHƯA VỀ ⇒ gốc − đã giải ngân thực tế
+      // (không trừ phần mới "gán phiếu thu": khoản đã gán vẫn đang chờ giải ngân).
+      const notYetReceived = x.principal - x.disbursedPaid;
+      pendingAmount += notYetReceived > 0n ? notYetReceived : 0n;
     }
   }
   return {
@@ -808,6 +812,13 @@ export async function unassignLoanLink(
     if (doc?.status === 'paid') {
       throw new ApiError({ code: 'FG-WF-001', detail: 'Phiếu đã thực thi (tiền đã thu/chi) — không gỡ liên kết này; cần bút toán điều chỉnh' });
     }
+  }
+  // v2 §11.4 (b): giải ngân tới khoản vay ĐANG CHỌN trên phiếu thu — cùng quy tắc với gỡ từ phiếu (routes/documents.ts).
+  if (relation === 'disbursement') {
+    const src = validIds([link.from_id]).length
+      ? await Models.Document.findById(String(link.from_id)).select({ options: 1 }).lean<{ options?: { loan?: StoredLoanChoice | null } | null } | null>()
+      : null;
+    assertDisbursementNotChosenLoan(link, src?.options?.loan);
   }
   await removeLink({
     link_id: linkId,

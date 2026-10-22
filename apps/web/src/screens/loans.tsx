@@ -8,7 +8,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router';
-import { moneyFromWire } from '@fingate/shared';
+import { ddmmyyyy, moneyFromWire } from '@fingate/shared';
 import { useRolloverPreparation, useRollovers } from '../app/queries.ts';
 import { bankTotalsOf, originLabel, useLoanList, type BankTotalRow, type LoanRow } from '../app/v2/debts.ts';
 import { FgButton, FgMoneyStack, FgSelect, FgText, FgToneChip } from '../components/primitives.tsx';
@@ -122,7 +122,7 @@ function PendingDisbursementSection(): ReactNode {
                   { title: 'Gốc', dataIndex: 'principal', key: 'pr', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
                   { title: 'Đã gán giải ngân', dataIndex: 'disbursement_planned', key: 'dp', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
                   { title: 'Chưa gán', dataIndex: 'undisbursed', key: 'ud', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} emphasis /> },
-                  { title: 'Hạn thanh toán', dataIndex: 'maturity_date', key: 'md', render: (v: string) => v },
+                  { title: 'Hạn thanh toán', dataIndex: 'maturity_date', key: 'md', render: (v: string | null) => (v ? <span className="fg-num">{ddmmyyyy(v)}</span> : '—') },
                   {
                     title: 'Nguồn',
                     key: 'origin',
@@ -285,7 +285,7 @@ export function RolloverPreparationScreen(): ReactNode {
                   rowKey={(r) => `${r.date}-${r.label}`}
                   dataSource={d.rows}
                   columns={[
-                    { title: 'Ngày', dataIndex: 'date', key: 'date' },
+                    { title: 'Ngày', dataIndex: 'date', key: 'date', render: (v: string | null) => (v ? <span className="fg-num">{ddmmyyyy(v)}</span> : '—') },
                     { title: 'Khoản', dataIndex: 'label', key: 'label' },
                     { title: 'Gốc', dataIndex: 'principal', key: 'p', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
                     { title: 'Lãi', dataIndex: 'interest', key: 'i', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },

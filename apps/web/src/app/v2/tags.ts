@@ -29,7 +29,7 @@ export interface TagRef {
   hidden?: boolean;
 }
 
-/** Trần số dòng của GET /tags (contract `tagListQuery.limit` ≤ 500). */
+/** Cỡ một trang khi tải danh bạ: trần `limit` của GET /tags (contract `tagListQuery.limit` ≤ 500). */
 export const TAG_LIST_LIMIT = 500;
 
 /** Khoá cache danh bạ tag của một công ty. queryKey[1] là công ty (xem keepDataWithinScope). */
@@ -89,6 +89,37 @@ export function tagErrorMessage(e: unknown, fallback: string): string {
   return problem?.detail ?? problem?.title ?? fallback;
 }
 
+/** Một trang GET /tags: các dòng và `total` (số dòng khớp bộ lọc; null nếu phản hồi không kèm tổng). */
+export interface TagPage {
+  items: TagRow[];
+  total: number | null;
+}
+
+/**
+ * Gom đủ mọi trang của danh bạ (mỗi trang tối đa `TAG_LIST_LIMIT` dòng, sắp theo tên). Dừng khi đã đủ
+ * `total`, trang rỗng, hoặc trang không có dòng mới (server bỏ qua `offset`). Không cắt âm thầm: danh bạ
+ * có bao nhiêu tag thì trả đủ bấy nhiêu, để tìm / tra tên / kiểm trùng tên luôn đúng.
+ */
+export async function collectAllTagPages(fetchPage: (offset: number) => Promise<TagPage>): Promise<TagRow[]> {
+  const all: TagRow[] = [];
+  const seen = new Set<string>();
+  let offset = 0;
+  for (;;) {
+    const page = await fetchPage(offset);
+    if (!page.items.length) break;
+    let fresh = 0;
+    for (const t of page.items) {
+      if (seen.has(t._id)) continue;
+      seen.add(t._id);
+      all.push(t);
+      fresh++;
+    }
+    offset += page.items.length;
+    if (!fresh || (page.total !== null && all.length >= page.total)) break;
+  }
+  return all;
+}
+
 /* ---------------- đọc / ghi (React Query) ---------------- */
 
 /** Chấp nhận mảng thuần, `{items}` hoặc envelope `{data: …}`. */
@@ -102,9 +133,16 @@ function unwrapTags(raw: unknown): TagRow[] {
   return [];
 }
 
+/** Phản hồi GET /tags thành một trang: `{items, total}`, envelope `{data: …}` hoặc mảng thuần. */
+function unwrapTagPage(raw: unknown): TagPage {
+  const total = raw && typeof raw === 'object' ? (raw as { total?: unknown }).total : undefined;
+  return { items: unwrapTags(raw), total: typeof total === 'number' ? total : null };
+}
+
 /**
  * Toàn bộ tag của MỘT công ty, KỂ CẢ tag đã ẩn: để nhận diện trùng tên và tra tên/màu của tag
- * đã gắn. Việc lọc gợi ý theo `hidden` do giao diện quyết định.
+ * đã gắn. Việc lọc gợi ý theo `hidden` do giao diện quyết định. GET /tags trả tối đa 500 dòng mỗi
+ * lần, nên hook tải đủ mọi trang: tag ở bất kỳ vị trí nào đều tìm / sửa / gộp / ẩn được.
  */
 export function useCompanyTags(companyId: string | null | undefined) {
   return useQuery({
@@ -113,12 +151,13 @@ export function useCompanyTags(companyId: string | null | undefined) {
     staleTime: 30_000,
     // Không bắc cầu danh sách tag của công ty khác khi đổi công ty (tag không dùng chung giữa công ty).
     placeholderData: undefined,
-    queryFn: async () => {
+    queryFn: async (): Promise<TagRow[]> => {
       if (!companyId) return [];
-      const raw = await apiCall<unknown>('/tags', {
-        query: { company_id: companyId, scope: companyId, include_hidden: 'true', limit: TAG_LIST_LIMIT },
-      });
-      return unwrapTags(raw);
+      return collectAllTagPages((offset) =>
+        apiCall<unknown>('/tags', {
+          query: { company_id: companyId, scope: companyId, include_hidden: 'true', limit: TAG_LIST_LIMIT, offset },
+        }).then(unwrapTagPage),
+      );
     },
   });
 }

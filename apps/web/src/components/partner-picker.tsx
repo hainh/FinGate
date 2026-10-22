@@ -10,7 +10,7 @@
  * - Ngân hàng / STK / MST hiển thị CHỈ ĐỌC bên dưới ô; "Sửa đối tác" mở popup sửa (áp dụng cho mọi nơi dùng).
  */
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { Divider, Select } from 'antd';
 import {
   PARTNER_STATUSES,
@@ -27,6 +27,7 @@ import {
 import { ApiRequestError, uuid } from '../app/api.ts';
 import { useAuth } from '../app/store.tsx';
 import {
+  partnerOptionsEmptyState,
   useCreatePartner,
   usePartner,
   usePartnerDuplicateCheck,
@@ -37,6 +38,7 @@ import {
   type PartnerWriteBody,
 } from '../app/v2/partners.ts';
 import { useDebounced, useToast } from './pagekit.tsx';
+import { detailForValue, isSearchSettled, needsSelectedOption } from './partner-picker-options.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgText, FgTextarea } from './primitives.tsx';
 import { FgModal, FgSegmented } from './uitk.tsx';
 
@@ -145,7 +147,9 @@ export function PartnerFormModal({
       exclude_id: editing?._id ?? null,
     };
   }, [dupTextDebounced, companyId, editing?._id]);
-  const dupWarnings = usePartnerDuplicateCheck(dupInput).data?.warnings ?? [];
+  const dupCheck = usePartnerDuplicateCheck(dupInput);
+  // cảnh báo chỉ hiện khi đã kiểm ĐÚNG nội dung đang có: đang chờ debounce / đang kiểm tên mới ⇒ không hiện cảnh báo của chữ cũ
+  const dupWarnings = dupText === dupTextDebounced ? (dupCheck.data?.warnings ?? []) : [];
 
   const submit = async (): Promise<void> => {
     const trimmedName = name.trim();
@@ -336,10 +340,31 @@ function PartnerReadonly({ p }: { p: PartnerRef }): ReactNode {
   );
 }
 
+/** Lỗi tải danh sách gợi ý (thay cho "Không có đối tác phù hợp" trong dropdown) + nút thử lại. */
+function PartnerOptionsError({ onRetry }: { onRetry: () => void }): ReactNode {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--fg-space-2)', padding: '8px 12px' }}>
+      <span style={{ color: 'var(--fg-status-danger-text)' }}>Không tải được danh sách đối tác.</span>
+      <FgButton
+        size="small"
+        variant="text"
+        // giữ focus ở ô tìm (cùng lý do với nút trong chân dropdown)
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onRetry}
+      >
+        Thử lại
+      </FgButton>
+    </div>
+  );
+}
+
 export interface PartnerPickerProps {
   /** partner_id đang chọn (null = chưa chọn). */
   value: string | null;
-  /** Chọn / bỏ chọn. `partner` có khi vừa chọn từ danh sách hoặc vừa tạo mới. */
+  /**
+   * Chọn / bỏ chọn. `partner` có khi vừa chọn từ danh sách, vừa tạo mới, hoặc vừa sửa (bản mới nhất của đối tác,
+   * gọi với cùng `id` để form cha cập nhật loại / tên / NH / STK đang hiển thị).
+   */
   onChange: (id: string | null, partner?: PartnerRef) => void;
   /** Loại hợp lệ của chỗ đang dùng (VD khoản nợ NH chỉ `['bank']`). */
   allowedTypes: PartnerType[];
@@ -391,24 +416,34 @@ export function PartnerPicker({
     limit: 20,
   });
   const current = usePartner(value);
-  const selected: PartnerDetailData | undefined = value ? current.data : undefined;
+  // chi tiết CỦA đối tác đang chọn (không phải của đối tác trước còn trong bộ nhớ khi đang tải đối tác mới)
+  const selected: PartnerDetailData | undefined = detailForValue(value, current.data);
   const [dialog, setDialog] = useState<'create' | 'edit' | null>(null);
   const [createName, setCreateName] = useState('');
+  // chữ đang gõ được chụp khi người dùng chuyển sang nút "+ Tạo đối tác" (xem rememberTyped)
+  const typedForCreate = useRef('');
+  // dropdown do ta điều khiển: mở popup tạo/sửa thì phải đóng dropdown (không được đè lên popup)
+  const [open, setOpen] = useState(false);
   // đối tác vừa chọn / vừa tạo: hiển thị ngay, không chờ tải chi tiết
   const [known, setKnown] = useState<PartnerRef | null>(null);
   const cached = known && known._id === value ? known : undefined;
   const shown: PartnerRef | undefined = selected ?? cached;
 
-  const listed: PickerOption[] = (options.data?.items ?? []).map((p) => ({
+  // chữ đang gõ. Kết quả server chỉ đúng với chữ này khi đã qua debounce; trước đó là kết quả của chữ cũ ⇒ không hiện
+  const typed = search.trim();
+  const settled = isSearchSettled(typed, q);
+  const results = settled ? (options.data?.items ?? []) : [];
+  const listed: PickerOption[] = results.map((p) => ({
     value: p._id,
     label: <PartnerOptionLabel p={p} />,
     displayLabel: p.name,
     partner: p,
   }));
-  // đối tác đang chọn nhưng không nằm trong kết quả tìm (vd. vừa mở form có sẵn partner_id) → vẫn có nhãn
+  // đối tác đang chọn → vẫn có nhãn khi KHÔNG gõ mà chưa có trong kết quả (vd. form mở sẵn partner_id).
+  // Đang gõ thì không thêm, để không đứng đầu / được tô sáng khi không khớp chữ gõ (xem needsSelectedOption)
   const missingLabel = current.isError ? 'Không tải được đối tác' : 'Đang tải…';
   const missing: PickerOption[] =
-    value && !listed.some((o) => o.value === value)
+    value && needsSelectedOption(typed, value, results.map((p) => p._id))
       ? [
           {
             value,
@@ -419,8 +454,21 @@ export function PartnerPicker({
         ]
       : [];
   const allOptions: PickerOption[] = [...missing, ...listed];
+  // danh sách trống: đang chờ debounce / đang tải ⇒ "Đang tìm…"; LỖI tải (không báo là "không có đối tác"); thật sự không khớp
+  const emptyState = settled ? partnerOptionsEmptyState(options) : 'loading';
+  const emptyContent: ReactNode =
+    emptyState === 'loading' ? (
+      'Đang tìm…'
+    ) : emptyState === 'error' ? (
+      <PartnerOptionsError onRetry={() => void options.refetch()} />
+    ) : (
+      'Không có đối tác phù hợp'
+    );
 
+  // Chọn / bỏ chọn: xoá chữ đang gõ trong ô tìm. Ô tìm do `search` điều khiển (searchValue), nên xoá state
+  // là xoá luôn chữ hiển thị — và "+ Tạo đối tác" không còn điền lại tên đối tác vừa bỏ.
   const handleChange = (v: string | undefined): void => {
+    setSearch('');
     if (!v) {
       setKnown(null);
       onChange(null);
@@ -431,8 +479,19 @@ export function PartnerPicker({
     onChange(v, hit?.partner);
   };
 
+  // Nhấn chuột (hoặc Tab tới) nút "+ Tạo đối tác" ⇒ chụp chữ đang gõ NGAY, trước khi ô tìm mất focus.
+  // Lý do: nút nằm ngoài ô chọn nên rc-select đóng dropdown rồi XOÁ ô tìm (search = '') sau một macrotask;
+  // đọc `search` lúc click (sau khi nhấn giữ chuột) sẽ rỗng và Tên popup trống (v2/v2.md §5.2).
+  const rememberTyped = (): void => {
+    typedForCreate.current = search.trim();
+  };
+
   const openCreate = (): void => {
-    setCreateName(search.trim());
+    setCreateName(typedForCreate.current);
+    typedForCreate.current = '';
+    // mở popup: đóng dropdown và xoá chữ trong ô tìm (đã chuyển thành Tên ở trên)
+    setSearch('');
+    setOpen(false);
     setDialog('create');
   };
 
@@ -450,13 +509,26 @@ export function PartnerPicker({
             value={value ?? undefined}
             placeholder={placeholder ?? UI.partner.pickPlaceholder}
             options={allOptions}
+            // ô tìm do state này giữ (không để rc-select tự giữ): khớp với chữ dùng cho "+ Tạo đối tác"
+            searchValue={search}
             onSearch={setSearch}
             onChange={handleChange}
+            // Enter khi KHÔNG có dòng nào để chọn (đang tìm / không khớp / lỗi tải): rc-select sẽ đóng danh sách và xoá
+            // chữ đang gõ. Giữ lại để kết quả về sau đó, Enter chọn đúng dòng được tô sáng (v2/v2.md §5.2 "Gõ để tìm").
+            onInputKeyDown={(e) => {
+              if (e.key === 'Enter' && open && allOptions.length === 0 && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+            }}
+            // đóng dropdown khi popup tạo/sửa đang mở (dropdown không được đè lên popup)
+            open={open && dialog === null}
+            onOpenChange={setOpen}
             loading={options.isFetching}
             disabled={disabled || lockSelection}
             status={error ? 'error' : undefined}
-            notFoundContent={options.isFetching ? 'Đang tìm…' : 'Không có đối tác phù hợp'}
-            dropdownRender={(menu) => (
+            notFoundContent={emptyContent}
+            popupRender={(menu) => (
               <>
                 {menu}
                 <Divider style={{ margin: '4px 0' }} />
@@ -465,8 +537,11 @@ export function PartnerPicker({
                     variant="text"
                     block
                     disabled={disabled || !canWritePartner}
-                    // giữ focus ở ô tìm để không mất chữ đang gõ khi bấm nút
-                    onMouseDown={(e) => e.preventDefault()}
+                    // giữ focus ở ô tìm để không mất chữ đang gõ khi bấm nút; chụp chữ trước khi click
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      rememberTyped();
+                    }}
                     onClick={openCreate}
                   >
                     {search.trim() ? UI.partner.addNew(search.trim()) : '+ Tạo đối tác'}
@@ -482,7 +557,13 @@ export function PartnerPicker({
             Sửa đối tác
           </FgButton>
         ) : (
-          <FgButton disabled={disabled || !canWritePartner} onClick={openCreate}>
+          <FgButton
+            disabled={disabled || !canWritePartner}
+            // chụp chữ đang gõ khi nhấn chuột / Tab tới nút — trước khi rc-select xoá ô tìm (xem rememberTyped)
+            onMouseDown={rememberTyped}
+            onFocus={rememberTyped}
+            onClick={openCreate}
+          >
             + Tạo đối tác
           </FgButton>
         )}
@@ -523,6 +604,10 @@ export function PartnerPicker({
           onSaved={(r) => {
             setDialog(null);
             notifyPartnerWarnings(notification, r.warnings);
+            // Đối tác vừa sửa áp dụng cho mọi nơi đang dùng (v2 §5.1): bản chụp ở ô và form cha phải nhận bản mới
+            // (loại / tên / NH / STK). Không báo cho form cha thì loại cũ còn được dùng (VD quy tắc đi vay, §11.4).
+            setKnown(r.partner);
+            onChange(r.partner._id, r.partner);
           }}
         />
       ) : null}

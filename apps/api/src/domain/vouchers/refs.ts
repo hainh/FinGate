@@ -13,11 +13,22 @@
 
 import { ApiError, AUTOMATION_RULE_LABEL, type AutomationRuleCode } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
-import { listLinksFor, type LinkRecord, type LinkObjectType } from '../links/index.ts';
+import {
+  assertDocumentFreeForNewLoan,
+  assertLoanDisbursementCapacity,
+  listLinksFor,
+  removeLink,
+  type LinkActor,
+  type LinkRecord,
+  type LinkObjectType,
+} from '../links/index.ts';
+import { ensureManualLink } from '../automation/actions/link.ts';
+import { bankAccountLabelOf } from '../queries/index.ts';
 import {
   assertAmountEditAllowed,
   assertLenderBank,
   assertTagSelection,
+  assertTransferTargetAccount,
   assertTransferTargetFits,
   assertVoucherPartner,
   dedupeIds,
@@ -156,9 +167,56 @@ export function planToStoredLoan(plan: LoanPlan | null): Record<string, unknown>
 }
 
 /**
+ * "Gắn khoản vay đã có" (v2 §11.4 (b)): liên kết giải ngân do NGƯỜI DÙNG chọn được ghi NGAY khi lưu phiếu
+ * (nguồn Thủ công), không phụ thuộc quy tắc R2 đang bật/tắt. Đồng bộ theo lựa chọn ĐÃ LƯU TRƯỚC (`previous`)
+ * và lựa chọn MỚI (`plan`):
+ *  - chọn khoản có sẵn L ⇒ mọi giải ngân của phiếu tới khoản khác L bị gỡ (có lý do); ghi / đồng bộ số tiền tới L;
+ *  - không còn chọn khoản có sẵn (đổi sang "vay mới", "để sau", bỏ cờ vay) ⇒ gỡ liên kết Thủ công tới khoản có sẵn
+ *    đã chọn trước đó, để khoản vay không còn bị chiếm sức chứa (R2-20/21/22). Liên kết gán tay từ tab Liên kết
+ *    (không do lựa chọn này tạo ra) giữ nguyên.
+ * Khoản "vay mới" do R2 (quy tắc tự động) tạo và đồng bộ như trước.
+ */
+export async function linkChosenLoanOnSave(input: {
+  documentId: string;
+  /** kế hoạch đã lưu TRƯỚC lần lưu này (null khi lập mới). */
+  previous: LoanPlan | null;
+  plan: LoanPlan | null;
+  amountMinor: bigint;
+  actor: LinkActor;
+  requestId: string | null;
+}): Promise<void> {
+  const nextLoanId = input.plan?.kind === 'borrow' && input.plan.mode === 'existing' ? input.plan.existing_loan_id : null;
+  const prevLoanId = input.previous?.kind === 'borrow' && input.previous.mode === 'existing' ? input.previous.existing_loan_id : null;
+  for (const link of await listLinksFor('document', input.documentId, { scopeCompanyIds: null })) {
+    if (link.relation !== 'disbursement' || link.from_type !== 'document' || link.from_id !== input.documentId) continue;
+    if (link.to_type !== 'bank_debt' || link.to_id === nextLoanId) continue;
+    // chọn khoản có sẵn khác ⇒ gỡ mọi giải ngân tới khoản khác; không chọn nữa ⇒ chỉ gỡ liên kết Thủ công do lựa chọn cũ tạo
+    const released = nextLoanId !== null || (link.origin === 'manual' && link.to_id === prevLoanId);
+    if (!released) continue;
+    await removeLink({
+      link_id: link._id,
+      reason: nextLoanId ? 'Phiếu thu đổi khoản vay giải ngân' : 'Phiếu thu không còn gắn khoản vay có sẵn',
+      actor: input.actor,
+      scopeCompanyIds: null,
+      request_id: input.requestId,
+    });
+  }
+  if (!nextLoanId) return;
+  await ensureManualLink({
+    from: { type: 'document', id: input.documentId },
+    to: { type: 'bank_debt', id: nextLoanId },
+    relation: 'disbursement',
+    amountMinor: input.amountMinor,
+    actor: { user_id: input.actor.user_id, name: input.actor.name ?? null, role: input.actor.role ?? null },
+    requestId: input.requestId,
+  });
+}
+
+/**
  * Tuỳ chọn vay: kiểm quy tắc thuần (`planLoanOptions`) rồi kiểm bản ghi MỚI/ĐỔI — ngân hàng cho vay,
  * TK nhận giải ngân (phải là TK NGÂN HÀNG của công ty), khoản vay có sẵn (cùng ngân hàng, còn nhận giải ngân).
- * Chỉ kiểm bản ghi khi tham chiếu khác với `previous` (đã từng được chấp nhận).
+ * Chỉ kiểm bản ghi khi tham chiếu khác với `previous` (đã từng được chấp nhận). Sức chứa của khoản vay có sẵn
+ * kiểm MỖI lần lưu (FG-LINK-002), giải ngân của chính phiếu đang sửa (`voucherId`) không tính trùng.
  */
 export async function resolveLoanPlan(input: {
   companyId: string;
@@ -167,6 +225,8 @@ export async function resolveLoanPlan(input: {
   voucherAmountMinor: bigint;
   loan: LoanInput | null;
   previous: LoanPlan | null;
+  /** phiếu đang sửa (null khi lập mới). */
+  voucherId?: string | null;
 }): Promise<LoanPlan | null> {
   const plan = planLoanOptions(input.loan, {
     voucherKind: input.voucherKind,
@@ -189,6 +249,26 @@ export async function resolveLoanPlan(input: {
         errors: { 'options.loan.existing_loan_id': 'Chọn khoản vay của cùng ngân hàng đang chờ giải ngân hoặc đang vay' },
       });
     }
+  }
+  // Sức chứa khi LƯU (§11.4 (b), FG-LINK-002 như gán thủ công): giải ngân của khoản vay + số tiền phiếu ≤ gốc.
+  // Kiểm mọi lần lưu (số tiền phiếu có thể đổi), giải ngân của chính phiếu đang sửa không tính trùng.
+  if (plan.kind === 'borrow' && plan.mode === 'existing' && plan.existing_loan_id) {
+    await assertLoanDisbursementCapacity({
+      loanId: plan.existing_loan_id,
+      amountMinor: input.voucherAmountMinor,
+      excludeDocumentId: input.voucherId ?? null,
+    });
+  }
+  // Vay MỚI: khoản tự sinh (R2) giải ngân TOÀN BỘ số tiền phiếu ⇒ phiếu không được còn phân bổ khác (gán tay tới
+  // khoản có sẵn, cấn trừ…). Chặn ngay khi LƯU; nếu không lượt R2 sau lưu lỗi FG-LINK-002 và để lại khoản mồ côi.
+  // Không tính: liên kết giải ngân tự động (R2 đồng bộ lại) và liên kết gán tay tới khoản có sẵn CŨ (linkChosenLoanOnSave gỡ).
+  if (plan.kind === 'borrow' && plan.mode === 'new' && input.voucherId) {
+    const prevExistingLoanId = prev?.kind === 'borrow' && prev.mode === 'existing' ? prev.existing_loan_id : null;
+    await assertDocumentFreeForNewLoan({
+      documentId: input.voucherId,
+      amountMinor: input.voucherAmountMinor,
+      willResync: (l) => (l.origin === 'automation' && l.relation === 'disbursement') || (l.relation === 'disbursement' && l.origin === 'manual' && l.to_id === prevExistingLoanId),
+    });
   }
 
   if (plan.kind === 'fund') {
@@ -224,7 +304,7 @@ export interface TransferTargetPlan {
 }
 
 /**
- * Chuyển nội bộ theo ID (§11.6): công ty nhận khác công ty phiếu và tồn tại; TK đích (nếu có) là TK
+ * Chuyển nội bộ theo ID (§11.6): công ty nhận khác công ty phiếu và tồn tại; TK đích BẮT BUỘC và là TK
  * đang hoạt động của CHÍNH công ty nhận. Trả về null nếu phiếu không có đích nội bộ.
  */
 export async function resolveTransferTarget(input: {
@@ -239,6 +319,8 @@ export async function resolveTransferTarget(input: {
     account_id: strOrNull(input.target.account_id),
   };
   assertTransferTargetFits(input.kind, t, input.companyId);
+  // kiểm trước nhánh "không đổi": phiếu cũ thiếu TK cũng phải chọn TK khi lưu lại
+  assertTransferTargetAccount(t);
   const unchanged = Boolean(input.previous && input.previous.company_id === t.company_id && input.previous.account_id === t.account_id);
   if (unchanged) return t;
 
@@ -638,7 +720,9 @@ export async function buildVoucherRefView(doc: Record<string, unknown>, scopeCom
       ? Models.Partner.findOne({ _id: loanPlan.lender_partner_id, company_id: companyId } as never).lean<Record<string, unknown> | null>()
       : Promise.resolve(null),
     loanPlan?.receive_account_id
-      ? Models.BankAccount.findOne({ _id: loanPlan.receive_account_id, company_id: companyId } as never).select({ bank_name: 1, account_number: 1 }).lean<{ bank_name?: string; account_number?: string } | null>()
+      ? Models.BankAccount.findOne({ _id: loanPlan.receive_account_id, company_id: companyId } as never)
+          .select({ bank_name: 1, account_number: 1, account_name: 1 })
+          .lean<{ bank_name?: string; account_number?: string; account_name?: string } | null>()
       : Promise.resolve(null),
     loanPlan?.existing_loan_id
       ? Models.BankDebt.findOne({ _id: loanPlan.existing_loan_id, company_id: companyId } as never).select({ code: 1, status: 1 }).lean<{ code?: string; status?: string } | null>()
@@ -686,7 +770,7 @@ export async function buildVoucherRefView(doc: Record<string, unknown>, scopeCom
         // vay đi thu (borrow): ngân hàng cho vay CHÍNH LÀ đối tác của phiếu
         lender: loanPlan.kind === 'borrow' ? partner : partnerRefView(lenderRaw),
         receive_account_id: loanPlan.receive_account_id,
-        receive_account_label: accountRaw ? `${accountRaw.bank_name ?? ''} · ${accountRaw.account_number ?? ''}`.trim() : null,
+        receive_account_label: accountRaw ? bankAccountLabelOf(accountRaw) : null,
         amount_minor: loanPlan.amount_minor === null ? null : loanPlan.amount_minor.toString(),
         effective_amount_minor: effectiveLoanAmount(loanPlan, amountMinor).toString(),
         existing_loan_id: loanPlan.existing_loan_id,
@@ -702,7 +786,7 @@ export async function buildVoucherRefView(doc: Record<string, unknown>, scopeCom
         company_name: targetCompany?.name || null,
         company_code: targetCompany?.code || null,
         account_id: strOrNull(targetRaw.account_id),
-        account_label: targetAccountRaw ? `${targetAccountRaw.bank_name ?? ''} · ${targetAccountRaw.account_number ?? ''}`.trim() : null,
+        account_label: targetAccountRaw ? bankAccountLabelOf(targetAccountRaw) : null,
       }
     : null;
 

@@ -4,13 +4,14 @@
  * Tầng 01 Exception · 02 KPI · 03 biểu đồ thu-chi · 04 đáo hạn + dư nợ NH · 05 hàng chờ của tôi.
  * v2 (v2/v2.md §12): thêm top đối tác phải thu / phải trả, khoản vay "Chờ giải ngân",
  * lượt quy trình tự động lỗi. Số liệu 100% từ `/dashboard/overview` — FE zero logic tiền.
+ * v2 (§6.2): lọc theo tag (`?tag_ids=`) cho số liệu theo phiếu và thẻ "Theo tag" (nhóm theo tag).
  */
 
-import { Link } from 'react-router';
-import type { ReactNode } from 'react';
+import { Link, useSearchParams } from 'react-router';
+import { useMemo, type ReactNode } from 'react';
 import { addDays, moneyFromWire, relativeTime, today } from '@fingate/shared';
 import { useOverview, useReport, useRollovers } from '../app/queries.ts';
-import { useAuth } from '../app/store.tsx';
+import { SCOPE_ALL, useAuth } from '../app/store.tsx';
 import { automationAccess, overdueLabel, useCashflowForecast } from '../app/v2/exec.ts';
 import type { DashboardAutomationWire, DashboardLoansPendingWire, DashboardOverview, MoneyWire, PartnerExposureWire } from '../app/types.ts';
 import { FgAlert, FgButton, FgMoney, FgMoneyStack, FgStatusChip, FgText } from '../components/primitives.tsx';
@@ -19,6 +20,7 @@ import { FgEmptyState, FgSkeletonKpi, FgSkeletonTable } from '../components/uitk
 import { FgExceptionList, FgKpiCard, OwnerLine } from '../components/finance.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery } from '../components/pagekit.tsx';
+import { TagFilter } from '../components/tag-input.tsx';
 
 /* chart tối giản bằng SVG — không kéo lib plots vào initial bundle (budget 350KB) */
 function MiniBarChart({ chart }: { chart: NonNullable<import('../app/types.ts').ReportResult['chart']> }): ReactNode {
@@ -222,11 +224,97 @@ function AutomationFailedCard({ data, canOpen }: { data: DashboardAutomationWire
   );
 }
 
+/**
+ * `tag_ids` trên URL: chuỗi CSV → mảng ID (bỏ rỗng, bỏ trùng, bỏ mã sai định dạng). Lọc ở đây để một
+ * đường dẫn hỏng không làm API trả 422 và ẩn luôn thanh lọc (người dùng không còn cách bỏ lọc).
+ * Chuẩn hoá chữ thường như máy chủ (`OBJECT_ID_RE` chỉ nhận chữ thường).
+ */
+const parseTagParam = (value: string): string[] => [
+  ...new Set(
+    value
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => /^[0-9a-f]{24}$/.test(s)),
+  ),
+];
+
+/** Một nhóm của báo cáo "Theo tag" (`GET /reports/theo-tag`, v2 §12). */
+interface TagGroupWire {
+  tag: string;
+  companies: string;
+  company_count: number;
+  income: MoneyWire;
+  expense: MoneyWire;
+  documents: number;
+}
+
+/**
+ * Thẻ "Theo tag" (v2 §6.2, §12): thu – chi 30 ngày nhóm theo tag. Đang lọc → chỉ các tag đã chọn
+ * (phiếu có ít nhất một tag đã chọn). "Toàn tập đoàn" gộp các tag cùng tên đã chuẩn hoá.
+ */
+function TagBreakdownCard({ from, to, tagKey, filtered }: { from: string; to: string; tagKey: string | undefined; filtered: boolean }): ReactNode {
+  const report = useReport('theo-tag', { from, to, tag_ids: tagKey, limit: '8' });
+  return (
+    <FgCard title="Theo tag" extra={<Link to="/baocao/theo-tag" className="fg-link" style={{ fontSize: 12 }}>Báo cáo</Link>}>
+      <FgText style="caption" color="muted">
+        30 ngày tới · không gồm chuyển nội bộ
+      </FgText>
+      <FgQuery query={report} skeleton={<FgSkeletonTable rows={3} cols={3} />}>
+        {(r) => {
+          const groups = r.rows as unknown as TagGroupWire[];
+          if (!groups.length) {
+            return (
+              <FgEmptyState
+                glyph="◇"
+                title={filtered ? 'Chưa có phiếu gắn tag đã chọn' : 'Chưa có phiếu gắn tag'}
+                description="Gắn tag khi lập phiếu thu/chi để xem thu – chi theo tag."
+              />
+            );
+          }
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+              {groups.map((g) => (
+                <div key={g.tag} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <FgText style="bodyS" strong>
+                      {g.tag}
+                    </FgText>
+                    <br />
+                    <FgText style="caption" color="muted">
+                      {g.documents} phiếu{g.company_count > 1 ? ` · ${g.company_count} công ty` : ''}
+                    </FgText>
+                  </div>
+                  <FgText style="caption" color="muted">
+                    Thu <FgMoney value={moneyFromWire(g.income)} mode="compact" /> · Chi <FgMoney value={moneyFromWire(g.expense)} mode="compact" />
+                  </FgText>
+                </div>
+              ))}
+            </div>
+          );
+        }}
+      </FgQuery>
+    </FgCard>
+  );
+}
+
 export function DashboardScreen(): ReactNode {
-  const { me, can } = useAuth();
-  const overview = useOverview();
+  const { me, can, scope } = useAuth();
+  const [params, setParams] = useSearchParams();
+  // v2 §6.2: lọc theo tag. Tag thuộc từng công ty → ô chỉ mở khi chọn một công ty ("Toàn tập đoàn" khoá).
+  const tagCompanyId = scope === SCOPE_ALL ? null : scope;
+  const tagIds = useMemo(() => (tagCompanyId ? parseTagParam(params.get('tag_ids') ?? '') : []), [params, tagCompanyId]);
+  const tagKey = tagIds.length ? tagIds.join(',') : undefined;
+  const setTagIds = (ids: string[]) => {
+    const next = new URLSearchParams(params);
+    if (ids.length) next.set('tag_ids', ids.join(','));
+    else next.delete('tag_ids');
+    setParams(next);
+  };
+  const overview = useOverview(tagIds);
   // cửa sổ đúng 30 ngày (hôm nay → +29), khớp tiêu đề thẻ
-  const report = useReport('thu-chi-ngay', { from: today(), to: addDays(today(), 29) });
+  const windowFrom = today();
+  const windowTo = addDays(today(), 29);
+  const report = useReport('thu-chi-ngay', { from: windowFrom, to: windowTo, tag_ids: tagKey });
   const forecast = useCashflowForecast(30);
   const rollovers = useRollovers('30d');
   const access = automationAccess(can, me?.entitlements.role);
@@ -274,6 +362,33 @@ export function DashboardScreen(): ReactNode {
 
             {staleLong ? <FgAlert tone="attention" title={`Số liệu có thể cũ — cập nhật lúc ${new Date(ov.generated_at).toLocaleString('vi-VN')}`} /> : null}
 
+            {/* bộ lọc tag (v2 §6.2) — số liệu theo phiếu; tiền, công nợ, vay, đáo hạn không theo tag */}
+            <div className="fg-filterbar" style={{ alignItems: 'flex-end' }}>
+              <div style={{ minWidth: 260 }}>
+                <FgText style="caption" color="muted">
+                  Tag
+                </FgText>
+                <TagFilter value={tagIds} onChange={setTagIds} companyId={tagCompanyId} />
+              </div>
+              {tagIds.length ? (
+                <FgButton size="small" variant="ghost" onClick={() => setTagIds([])}>
+                  Bỏ lọc tag
+                </FgButton>
+              ) : null}
+            </div>
+            {tagIds.length ? (
+              <FgAlert
+                tone="neutral"
+                title="Số liệu theo phiếu đang lọc theo tag"
+                description="Áp dụng cho: dự kiến thu – chi hôm nay, chờ tôi duyệt, thiếu chứng từ, biểu đồ thu – chi và thẻ Theo tag. Tiền hiện có, dự báo, công nợ, vay ngân hàng và đáo hạn vẫn tính theo toàn công ty."
+                style={{ marginBottom: 'var(--fg-space-4)' }}
+              />
+            ) : tagCompanyId === null ? (
+              <FgText style="caption" color="muted">
+                Chọn một công ty để lọc theo tag (tag thuộc từng công ty). Thẻ “Theo tag” vẫn gộp các công ty theo tên tag.
+              </FgText>
+            ) : null}
+
             {/* tầng 01 — cần xử lý ngay */}
             <FgCard title={`Cần xử lý ngay${ov.exceptions.length ? ` (${ov.exceptions.length})` : ''}`} style={{ marginBottom: 'var(--fg-space-4)' }}>
               <FgExceptionList items={ov.exceptions.slice(0, 6)} />
@@ -316,6 +431,9 @@ export function DashboardScreen(): ReactNode {
                   }
                 </FgQuery>
               </FgCard>
+
+              {/* tầng 03a — nhóm theo tag (v2 §6.2, §12) */}
+              {can('report:view') ? <TagBreakdownCard from={windowFrom} to={windowTo} tagKey={tagKey} filtered={tagIds.length > 0} /> : null}
 
               {/* tầng 03b — tóm tắt dự báo 30 ngày (chi tiết ở /dong-tien?view=forecast) */}
               <FgCard title="Dự báo 30 ngày" extra={<Link to="/dong-tien?view=forecast" className="fg-link" style={{ fontSize: 12 }}>Chi tiết</Link>}>

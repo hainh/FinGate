@@ -7,6 +7,7 @@
  *    Quy tắc chưa có bộ xử lý trong tiến trình ⇒ bị bỏ qua (không tạo lượt chạy, sự kiện vẫn được đánh dấu xử lý).
  *  - SỰ KIỆN (DomainEvent, outbox) ⇒ `processPendingEvents()` nhận từng sự kiện bằng LEASE nguyên tử,
  *    khớp quy tắc, nhận/tạo LƯỢT CHẠY theo khoá idem `${rule}:${source}:${event}`, rồi chạy các bước chưa xong.
+ *    Lượt đang chạy trong lease ⇒ sự kiện CHỜ (chưa đánh dấu xử lý), được tiếp quản khi lượt quá lease.
  *  - BƯỚC là hàm idempotent: nhận `ctx.stepKey` (= `${idem_key}#${tên bước}`). Gọi lại không sinh trùng.
  *  - LỖI ⇒ lượt chạy `failed` + cảnh báo cho KTT. `rerunRun()` chỉ chạy các bước chưa xong.
  *  - AN TOÀN KHI CHẠY SONG SONG: nhận sự kiện và nhận lượt chạy đều là findOneAndUpdate có điều kiện;
@@ -315,8 +316,19 @@ export function outputsOf(records: StepRecord[]): StepContext['outputs'] {
   return out;
 }
 
+/**
+ * Nguyên nhân cụ thể của lỗi. `ApiError` có tiêu đề chung (VD "Dữ liệu không hợp lệ") còn nguyên nhân nằm ở
+ * `detail` / `errors` ⇒ ghi các nguyên nhân đó (bỏ trùng) để KTT biết cần làm gì; không có thì giữ tiêu đề.
+ */
+function errorCause(err: unknown): string {
+  if (!(err instanceof ApiError)) return err instanceof Error ? err.message : String(err);
+  const fieldErrors: string[] = Object.values(err.errors ?? {});
+  const causes = [err.detail, ...fieldErrors].filter((c): c is string => typeof c === 'string' && c.trim() !== '');
+  return causes.length ? [...new Set(causes)].join('; ') : err.message;
+}
+
 function errorMessage(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = errorCause(err);
   return msg.length > 500 ? `${msg.slice(0, 497)}...` : msg;
 }
 
@@ -398,6 +410,15 @@ async function claimRun(runId: unknown, from: ('pending' | 'failed')[], now: Dat
     { $set: { status: 'running', claimed_at: now, updated_at: now, error: null }, $inc: { attempts: 1 } },
     { returnDocument: 'after' },
   ).lean<RunRow | null>();
+}
+
+/** Lượt đang do một tiến trình giữ lease còn hiệu lực tại `now` (chưa quá `RUN_LEASE_MS` kể từ lúc nhận). */
+async function isRunLeased(runId: unknown, now: Date): Promise<boolean> {
+  const run = await Models.AutomationRun.findById(runId)
+    .select({ status: 1, claimed_at: 1 })
+    .lean<{ status: RunRow['status']; claimed_at: Date | null } | null>();
+  if (!run || run.status !== 'running' || !run.claimed_at) return false;
+  return new Date(run.claimed_at).getTime() > now.getTime() - RUN_LEASE_MS;
 }
 
 /** Lấy lượt chạy theo khoá idem; chưa có thì tạo (upsert). Va chạm unique ⇒ đọc lại. */
@@ -536,11 +557,19 @@ export async function executeRunSteps(
  * Xử lý sự kiện
  * ================================================================== */
 
-/** Nhận MỘT sự kiện chưa xử lý bằng lease (nguyên tử; hai tiến trình không nhận trùng). */
-async function claimNextEvent(now: Date): Promise<EventRow | null> {
+/**
+ * Nhận MỘT sự kiện chưa xử lý bằng lease (nguyên tử; hai tiến trình không nhận trùng).
+ * `exclude`: các sự kiện đang chờ lượt chạy trong vòng này — không nhận lại trong cùng vòng.
+ */
+async function claimNextEvent(now: Date, exclude: unknown[]): Promise<EventRow | null> {
   const staleBefore = new Date(now.getTime() - EVENT_LEASE_MS);
+  const filter = {
+    processed_at: null,
+    $or: [{ claimed_at: null }, { claimed_at: { $lt: staleBefore } }],
+    ...(exclude.length > 0 ? { _id: { $nin: exclude } } : {}),
+  };
   return Models.DomainEvent.findOneAndUpdate(
-    { processed_at: null, $or: [{ claimed_at: null }, { claimed_at: { $lt: staleBefore } }] },
+    filter as never,
     { $set: { claimed_at: now }, $inc: { attempts: 1 } },
     { sort: { created_at: 1 }, returnDocument: 'after' },
   ).lean<EventRow | null>();
@@ -551,11 +580,13 @@ interface EventCounters {
   runs_failed: number;
   runs_skipped: number;
   rules_without_handler: number;
+  /** Có lượt của quy tắc khớp đang chạy trong lease của tiến trình khác ⇒ sự kiện CHƯA xử lý xong, phải chờ. */
+  waiting: boolean;
 }
 
 /** Khớp quy tắc với một sự kiện và chạy từng quy tắc phù hợp. */
 async function processEvent(ev: EventRow): Promise<EventCounters> {
-  const counters: EventCounters = { runs_done: 0, runs_failed: 0, runs_skipped: 0, rules_without_handler: 0 };
+  const counters: EventCounters = { runs_done: 0, runs_failed: 0, runs_skipped: 0, rules_without_handler: 0, waiting: false };
   const view = eventView(ev);
   const rules = await Models.AutomationRule.find({
     enabled: true,
@@ -579,9 +610,13 @@ async function processEvent(ev: EventRow): Promise<EventCounters> {
 
     const idemKey = runKeyFor(rule.code, view.subject_id, ev.type, view.id, handler);
     const run = await getOrCreateRun(rule, handler.steps.map((s) => s.name), ev, view, idemKey);
-    const claimed = await claimRun(run._id, ['pending'], new Date());
+    const now = new Date();
+    const claimed = await claimRun(run._id, ['pending'], now);
     if (!claimed) {
-      // lượt đã xong, đang do tiến trình khác chạy, hoặc đã lỗi (chờ "Chạy lại") — không chạy lại tự động
+      // Lượt đã xong, hoặc đã lỗi (có cảnh báo, chờ "Chạy lại") ⇒ không còn việc tự động cho quy tắc này.
+      // Lượt đang nằm trong lease của một tiến trình khác ⇒ sự kiện CHƯA xong: không được đánh dấu xử lý,
+      // phải chờ để nhận lại khi lượt quá lease (nhánh tiếp quản của claimRun). Không chạy lại lượt lỗi tự động.
+      if (await isRunLeased(run._id, now)) counters.waiting = true;
       counters.runs_skipped++;
       continue;
     }
@@ -621,13 +656,17 @@ async function releaseEventAfterError(ev: EventRow, err: unknown): Promise<void>
 /**
  * Xử lý tối đa `limit` sự kiện chưa xử lý. An toàn khi gọi song song (cron + kick + HTTP).
  * Mỗi sự kiện được đánh dấu `processed_at` SAU KHI mọi quy tắc khớp đã xử lý xong (hoặc đã lỗi
- * có cảnh báo). Lượt lỗi không tự chạy lại — dùng `rerunRun`.
+ * có cảnh báo). Sự kiện còn lượt đang chạy trong lease thì CHƯA đánh dấu: nhả lease và được xét lại
+ * ở vòng sau; khi lượt quá lease, bộ máy tiếp quản lượt và chạy tiếp các bước còn lại. Lượt lỗi không
+ * tự chạy lại — dùng `rerunRun`.
  */
 export async function processPendingEvents(opts: { limit?: number; now?: Date } = {}): Promise<ProcessSummary> {
   const limit = opts.limit ?? BATCH_SIZE;
   const summary: ProcessSummary = emptySummary();
+  /** Sự kiện đang chờ lượt chạy — không nhận lại trong chính vòng này. */
+  const deferred: unknown[] = [];
   for (let i = 0; i < limit; i++) {
-    const ev = await claimNextEvent(opts.now ?? new Date());
+    const ev = await claimNextEvent(opts.now ?? new Date(), deferred);
     if (!ev) break;
     summary.events++;
     try {
@@ -636,14 +675,24 @@ export async function processPendingEvents(opts: { limit?: number; now?: Date } 
       summary.runs_failed += c.runs_failed;
       summary.runs_skipped += c.runs_skipped;
       summary.rules_without_handler += c.rules_without_handler;
-      await Models.DomainEvent.updateOne({ _id: ev._id } as never, { $set: { processed_at: new Date(), claimed_at: null } } as never).exec();
+      if (c.waiting) {
+        // Chưa xong: giữ "chưa xử lý" và nhả lease. Chờ lượt không phải là một lần thử lỗi ⇒ hoàn lại lần nhận.
+        deferred.push(ev._id);
+        await Models.DomainEvent.updateOne(
+          { _id: ev._id } as never,
+          { $set: { claimed_at: null }, $inc: { attempts: -1 } } as never,
+        ).exec();
+      } else {
+        await Models.DomainEvent.updateOne({ _id: ev._id } as never, { $set: { processed_at: new Date(), claimed_at: null } } as never).exec();
+      }
     } catch (err) {
       summary.errors++;
       console.error(`[automation] lỗi xử lý sự kiện ${ev.type}: ${errorMessage(err)}`);
       await releaseEventAfterError(ev, err);
     }
   }
-  // Khi hàng sự kiện rảnh: dọn lượt bị treo (tiến trình chết giữa chừng) để KTT chạy lại;
+  // Khi hàng sự kiện rảnh (kể cả sự kiện đang chờ lượt — chúng vẫn được đếm trong `events`, nên lượt đang
+  // chờ tiếp quản KHÔNG bị dọn trước): dọn lượt bị treo (tiến trình chết giữa chừng) để KTT chạy lại;
   // đối chiếu outbox (thao tác thiếu sự kiện) định kỳ, không quá một lần mỗi RECONCILE_EVERY_MS.
   if (summary.events === 0) {
     const now = opts.now ?? new Date();
@@ -668,6 +717,7 @@ let lastReconcileAt = 0;
 /**
  * Lượt 'running' đã quá lease (tiến trình trước dừng giữa chừng) ⇒ đánh dấu `failed` với lý do rõ ràng
  * và cảnh báo KTT (dedupe theo `run._id`). Sau đó "Chạy lại" (`rerunRun`) làm tiếp phần chưa xong.
+ * Ngoại lệ: lượt có sự kiện nguồn CHƯA xử lý được bỏ qua — sự kiện đó sẽ tiếp quản lượt (processPendingEvents).
  */
 export async function sweepStaleRuns(now: Date = new Date(), limit = 50): Promise<number> {
   const staleBefore = new Date(now.getTime() - RUN_LEASE_MS);
@@ -676,6 +726,9 @@ export async function sweepStaleRuns(now: Date = new Date(), limit = 50): Promis
     .lean<RunRow[]>();
   let swept = 0;
   for (const run of stale) {
+    // Sự kiện nguồn còn CHƯA xử lý ⇒ bộ máy sẽ nhận lại sự kiện và tiếp quản lượt này (processEvent → claimRun),
+    // nên không đánh dấu Lỗi sớm. Chỉ lượt mồ côi (sự kiện đã xử lý mà lượt vẫn treo) mới bị đánh dấu Lỗi.
+    if (run.event_id && (await Models.DomainEvent.exists({ _id: run.event_id, processed_at: null } as never))) continue;
     const res = await Models.AutomationRun.updateOne(
       { _id: run._id, status: 'running', claimed_at: { $lt: staleBefore } } as never,
       { $set: { status: 'failed', error: 'Lượt bị gián đoạn giữa chừng — cần chạy lại', claimed_at: null, updated_at: now } } as never,

@@ -254,9 +254,10 @@ Quy định bước: tên bước `^[a-z_]+$`, duy nhất trong quy tắc; hàm 
 
 - Sự kiện chưa xử lý (`processed_at: null`) → `processPendingEvents()`: nhận từng sự kiện bằng lease (`claimed_at`, 2 phút); với mỗi quy tắc **bật** (`enabled`) có `trigger_event` hoặc `trigger_events` chứa loại sự kiện, **có bộ xử lý đăng ký trong tiến trình**, đúng phạm vi công ty (`company_ids` rỗng = mọi công ty), không bị `company_overrides[].enabled=false`, và `condition` khớp ⇒ tạo/nhận lượt chạy theo `idem_key = ${rule}:${subject_id}:${event.type}` (unique), rồi chạy các bước **chưa xong**.
 - Quy tắc chưa có bộ xử lý ⇒ bị bỏ qua (không tạo lượt); sự kiện vẫn được đánh dấu xử lý. Vì vậy **đăng ký bộ xử lý trước khi bật quy tắc**.
+- Sự kiện chỉ được đánh dấu `processed_at` khi mọi quy tắc khớp đã xong (`done`) hoặc lỗi có cảnh báo (`failed`). Nếu lượt khớp đang `running` trong lease của tiến trình khác (hoặc của tiến trình đã chết, chưa quá 5 phút) ⇒ sự kiện **chờ**: nhả lease (không tính là một lần thử), không đánh dấu, và được xét lại ở mỗi vòng. Khi lượt quá lease, claimRun **tiếp quản** và chạy tiếp các bước chưa xong (khoản vay tự sinh tới ngay vòng kế tiếp, mặc định 5 giây).
 - Điều kiện (`matchCondition`): khoá là đường dẫn trong `{type, company_id, subject_type, subject_id, payload, actor}` (VD `"payload.kind": "spend"`), giá trị so **lỏng** theo chuỗi; toán tử `$eq $ne $in $nin $exists`; `{}`/null = luôn khớp.
-- Lượt lỗi: `status = failed`, dừng ở bước lỗi, ghi `steps[].error`, tạo **cảnh báo** `alert_type: 'automation_failed'` cho `chief_accountant` (dedupe theo `run._id`). Lượt lỗi KHÔNG tự chạy lại — gọi `rerunRun(runId)` (chỉ chạy bước chưa xong; cũng nhận lượt `running` đã quá lease 5 phút).
-- Lượt `running` mà tiến trình chết giữa chừng (quá lease 5 phút) được `sweepStaleRuns` đánh dấu `failed` (lý do "bị gián đoạn") khi hàng sự kiện rảnh, kèm cảnh báo; sau đó KTT chạy lại bình thường.
+- Lượt lỗi: `status = failed`, dừng ở bước lỗi, ghi `steps[].error` (với `ApiError` ghi **nguyên nhân** — `detail`/`errors`, không chỉ tiêu đề chung như "Dữ liệu không hợp lệ"), tạo **cảnh báo** `alert_type: 'automation_failed'` cho `chief_accountant` (dedupe theo `run._id`). Lượt lỗi KHÔNG tự chạy lại — gọi `rerunRun(runId)` (chỉ chạy bước chưa xong; cũng nhận lượt `running` đã quá lease 5 phút).
+- Lượt `running` mà tiến trình chết giữa chừng (quá lease 5 phút) được bộ máy tiếp quản tự động (xem trên). Chỉ khi sự kiện nguồn đã xử lý xong mà lượt vẫn treo (lượt mồ côi) thì `sweepStaleRuns` mới đánh dấu `failed` (lý do "bị gián đoạn") khi hàng sự kiện rảnh, kèm cảnh báo; sau đó KTT chạy lại bình thường.
 - Sự kiện lỗi ngoài dự kiến: nhả lease, `attempts++`; sau 5 lần ⇒ bỏ qua + cảnh báo `automation_event_failed`.
 - Chạy song song an toàn: nhận sự kiện và nhận lượt đều là `findOneAndUpdate` có điều kiện; `idem_key` unique. `drainAutomation()` gộp các lời gọi trong cùng tiến trình.
 
@@ -274,7 +275,7 @@ drainAutomation(): Promise<ProcessSummary>                              // gộp
 kickAutomation(): void                                                   // setImmediate sau khi ghi sự kiện
 executeRunSteps(run, rule, handler, view): Promise<'done'|'failed'>     // đã được claim
 rerunRun(runId: string): Promise<RunRow>                                // FG-AUTO-001 nếu không phải lượt lỗi
-sweepStaleRuns(now?, limit = 50): Promise<number>                    // lượt 'running' quá lease 5 phút ⇒ failed + cảnh báo; chạy khi hàng sự kiện rảnh
+sweepStaleRuns(now?, limit = 50): Promise<number>                    // lượt 'running' quá lease 5 phút, sự kiện nguồn đã xử lý ⇒ failed + cảnh báo; chạy khi hàng sự kiện rảnh
 ensureAutomationRules(now?): Promise<{ inserted: string[] }>            // seed R1,R2,R3,R4(tắt),R5,R6 — chỉ thêm quy tắc còn thiếu
 findRuleByCode(code)
 ```
@@ -375,7 +376,7 @@ Chưa có test tích hợp với MongoDB (hàm DB của links/engine chưa đư�
 
 | Route | Quyền | Ghi chú |
 | --- | --- | --- |
-| `GET /tags` | một trong `doc:read`, `tag:create`, `tag:manage` | query `company_id`, `q` (chứa, trên tên chuẩn hoá), `include_hidden=true` (chỉ `tag:manage`), `limit` ≤ 500. Trả `{items, total}`, mỗi dòng có `usage_count` |
+| `GET /tags` | một trong `doc:read`, `tag:create`, `tag:manage` | query `company_id`, `q` (chứa, trên tên chuẩn hoá), `include_hidden=true` (chỉ `tag:manage`), `limit` ≤ 500, `offset` (phân trang). Trả `{items, total}` (total = số dòng khớp, không tính phân trang), mỗi dòng có `usage_count` |
 | `GET /tags/:id` | như trên | `{data}` |
 | `POST /tags` | `tag:create` | `{company_id?, name, color?}`. 201 tạo mới; 200 (`created: false`) khi trùng tên đang hiện, trả tag đã có; 409 `FG-TAG-001` khi trùng tên nhưng đang ẩn |
 | `PATCH /tags/:id` | `tag:manage` | `{name?, color?, hidden?}`. Đổi tên trùng → 409 `FG-TAG-001`. Ẩn khi còn phiếu gắn → 422 `FG-VAL-001` |
@@ -433,6 +434,7 @@ Chỉ UI và hook phía web; không đổi API hay contract. Đã đối chiếu
 
 - TagInput: chip có màu và tên; gõ để lọc (bỏ khoảng trắng thừa, không phân biệt hoa thường); dòng "+ Tạo tag “…”" khi chưa có tên trùng và có `tag:create`; tối đa 50 tag mỗi phiếu. Trùng tên đang hiện → server trả tag đó, không tạo trùng. Trùng tên đang ẩn → báo cần Kế toán trưởng hiện lại.
 - Tag đã ẩn không được gợi ý (TagInput, TagPicker) nhưng vẫn hiển thị trên phiếu đã gắn.
+- Danh bạ được tải đủ mọi trang (`collectAllTagPages` trong `app/v2/tags.ts`, mỗi trang tối đa 500 dòng): tìm kiếm, sửa / gộp / ẩn, tra tên chip, lọc và kiểm trùng tên đều thấy tag ở mọi vị trí, không chỉ 500 tag đầu.
 - Màn Quản lý tag (KTT): bảng có số phiếu; tìm kiếm; lọc Tất cả / Đang dùng / Đã ẩn; Sửa tên và màu (chỉ gửi trường đã đổi); Ẩn / Hiện lại (nút Ẩn bị khoá khi tag còn phiếu gắn); Gộp…: chọn tag đích đang hiện, bước xác nhận nêu số phiếu sẽ chuyển. Tag nguồn bị ẩn chứ không xoá, và hiện lại được.
 - Phạm vi "Toàn tập đoàn": TagFilter và TagInput không có công ty nên bị khoá. Báo cáo hợp nhất theo tên chuẩn hoá (`name_key`) chưa có UI.
 
@@ -440,14 +442,14 @@ Chỉ UI và hook phía web; không đổi API hay contract. Đã đối chiếu
 
 | Thao tác | Kết quả | Lỗi |
 | --- | --- | --- |
-| GET `/tags?company_id&scope&include_hidden=true&limit=500` | `{items, total}`; include_hidden chỉ có tác dụng với `tag:manage` | — |
+| GET `/tags?company_id&scope&include_hidden=true&limit=500&offset=n` | `{items, total}` (total = số dòng khớp bộ lọc; trang kế tiếp bằng `offset`); include_hidden chỉ có tác dụng với `tag:manage` | — |
 | POST `/tags` | `{data: tag, created}`: 201 khi tạo mới, 200 khi trùng tên đang hiện | 409 FG-TAG-001 (trùng tên đang ẩn) |
 | PATCH `/tags/:id` | `{data: tag}` | 409 FG-TAG-001 (đổi trùng tên); 422 FG-VAL-001 (ẩn khi còn phiếu) |
 | POST `/tags/merge` | `{data: {documents_changed, target, …}}` | 422 nếu tag đích đang ẩn |
 
 ### 12.5 Chưa làm / lưu ý
 
-- Chưa nối TagInput vào form phiếu, danh sách phiếu, dashboard và báo cáo; thuộc các agent màn đó. Form phiếu cần gửi `tag_ids` và truyền `knownTags`.
+- Chưa nối TagInput vào form phiếu, danh sách phiếu và báo cáo; thuộc các agent màn đó (dashboard đã có ô lọc tag và thẻ "Theo tag", xem §16.2). Form phiếu cần gửi `tag_ids` và truyền `knownTags`.
 - Chưa có màn xem lịch sử tag. Server đã ghi audit `tag.create / tag.update / tag.hide / tag.unhide / tag.merge`.
 - Mục "Quản lý tag" nằm ở rail, chưa vào thanh tab Quản trị (`ADMIN_TABS` trong `screens/admin.tsx`, ngoài phạm vi được giao).
 - Bảng màu cố định nằm trong `app/v2/tags.ts`, có chú thích `eslint-disable` cho quy tắc `fg/no-raw-color`, vì mã hex là dữ liệu tag.
@@ -486,7 +488,7 @@ Chỉ UI và hook phía web; không đổi API hay contract. Đã đối chiếu
 - **`options.loan.amount_minor` = null** khi gốc bằng số tiền phiếu (vay đi theo số tiền phiếu, kể cả khi số tiền đổi lúc duyệt). Số tiền hiệu lực = `amount_minor ?? amount.minor`; khi đọc, có sẵn `effective_amount_minor`. Vay một phần thì giữ số đã ghi (phải > 0 và ≤ số tiền phiếu).
 - **`borrow`** (R2, phiếu thu): `lender_partner_id` = đối tác phiếu; `receive_account_id` = null; `mode` `new | existing | later`; `existing_loan_id` chỉ khi `existing`, và khoản đó phải cùng ngân hàng, cùng công ty, đang `pending_disbursement` hoặc `active`. Điều khoản `terms` lưu nguyên, không đặt mặc định ở đây.
 - **`fund`** (R3, phiếu chi): `mode` luôn `new`; `lender_partner_id` là đối tác loại Ngân hàng, đang hoạt động, cùng công ty; `receive_account_id` là TK **ngân hàng** đang hoạt động của công ty.
-- **Chuyển nội bộ**: chỉ phiếu chi (và `internal`); công ty nhận khác công ty phiếu và tồn tại; TK nhận (nếu có) thuộc công ty nhận và đang hoạt động. Lưu song song `transfer_target` và `target`.
+- **Chuyển nội bộ**: chỉ phiếu chi (và `internal`); công ty nhận khác công ty phiếu và tồn tại; TK nhận **bắt buộc** (theo ID, thuộc công ty nhận và đang hoạt động) — thiếu ⇒ 422 FG-VAL-001 (`transfer_target.account_id`) khi tạo / sửa, vì R1 cần TK để ghi phiếu thu sau khi tiền đã ra. Lưu song song `transfer_target` và `target`.
 - **Tag**: kiểm trực tiếp trong `tags` theo `company_id` (`domain/tags` hiện chỉ chuẩn hoá tên). Tag ẩn: giữ được nếu đã có trên phiếu, không gắn thêm. Tối đa 50.
 
 ### 13.4 Việc cần agent khác làm (ngoài phạm vi, đã kiểm tra)
@@ -620,6 +622,7 @@ Phạm vi: `v2/v2.md` §15 (M1–M6) và dữ liệu demo v2. Không đổi rout
 ```
 - Loại lọc sẵn (§5.2): phiếu thu/chi `['bank','customer','supplier']`; công nợ `['customer','supplier']`; khoản vay / vay để chi `['bank']`.
 - Chỉ chọn đối tác có sẵn (lưu `partner_id`). "+ Tạo đối tác" mở popup trên form (portal, không điều hướng): loại điền sẵn theo `defaultType`/`allowedTypes`, chữ đang gõ điền vào Tên. Lưu xong → chọn sẵn; huỷ → ô giữ nguyên. Cảnh báo trùng trả về sau khi lưu được hiện bằng thông báo (không chặn).
+- Gõ để tìm: danh sách chỉ gồm đối tác khớp chữ đang gõ (tên / STK / MST). Khi đang gõ, đối tác đang chọn KHÔNG được thêm vào danh sách (tránh Enter chọn lại đối tác cũ); trong lúc chờ debounce 300 ms hiện "Đang tìm…" thay vì kết quả của chữ cũ. Hàm thuần: `components/partner-picker-options.ts` (có test).
 - Ngân hàng / STK / MST hiển thị chỉ đọc dưới ô; "Sửa đối tác" mở popup sửa.
 
 ### 14.3 Tham số điều hướng (form phải đọc)
@@ -727,12 +730,14 @@ Body: `items: [{debt_voucher_id, amount_minor}]` (KH/NCC) hoặc `loans: [{bank_
 
 ### 16.2 Dashboard
 - `GET /dashboard/overview`: lấy bản cache `dashboardOverview` (queries) rồi dựng object MỚI (không sửa cache) với: `kpi.cash_total` (sổ cái; breakdown tiền mặt / ngân hàng / dự kiến 30 ngày), `exceptions` (vi phạm theo sổ cái), `bank.by_bank` (theo đối tác), `receivable_overdue` (theo hướng công nợ), và mới: `partners {top_receivable, top_payable, receivable_total, receivable_overdue_total, payable_total}`, `loans_pending {count, total, items}`, `automation {failed_count, items}`.
+- `GET /dashboard/overview?tag_ids=a,b` (v2 §6.2): lọc số liệu THEO PHIẾU theo tag (ít nhất một tag khớp) — `kpi.income_today`, `kpi.spend_today`, `kpi.awaiting_me` + `counts.awaiting_me` + `awaiting_me_rows` + cảnh báo chờ duyệt, `counts.missing_evidence`. Không gắn tag nên luôn toàn phạm vi: `kpi.cash_total`, dự báo, `partners`/công nợ, `bank`, đáo hạn, `loans_pending`, `automation`. ID sai định dạng → 422 FG-VAL-001. Khoá cache `overview`/`badge` có hậu tố tập tag (`domain/queries/dashboard-tags.ts`). Khoá `badge` (`domain/queries/badge-cache.ts`) còn gồm PHẠM VI công ty (`scopeCacheKey`): số "chờ tôi duyệt" đổi theo công ty đang chọn (US-APR-01). `invalidateFor` (route phiếu, sổ quỹ, `notifyNextApprover`) xoá toàn bộ badge; `cacheThrough` không ghi kết quả đọc dở khi có lần xoá xảy ra giữa chừng (`lib/cache.ts`). Ghi phiếu không đi qua các đường này (vd. quy tắc tự động tạo phiếu đã duyệt) chưa xoá badge: số có thể trễ tới `CACHE_TTL_MS` (60 giây).
+- Nhóm "Theo tag" trên dashboard dùng `GET /reports/theo-tag?from&to&tag_ids` (cùng cửa sổ 30 ngày với biểu đồ thu–chi, `tag_ids` lọc chung với biểu đồ qua `GET /reports/thu-chi-ngay`). FE: ô lọc `TagFilter` khoá ở "Toàn tập đoàn" (tag thuộc từng công ty), URL `?tag_ids=`.
 - `GET /dashboard/today`: số dư sổ cái.
 - `domain/reports/dashboard.ts`: `dashboardExtras`, `partnerExposures` (phải thu/phải trả còn lại = giá trị − phân bổ đã thực thi), `bankOutstandingByPartner`, `receivableOverdueTotal`.
 
 ### 16.3 Dự báo dòng tiền 7 / 30 / 60 / 90 ngày
 - `GET /cashflow/forecast?horizon=7|30|60|90&from=YYYY-MM-DD` (perm `forecast:read`). Trả `opening`, `min_balance`, `totals` (operating_in, disbursement_in, internal_in, operating_out, internal_out, loan_repayment_out, inflow, outflow, net, min_closing, end_closing), `days[]` (mỗi ngày: opening…closing, `breach`), `first_breach_date`, `shortfall_by_company`, `disbursements {dated, undated, undated_total}`, `repayments[]`.
-- Không đếm trùng: đầu kỳ = sổ cái đến hết `from`; dòng dự kiến KHÔNG gồm `paid`; khoản vay `pending_disbursement` chưa có phiếu thu trong pipeline nằm ở `undated`; lịch trả nợ (`buildSchedule`) chỉ lấy kỳ CHƯA đến hạn và trừ phần đã có phiếu trả nợ trong pipeline (`netInstallments`, xấp xỉ theo số tiền).
+- Không đếm trùng: đầu kỳ = sổ cái đến hết `from`; dòng dự kiến KHÔNG gồm `paid`; khoản vay `pending_disbursement` chưa có phiếu thu giải ngân CÓ HIỆU LỰC (liên kết `disbursement` tới phiếu trong pipeline hoặc đã thực thi; phiếu nháp / trả về chưa tính — `loansCoveredByReceipts`) nằm ở `undated`; lịch trả nợ (`buildSchedule`) chỉ lấy kỳ CHƯA đến hạn và trừ phần đã có phiếu trả nợ trong pipeline (`netInstallments`, xấp xỉ theo số tiền).
 - Hàm thuần: `buildForecastSeries`, `netInstallments`, `weekdayOf`, `parseHorizon`.
 
 ### 16.4 Cảnh báo
@@ -774,8 +779,8 @@ Body: `items: [{debt_voucher_id, amount_minor}]` (KH/NCC) hoặc `loans: [{bank_
 - **Bước dùng chung** (`domain/automation/actions/`): `createAutoVoucher` (create_voucher: phiếu ĐÃ DUYỆT, kế thừa chuỗi duyệt, `origin`, lịch sử `auto_create`, audit, `voucher.created`); `executeAutoVoucher` (execute_voucher: gọi đúng `transition(pay)` — sổ cái, lịch sử, audit, `voucher.paid`; `request_id` = khoá bước); `createAutoLoan` / `syncAutoLoan` / `activateLoan` / `cancelLoan` / `reviveLoan` (create_loan · activate_loan · huỷ khoản vay, theo quy ước route nợ NH: mã NHD, lịch sử, audit, `loan.created`); `ensureAutomationLink` (link: `createLink`/`removeLink`, idempotent, đổi số tiền ⇒ gỡ rồi tạo lại); `raiseAutomationAlert` (notify/alert, chống lặp bằng `dedupe_key`).
 - **Quy tắc** (`domain/automation/rules/`):
   - R1 `r1-internal-transfer.ts` — `voucher.paid` phiếu chi có `transfer_target` (theo ID): tạo phiếu thu đã duyệt ở công ty đích → thực thi → `internal_transfer`. Không đọc chuỗi "Mã công ty - NH - STK" nữa.
-  - R2 `r2-borrow-receipt.ts` — `options.loan.kind=borrow`: mode `new` tạo khoản vay (gốc = số tiền phiếu, đối tác ngân hàng bắt buộc, kỳ hạn 12 tháng, hạn mặc định = ngày gốc + 11 tháng; `r2_create_at` = save|approve); phiếu còn trước duyệt ⇒ đồng bộ đối tác / gốc / điều khoản / liên kết mỗi lần sửa; mode `existing` ⇒ gắn `disbursement` vào khoản có sẵn (kiểm công ty, đối tác, sức chứa qua `createLink`); `later` ⇒ không làm gì (huỷ khoản tự sinh chưa giải ngân nếu đổi lựa chọn). Khi `paid` ⇒ khoản vay `Đang vay`, ngày giải ngân = ngày thực thi, gốc = số thực thu (khoản tạo tay giữ gốc).
-  - R3 `r3-fund-by-loan.ts` — `voucher.approved` phiếu chi `options.loan.kind=fund`: create_loan (khoản vay + `funded_by`; số tiền theo `resolveLoanAmount`) → create_voucher (phiếu thu đã duyệt, kế thừa chuỗi duyệt, nội dung "(Tự động) Giải ngân vay cho phiếu chi …") → link (`generated` chi→thu, `disbursement` thu→vay) → execute_voucher (ngày = ngày duyệt cuối của phiếu chi) → activate_loan. Phiếu chi giữ `Đã duyệt`.
+  - R2 `r2-borrow-receipt.ts` — `options.loan.kind=borrow`: mode `new` tạo khoản vay (gốc = số tiền phiếu, đối tác ngân hàng bắt buộc, kỳ hạn 12 tháng, hạn mặc định = ngày gốc + 11 tháng; `r2_create_at` = save|approve); phiếu còn trước duyệt ⇒ đồng bộ đối tác / gốc / điều khoản / liên kết mỗi lần sửa; mode `existing` ⇒ gắn `disbursement` vào khoản có sẵn với nguồn **Thủ công** (`ensureManualLink`, không lượt chạy; kiểm công ty, đối tác qua `createLink`). Liên kết này do NGƯỜI DÙNG chọn nên được ghi NGAY khi lưu phiếu (`linkChosenLoanOnSave`, `routes/documents.ts` POST/PATCH, `domain/vouchers/refs.ts`), không phụ thuộc quy tắc R2 bật/tắt; sức chứa khoản vay (gốc, trừ chính phiếu đang sửa) được kiểm ngay trong `resolveLoanPlan` → `assertLoanDisbursementCapacity` (FG-LINK-002, 422) trước khi lưu; khoản tự sinh ghi nguồn Tự động; `later` ⇒ không làm gì (huỷ khoản tự sinh chưa giải ngân nếu đổi lựa chọn). Khi `paid` ⇒ khoản vay `Đang vay`, ngày giải ngân = ngày thực thi, gốc = số thực thu (khoản tạo tay giữ gốc). `linkChosenLoanOnSave` nhận kế hoạch ĐÃ LƯU (`previous`): đổi từ "khoản có sẵn" sang vay mới / để sau / bỏ cờ ⇒ gỡ liên kết Thủ công tới khoản đó (R2-20/21/22; liên kết gán tay từ tab Liên kết giữ nguyên). Bước `link` của mode `existing` và bước `activate_loan` chỉ liệt kê khoản do R2 SINH RA là "đã tạo" (panel Quy trình tự động); khoản người dùng chọn không được liệt kê như đối tượng sinh ra.
+  - R3 `r3-fund-by-loan.ts` — `voucher.approved` phiếu chi `options.loan.kind=fund`: create_loan (khoản vay + `funded_by`; số tiền theo `resolveLoanAmount`) → create_voucher (phiếu thu đã duyệt, kế thừa chuỗi duyệt, nội dung "(Tự động) Giải ngân vay cho phiếu chi …") → link (`generated` chi→thu, `disbursement` thu→vay) → execute_voucher (ngày = ngày duyệt cuối của phiếu chi) → activate_loan. Phiếu chi giữ `Đã duyệt`. Màn duyệt / decision-pack (`domain/queries` `pendingFundingInflowFor`): trước duyệt cuối, khoản giải ngân về TK nguồn (TK nhận = TK nguồn, R3 đang bật, chưa có phiếu thu R3) được cộng vào «Sau giao dịch» vì chưa vào sổ cái; đã duyệt cuối (khoản đã nằm trong sổ) thì không cộng thêm.
   - R4 `r4-loan-settled.ts` — `loan.settled` ⇒ cảnh báo nhắc lưu trữ / giải chấp TSĐB. Tắt mặc định.
   - R5 `r5-recurring.ts` + `domain/recurring/index.ts` — tác vụ `recurring` nay chỉ phát `schedule.recurring` (mỗi khoản, mỗi kỳ; không phát trùng khi sự kiện đang chờ); R5 tạo phiếu nháp qua `createRecurringDraft` (idempotent theo lịch sử `recurring_materialize`, đối tác theo `partner_id`, đứng tên KTT của công ty). Nhắc 7/3/1 ngày vẫn ở tác vụ này.
   - R6 `r6-cancel-generated.ts` — `voucher.cancelled` / `rejected` (chỉ khi trạng thái hiện tại vẫn huỷ/từ chối; đã gửi lại thì bỏ qua): khoản do quy tắc sinh và chưa có tiền ⇒ huỷ; khoản tạo tay ⇒ chỉ gỡ liên kết; đã có tiền ⇒ chỉ cảnh báo KTT (`automation_money_moved`), không tự huỷ.
@@ -806,7 +811,7 @@ Body: `items: [{debt_voucher_id, amount_minor}]` (KH/NCC) hoặc `loans: [{bank_
 1. **`routes/documents.ts`** (POST/PATCH): phải GHI `options.loan` (cần map `amount_minor` → BigInt, `terms`), `transfer_target` (`{company_id, account_id}`) và phát `voucher.updated` với `options` MỚI (payload `loan_kind` lấy từ phiếu truyền vào). Chưa có các trường này thì R1/R2/R3 không chạy.
 2. **Cờ v1 `create_bank_debt`** không còn sinh khoản vay (đường v1 đã bỏ). Phiếu đang dở cần chuyển sang `options.loan` (mode `new`) — quyết định của route/migration, không tự động.
 3. **Chuyển nội bộ v1 theo chuỗi** không còn tự sinh phiếu thu: cần đặt `transfer_target` khi lập phiếu chi (`finance.ts` / `documents.ts`).
-4. Khoản vay chưa có trường số HĐ tín dụng và TSĐB: hai thông tin này được ghi vào `note` của khoản vay sinh tự động.
+4. ~~Khoản vay chưa có trường số HĐ tín dụng và TSĐB: hai thông tin này được ghi vào `note` của khoản vay sinh tự động.~~ — ĐÃ XỬ LÝ: R2/R3 ghi `contract_no` / `collateral` (`termFields`); sửa phiếu trước duyệt đồng bộ hai trường này (`syncAutoLoan`, `changedFieldsOf`); ghi chú khoản vay tự sinh chỉ còn nguồn sinh và không bị ghi đè khi đồng bộ.
 5. R1 không tạo liên kết `generated` (ràng buộc `generated` là cùng công ty); chỉ có `internal_transfer`.
 6. R2 phụ thuộc route PATCH phát `voucher.updated` đúng (xem 1). Bỏ cờ vay khi phiếu còn chờ duyệt chưa tự huỷ khoản chờ giải ngân (quy tắc chỉ chạy khi `loan_kind=borrow`).
 7. Lượt R2 sinh một lượt cho mỗi lần sửa phiếu vay (có thể nhiều dòng trong panel; mặc định ẩn lượt "bỏ qua").
@@ -836,14 +841,14 @@ Body: `items: [{debt_voucher_id, amount_minor}]` (KH/NCC) hoặc `loans: [{bank_
 **Endpoint đã đối chiếu** (`routes/debt.ts`, `routes/bank-debt.ts`): `GET /debts`, `/debts/aging`, `/debts/:id`, `/debts/:id/link-candidates`; `POST /debts`, `/debts/:id/links`; `PATCH|DELETE /debts/:id`; `DELETE /debts/:id/links/:linkId` (body `{reason}`); `GET /bank-debts`, `/bank-debts/:id`, `/:id/schedule`, `/:id/disbursement-candidates`, `/:id/repayment-candidates`; `POST /bank-debts`, `/bank-debts/import` (dòng: `partner_code`), `/:id/cancel`, `/:id/archive`, `/:id/disbursements`, `/:id/repayments` (`amount_minor` + `split`); `PATCH|DELETE /bank-debts/:id`; `DELETE /bank-debts/:id/disbursements|repayments/:linkId`; `GET /rollovers`, `/rollovers/preparation` (đọc `balance`).
 
 **Hành vi trên màn**
-- Công nợ: đối tác chọn bằng `PartnerPicker` (KH / NCC); hướng chọn bằng hai nút Phải thu / Phải trả, không suy từ loại đối tác; TK hiển thị theo loại đối tác (131 / 331). `?partner_id`, `?direction` (và `?side` của v1) điền sẵn form. Khoản đã có cấn trừ khoá đổi đối tác / hướng. Nhân viên (334) chỉ đọc. Chi tiết: bảng cấn trừ (mã phiếu, trạng thái phiếu, số tiền phân bổ, "Đã cấn trừ" chỉ khi phiếu đã thực thi, "Chờ thực thi — chưa trừ" nếu chưa, nguồn Thủ công/Tự động), dialog gán phiếu cùng đối tác đúng loại (tuỳ chọn số tiền), gỡ cấn trừ có lý do ≥ 5 ký tự, còn lại / quá hạn / nhóm tuổi nợ do server trả về.
+- Công nợ: đối tác chọn bằng `PartnerPicker` (KH / NCC); hướng chọn bằng hai nút Phải thu / Phải trả, không suy từ loại đối tác; TK hiển thị theo loại đối tác (131 / 331). `?partner_id`, `?direction` (và `?side` của v1) điền sẵn form. Khoản đã có cấn trừ khoá đổi đối tác / hướng. Nhân viên (334) chỉ đọc. Chi tiết: bảng cấn trừ (mã phiếu, trạng thái phiếu, số tiền phân bổ, "Đã cấn trừ" chỉ khi phiếu đã thực thi, "Chờ thực thi — chưa trừ" nếu chưa, "Không còn hiệu lực" nếu phiếu đã huỷ / từ chối / hết hạn, nguồn Thủ công/Tự động), dialog gán phiếu cùng đối tác đúng loại (tuỳ chọn số tiền), gỡ cấn trừ có lý do ≥ 5 ký tự, còn lại / quá hạn / nhóm tuổi nợ do server trả về.
 - Nợ NH: đối tác là ngân hàng (`PartnerPicker` chỉ loại Ngân hàng), bỏ ô tên / chi nhánh tự do. Trạng thái: nhãn và màu lấy từ `BANK_DEBT_STATUS_REGISTRY` ("Chờ giải ngân", "Đã huỷ", …). Chi tiết: chuỗi đầy đủ (phiếu chi được tài trợ, phiếu thu giải ngân, phiếu chi trả nợ kèm gốc / lãi / phí); badge "Tự động" + liên kết phiếu nguồn khi khoản do quy tắc sinh. Gán phiếu trả nợ: nhập tổng, lãi, phí; gốc = tổng − lãi − phí (âm ⇒ báo lỗi), gửi kèm `split`. Huỷ (chỉ khi chờ giải ngân, bắt buộc lý do), lưu trữ (khi tất toán).
 - Bảng đáo hạn: dư nợ và bảng đáo hạn chỉ có khoản đang vay / quá hạn (server đã lọc). Mục "Sắp giải ngân" lấy `GET /bank-debts?status=pending_disbursement`, hiện tổng và số khoản, không cộng vào dư nợ.
 - Nhập theo lô (.tsv): cột 1 là MÃ đối tác ngân hàng (DT-…); mã được đối chiếu với danh sách ngân hàng đang hoạt động ngay ở bước xem trước. Không khớp theo tên.
 
 **Chưa làm / lưu ý**
 1. Bảng mẫu Google Sheets cũ có cột tên ngân hàng ở cột 1; người dùng cần đổi sang mã DT-… (hình hướng dẫn cũ đã bỏ, không có hình mới).
-2. Số hợp đồng tín dụng, TSĐB của khoản vay chưa có trường riêng (schema không có) — đang nhập vào ghi chú.
+2. ~~Số hợp đồng tín dụng, TSĐB của khoản vay chưa có trường riêng (schema không có) — đang nhập vào ghi chú.~~ — ĐÃ XỬ LÝ: khoản vay có `contract_no` và `collateral` (R2/R3 ghi vào trường riêng).
 3. Liên kết `funded_by` (phiếu chi được tài trợ) chỉ hiển thị; không có nút gán tay (đi qua quy tắc R3).
 4. ~~Dư nợ trong bảng đáo hạn còn tính `repayment_links` v1~~ — ĐÃ XỬ LÝ (§20.1): `maturityLadder` dùng `business_links`.
 5. Tuổi nợ có cả khoản nhân viên (TK 334, chỉ đọc) vì API không lọc mặc định.
@@ -1029,7 +1034,7 @@ Các mục trên (§12, §14) vẫn đúng ngoài các điểm dưới đây; m�
 - **Quyền trả nợ** (`routes/partners.ts`): có khoản KH/NCC ⇒ cần `debt:write`; có khoản vay NH ⇒ cần `loan:read` + `loan:write`. Nút "Trả nợ" trên web dùng cùng điều kiện (`canSettleOf`).
 - **Số liệu theo quyền** (danh sách và chi tiết): `summaryVisibilityOf(perms)` — thiếu `debt:read` ⇒ null cột phải thu / phải trả / quá hạn; thiếu `loan:read` hoặc `bank:read` ⇒ null dư nợ / đáo hạn; thiếu `doc:read` ⇒ null tổng thu / chi.
 - **Xoá đối tác**: kiểm lại sau khi xoá; nếu có phát sinh vừa ghi (đua) thì khôi phục đúng bản ghi cũ (`insertOne`, cùng `_id`, lịch sử) và báo `FG-PARTNER-002`.
-- **Trùng số TK** (`duplicates.ts`): `accountSearchPattern` — mẫu regex bỏ phân cách (khoảng trắng . - _ /) và không phân biệt hoa thường, thay cho danh sách biến thể `$in`. Không cần cột khoá chuẩn hoá hay backfill.
+- **Trùng số TK** (`duplicates.ts`): `accountSearchPattern` — mẫu regex bỏ phân cách (khoảng trắng . - _ /) và không phân biệt hoa thường, thay cho danh sách biến thể `$in`. Không cần cột khoá chuẩn hoá hay backfill. Ô tìm đối tác và danh bạ (`partnerFilter`) cho STK / MST dùng `identifierSearchPattern` (cùng quy tắc, khớp đoạn bất kỳ): gõ `123456789012` vẫn tìm thấy STK `123-456 789 012`.
 - **Kiểm trùng trước khi lưu**: `POST /partners/check-duplicates` (`partner:write`, chỉ đọc, `exclude_id` khi sửa) + cảnh báo inline trong popup (debounce 500 ms). Cảnh báo sau khi lưu vẫn giữ.
 - **Sao chép**: danh sách công ty nguồn lấy từ `me.companies` (công ty được gán; toàn tập đoàn ⇒ mọi công ty đang hoạt động), loại công ty đang chọn. Danh sách nguồn có tìm kiếm (`q`) và phân trang 50/trang (API `limit` ≤ 200).
 - **Đối tác ngừng giao dịch**: các thao tác Thu / Chi / Ghi nợ / Trả nợ bị vô hiệu hoá, lý do ghi trên nhãn (danh sách) hoặc nút (chi tiết, cùng banner sẵn có).
@@ -1057,7 +1062,7 @@ Phạm vi: dashboard, dòng tiền & dự báo, cảnh báo, bản tin, báo cá
 - **Phải thu quá hạn một con số theo HƯỚNG** công nợ: `partners.receivable_overdue_count` (`domain/reports/dashboard.ts`) → mục "khoản phải thu quá hạn" của "Cần xử lý ngay" và `counts.overdue_receivable` (`routes/dashboard.ts` ghi đè bản cache). Quick link "Công nợ quá hạn" → `/cong-no?direction=receivable&overdue_only=true`. Cảnh báo `receivable_overdue` cũng loại nhân viên (TK 334).
 - **Nhân viên (TK 334)** không vào phải thu / phải trả theo đối tác, báo cáo công nợ theo đối tác, cảnh báo phải thu quá hạn (`party_type ≠ employee`).
 - **Tài khoản đã đóng**: dashboard và bản tin tính số dư sổ cái của tài khoản đã đóng (`includeClosed`), khớp số dư đầu kỳ dự báo; cảnh báo dưới ngưỡng bỏ tài khoản đã đóng.
-- **Cache phần bổ sung dashboard** 20 giây theo `dash-extras:<phạm vi>:<ngày>` (cùng TTL với phần cơ sở).
+- **Cache phần bổ sung dashboard** 20 giây theo `dash-extras:<phạm vi>:<ngày>` (cùng TTL với phần cơ sở); `invalidateFor` cũng xoá khoá này sau mutation.
 - **Danh sách cảnh báo** `GET /alerts` lọc theo `to_roles` của người xem; bản ghi không có `to_roles` hiện cho ai có quyền xem (như v1).
 - **R6** (`domain/automation/rules/r6-cancel-generated.ts`) phát `source_cancelled_with_money` severity 3 qua `raiseAlert` (có fan-out và nhãn). Bản ghi R6 cũ `automation_money_moved` có nhãn trong `GET /alerts`.
 - **Báo cáo** (`domain/reports/index.ts`):
@@ -1105,6 +1110,7 @@ Sửa các gap đã xác minh trong khu vực phiếu thu/chi và tag. Phần ch
 ### 22.1 Server
 
 - **Duyệt vượt cấp (§7.2)** — `domain/workflow/index.ts` `transition()`: bước của mình còn `waiting` (và có cấp `current` phía dưới) ⇒ chỉ `approve_with_reason` được; `approve` thường trả FG-WF-002. Duyệt vượt cấp đặt `steps[].fast_tracked` và `override.fast_tracked` (chỉ khi là duyệt vượt cấp). `domain/workflow/state-machine.ts` `applyDecision(steps, order, decision, { fastTrack })`: chỉ bỏ qua (`skipped`) cấp dưới khi duyệt vượt cấp tới cấp cao nhất; không đẩy cấp chờ thành `current` khi đã có cấp `current`. `domain/entitlement/index.ts`: `can.approve` chỉ khi bước của mình là `current`; `can.fast_track` khi bước của mình đang `waiting`.
+- **Khuyết chức danh & đẩy cấp (§7.2)** — `domain/workflow/index.ts` `assignUsers` + `dropVacantSteps`: cấp không có người bị bỏ khỏi chuỗi, KHÔNG thêm cấp ngoài ma trận (CTA khuyết PGĐ, khoản < 50 triệu ⇒ KTT là cấp cuối). Chỉ khi cả chuỗi không còn ai có người phụ trách thì bước CAO NHẤT được đẩy lên cấp cao hơn còn người (`state-machine.ts` `escalatedTopRole`). Chủ tịch KHÔNG được đẩy lên chỉ vì cấp dưới khuyết: chỉ vào chuỗi khi vượt ngưỡng (`withChairman`, `matrix.ts`), hoặc khi cả chuỗi không còn ai có người phụ trách (tránh duyệt xong ngay khi gửi). Chuỗi mặc định phiếu chi theo khoảng tiền khi chưa có dòng ma trận khớp (`defaultSpendSteps`, `matrix.ts`): < 50 triệu KTT → PGĐ; 50 triệu – 5 tỷ KTT → PGĐ → GĐ; > 5 tỷ thêm P.TGĐ. Test: `assign-users.test.ts`, `state-machine.test.ts`, `matrix.test.ts`.
 - **Quyền hành động không phải quyết định** — `queue_payment` cần `payment:mark` (FG-RBAC-001), như `pay`.
 - **Thực thi phiếu chi (§6.3, §8)** — số thực chi không vượt số đã duyệt (FG-VAL-001); thấp hơn thì bắt buộc lý do ≥ 5 ký tự (FG-WF-004), ghi vào lịch sử (`domain/vouchers/lifecycle.ts` `actualAmountProblem`). Route `POST /documents/:id/transition` với `pay` trên phiếu chi: thiếu `execution.bank_ref` hoặc chứng từ UNC (loại `bank_order`) ⇒ FG-VAL-001. Lượt tự động (`executeAutoVoucher`) không đi qua route nên không bị ảnh hưởng.
 - **Xoá phiếu đã thực thi (§8)** — `domain/vouchers/reversal.ts` `reverseLedgerForDocument`: đảo từng bút toán gốc (`reverses` = id gốc, khoá `rev:<dedupe_key gốc>`, chạy lại không đảo trùng), dựng lại số dư. Làm TRƯỚC khi xoá hồ sơ (lỗi đảo thì phiếu còn nguyên). Route xoá không còn gọi `purgeLedgerForDocuments`. Trả về `reversed_entries`. `domain/rebuild/balances.ts` `purgeOrphanLedgerEntries` bỏ qua phiếu đã có bút toán đảo (giữ cả gốc lẫn đảo; job cleanup không xoá vết).
@@ -1136,7 +1142,8 @@ Sửa các gap đã xác minh trong khu vực phiếu thu/chi và tag. Phần ch
 - ~~**R1 (§11.6)**: phiếu thu tự sinh vẫn ghi `payee`~~ — payee không còn được ghi (§23.1); phiếu thu R1 không có đối tác là ngoại lệ có chủ ý (§23.2); phiếu chuyển nội bộ (`kind = internal`) không bắt buộc đối tác (chỉ cần công ty và TK nhận). Còn mở: quyết định sản phẩm về đối tác của phiếu thu đối ứng (§24).
 - **Kind `internal` (form NOI-BO)** vẫn là luồng riêng, không tự sinh phiếu thu bên nhận. Cần chọn một mô hình: phiếu chi + "Nhận: tài khoản nội bộ" (§11.6) hoặc mở rộng R1. Chưa đổi.
 - **Ngoại tệ**: ô số tiền chỉ nhập VND; form chưa chọn tiền tệ / tỷ giá (`fx`). API đã nhận các trường này.
-- **Dashboard không lọc theo tag** (§6.2) và **popup đối tác chưa kiểm trùng trước khi lưu** (§5.2): thuộc khu vực dashboard và đối tác.
+- ~~**Dashboard không lọc theo tag** (§6.2)~~ — ĐÃ LÀM: `?tag_ids=` lọc số liệu theo phiếu (dự kiến thu–chi hôm nay, chờ duyệt, thiếu chứng từ), thẻ "Theo tag" (`/reports/theo-tag`). Tiền, dự báo, công nợ, vay NH, đáo hạn luôn theo toàn công ty (không gắn tag). Xem §16.2.
+- **Popup đối tác chưa kiểm trùng trước khi lưu** (§5.2): thuộc khu vực đối tác.
 - ~~**Dọn code v1 còn lại**~~ — ĐÃ LÀM ở vòng hoàn thiện (§24): `usePayeeNames`, `usePayeeAccountOptions`, type `PayeeAccountOption`, `GET /bank-accounts/payee-options`; `ensureCounterpartyFromLabel`, `syncCounterparties`, `parsePayeeAccountLabel`, `resolvePayeeAccount`, `detectInternalTransferTarget` đã xoá cùng file.
 - **Báo cáo theo tag**: tổng thu/chi đã tính từ phiếu (không từ các nhóm đã cắt), nên không cộng trùng. Không đổi ở đây.
 - **Lưu ý cho báo cáo và dashboard**: bút toán đảo có chiều ngược. Mọi chỗ cộng thu/chi thực tế từ `cash_entries` phải loại cặp gốc + đảo (`reverses`) để không tính hai lần.
@@ -1209,7 +1216,7 @@ Sửa các gap đã xác minh trong khu vực phiếu thu/chi và tag. Phần ch
 - **Kiểm thử**: `domain/debt/fixes.test.ts` (chỉ tiêu giải ngân, lịch sử, kiểm hạn, zod); `domain/debt/v2.test.ts` cập nhật (lý do gỡ bắt buộc); `apps/web/src/app/v2/debts.test.ts` (tổng theo ngân hàng, lịch sử, cảnh báo liên kết, request_id). `pnpm -r typecheck` và `pnpm -F @fingate/api test` xanh tại thời điểm bàn giao.
 
 **Chưa làm / lưu ý**:
-1. **Quy tắc tự động R2 / R3 / R6** (`domain/automation/actions/loan.ts`, `rules/r2-*`, `rules/r3-*`): vẫn ghi HĐ / TSĐB vào `note`; `activateLoan` vẫn đặt gốc = số thực thu của một phiếu (không xét đợt khác đang gán); vẫn có bản logic thứ hai ngoài `domain/debt`. Cần chuyển sang `contract_no` / `collateral` và `activateLoanOnDisbursement` (thuộc khu vực tự động hoá).
+1. **Quy tắc tự động R2 / R3 / R6** (`domain/automation/actions/loan.ts`, `rules/r2-*`, `rules/r3-*`): HĐ / TSĐB đã ghi vào `contract_no` / `collateral` (ĐÃ XỬ LÝ, không còn vào `note`); liên kết R2 chọn khoản có sẵn ghi nguồn Thủ công (`ensureManualLink`). Còn lại: `activateLoan` vẫn đặt gốc = số thực thu của một phiếu (không xét đợt khác đang gán); vẫn có bản logic thứ hai ngoài `domain/debt`, cần chuyển sang `activateLoanOnDisbursement` (thuộc khu vực tự động hoá).
 2. `bank_debts.bank_name`, `debt_vouchers.party_name` (và bản sao khi tạo) vẫn được ghi vì model còn `required`; bỏ sau khi M2 / M3 xong và model bỏ bắt buộc. `bank_name` v1 không còn là dự phòng khi đọc khoản vay.
 3. Dashboard (`screens/dashboard.tsx`) vẫn hiện top 5 ngân hàng; bảng đầy đủ đã có ở Bảng đáo hạn.
 4. Kết quả đảo hạn không có transaction (ADR-03): nếu `applyRolloverResultToLoan` lỗi sau khi phiếu đã ghi kết quả, cần cập nhật khoản bằng tay; kiểm trước giảm rủi ro.
@@ -1299,7 +1306,7 @@ Dọn v1 đã thực hiện (đối chiếu §20.2, §22.5): không còn `usePay
 
 1. **Docker entrypoint** (`deploy/docker-entrypoint.sh`) chạy migration rồi vẫn khởi động API khi migration lỗi (`|| echo …`). Trên Render, `preDeployCommand` vẫn chặn đúng. Với v2 nên dừng khi migration lỗi; chưa đổi vì thay đổi hành vi triển khai cần quyết định.
 2. Chuyển nội bộ: đối tác của phiếu thu đối ứng, và phiếu chi chuyển nội bộ; gap 14 (`kind internal` độc lập) — §22.5, §23.2.
-3. Dashboard chưa lọc theo tag (§6.2); popup đối tác chưa kiểm trùng trước khi lưu (§5.2); form phiếu chưa có tiền tệ / tỷ giá (§22.5).
+3. Popup đối tác chưa kiểm trùng trước khi lưu (§5.2); form phiếu chưa có tiền tệ / tỷ giá (§22.5).
 4. Chưa có kiểm thử tích hợp MongoDB (§23.3); chưa chạy trình duyệt (không tự chạy `pnpm dev` theo AGENTS.md).
 5. Chưa commit, chưa push trong vòng này. AGENTS.md yêu cầu commit và push sau khi xong việc; người điều phối cần thực hiện.
 
@@ -1360,6 +1367,20 @@ Dọn v1 đã thực hiện (đối chiếu §20.2, §22.5): không còn `usePay
 
 `deploy/docker-entrypoint.sh` chạy `node db/migrate.js || echo "… tiếp tục khởi động"`. Migration lỗi, kể cả M6 lệch, vẫn khởi động API; với v2, điều này để `business_links` thiếu dữ liệu. Trước khi triển khai v2 bằng Docker: chạy `pnpm db:migrate` thủ công và kiểm tra mã thoát, hoặc đổi entrypoint để dừng khi lỗi (chưa đổi trong vòng này).
 
+
+## 26. Sửa lỗi theo kiểm thử E2E — nhóm fix4 (tags · phiếu · R2 · khoản vay)
+
+Kiểm chứng: `e2e/fix4-verify.spec.ts` (spec riêng). Các thay đổi hành vi:
+
+- **Sửa tag**: tab Audit của phiếu và ADM-12 nêu TÊN tag thêm / bỏ (lịch sử `tags_update` có `fields.added/removed` dạng `{id, name}`; audit `diff_fields` chỉ có tên, không có id). ADM-12 đọc được dạng `{from, to}` (đổi tên / màu / ẩn tag) thành trước → sau.
+- **Nhãn thao tác lịch sử khoản vay / công nợ**: `LOAN_HISTORY_ACTION_LABEL` và `DEBT_HISTORY_ACTION_LABEL` (`components/labels.ts`) cho cột "Thao tác" của thẻ "Lịch sử thay đổi".
+- **Đưa vào hàng thanh toán**: `can.queue_payment` (phiếu Đã duyệt + `payment:mark`; không áp dụng cho phương án đảo hạn) hiện nút "Đưa vào hàng thanh toán" trên hồ sơ. Từ Đang thanh toán vẫn "Thực thi".
+- **FG-WF-007**: tiêu đề theo tình huống (`ApiError.title` / `ProblemInput.title`): tăng số tiền, ngoài ngân sách, hay vượt ngưỡng. `lib/http.ts` truyền `title` xuống problem.
+- **Duyệt hạ số tiền xuống dưới số đã phân bổ**: khi cấp duyệt đổi số tiền, `assertDocumentAmountCoversLinks` chạy trước khi ghi ⇒ FG-LINK-002.
+- **"Tạo khoản vay mới" khi phiếu còn giải ngân thủ công**: `assertDocumentFreeForNewLoan` chặn LƯU (FG-LINK-002), trừ liên kết do R2 tự sinh và liên kết tới khoản đã chọn trước đó (lần lưu này gỡ). Nếu bước nối giải ngân của R2 vẫn lỗi, khoản vay vừa tạo ở chính lượt đó được huỷ (không để khoản "Chờ giải ngân" mồ côi).
+- **Gỡ tay liên kết theo lựa chọn "Gắn khoản vay đã có"**: bị chặn FG-WF-005 như liên kết tự động. Muốn gỡ thì đổi lựa chọn vay trên phiếu.
+- **Ngày và lãi suất**: ô "Ngày thực hiện" / "Ngày đáo hạn mới" của kết quả đảo hạn là DatePicker DD/MM/YYYY (lưu YYYY-MM-DD). Lãi suất hiển thị theo dấu phẩy (`interestRateText`: `9,5`). Nhập theo lô và kết quả đảo hạn giữ dấu phẩy; `rolloverResultBody.new_rate` nhận cả `,` và `.`.
+- Spec đã cập nhật theo quy tắc trên: `e2e/v2-auto-r2.spec.ts` R2-33 (gỡ tay liên kết theo lựa chọn bị chặn 422 FG-WF-005) và `e2e/v2-loans.spec.ts` US-LOAN-04 (ô ngày gõ DD/MM/YYYY). R2-34 tạm `skip`: kịch bản tạo lượt R2 lỗi bằng cách lưu "vay mới" khi còn giải ngân thủ công không còn tạo được (lưu bị chặn, xem R2-32).
 
 ## Quyết định thiết kế bổ sung (chờ duyệt đưa vào v2/v2.md)
 

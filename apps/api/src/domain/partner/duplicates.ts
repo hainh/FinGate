@@ -94,6 +94,15 @@ export function findDuplicateHits(input: DuplicateInput, candidates: readonly Du
 const escapeRegexChar = (c: string): string => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
+ * Dãy phân cách được bỏ qua giữa các ký tự khi so khớp số — cùng tập ký tự với `normalizeAccountNumber`
+ * (`\s` của JS gồm cả khoảng trắng không ngắt như NBSP ⇒ thêm `\p{Zs}` cho PCRE; cần cờ `u` khi thử trong JS).
+ */
+const SEPARATOR_RUN = '[\\s\\p{Zs}._/-]*';
+
+/** Ghép từng ký tự của khoá đã chuẩn hoá, cho phép một dãy phân cách giữa hai ký tự liền nhau. */
+const separatedPattern = (key: string): string => [...key].map(escapeRegexChar).join(SEPARATOR_RUN);
+
+/**
  * Regex (PCRE, dùng với `$options: 'i'`) khớp MỌI cách ghi cùng một số TK đã lưu: có hoặc không có
  * khoảng trắng / gạch / chấm / gạch dưới / gạch chéo xen giữa, không phân biệt hoa thường — đúng với
  * `normalizeAccountNumber`, nên bộ lọc DB không bỏ sót ứng viên mà bước so khớp trong bộ nhớ sẽ nhận.
@@ -101,8 +110,18 @@ const escapeRegexChar = (c: string): string => c.replace(/[.*+?^${}()|[\]\\]/g, 
 export function accountSearchPattern(accountNumber: string | null | undefined): string | null {
   const key = normalizeAccountNumber(accountNumber);
   if (!key) return null;
-  const sep = '[\\s._/-]*';
-  return `^${sep}${[...key].map(escapeRegexChar).join(sep)}${sep}$`;
+  return `^${SEPARATOR_RUN}${separatedPattern(key)}${SEPARATOR_RUN}$`;
+}
+
+/**
+ * Regex (PCRE, `$options: 'i'`) cho ô gõ tìm STK / MST (§5.2 "Gõ để tìm"): khớp ĐOẠN BẤT KỲ của giá trị đã
+ * lưu và bỏ qua phân cách giữa các ký tự — gõ `123456789012` tìm thấy `123-456 789 012`, gõ `0101234567001`
+ * tìm thấy MST `0101234567-001`. Dùng cùng quy tắc chuẩn hoá với cảnh báo trùng (MST cũng hay có gạch).
+ * Trả về null khi chữ gõ không còn ký tự nào sau chuẩn hoá (vd. chỉ gõ dấu gạch).
+ */
+export function identifierSearchPattern(query: string | null | undefined): string | null {
+  const key = normalizeAccountNumber(query);
+  return key ? separatedPattern(key) : null;
 }
 
 /**

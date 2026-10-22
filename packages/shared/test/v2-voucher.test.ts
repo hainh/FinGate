@@ -5,6 +5,7 @@ import {
   documentLinkItem,
   documentListQuery,
   documentTagsBody,
+  documentUpdateBody,
 } from '../src/contracts/documents.js';
 
 const OID = 'a'.repeat(24);
@@ -44,6 +45,23 @@ describe('v2 — phiếu thu/chi: đối tác theo ID là bắt buộc khi lập
   it('tối đa 50 tag cho một phiếu', () => {
     expect(documentCreateBody.safeParse({ ...spend, partner_id: OID, tag_ids: Array(50).fill(OID) }).success).toBe(true);
     expect(documentCreateBody.safeParse({ ...spend, partner_id: OID, tag_ids: Array(51).fill(OID) }).success).toBe(false);
+  });
+});
+
+describe('v2 — chuyển nội bộ theo ID: phải chọn cả công ty và TK đích khi lưu (§11.6)', () => {
+  const internal = { ...spend, kind: 'internal' };
+
+  it('tạo phiếu: TK đích thiếu hoặc null bị chặn; đủ công ty + TK thì qua; không chuyển nội bộ (null) vẫn qua', () => {
+    expect(documentCreateBody.safeParse({ ...internal, transfer_target: { company_id: OID2, account_id: null } }).success).toBe(false);
+    expect(documentCreateBody.safeParse({ ...internal, transfer_target: { company_id: OID2 } }).success).toBe(false);
+    expect(documentCreateBody.safeParse({ ...internal, transfer_target: { company_id: OID2, account_id: OID } }).success).toBe(true);
+    expect(documentCreateBody.safeParse({ ...spend, partner_id: OID, transfer_target: null }).success).toBe(true);
+  });
+
+  it('sửa phiếu: không nhận TK đích null; bỏ chuyển nội bộ (null) vẫn được', () => {
+    expect(documentUpdateBody.safeParse({ transfer_target: { company_id: OID2, account_id: null }, if_match: 3, request_id: UUID }).success).toBe(false);
+    expect(documentUpdateBody.safeParse({ transfer_target: { company_id: OID2, account_id: OID }, if_match: 3, request_id: UUID }).success).toBe(true);
+    expect(documentUpdateBody.safeParse({ transfer_target: null, if_match: 3, request_id: UUID }).success).toBe(true);
   });
 });
 

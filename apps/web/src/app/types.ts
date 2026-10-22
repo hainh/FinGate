@@ -376,6 +376,12 @@ export interface DocumentDetail {
     request_changes: boolean;
     fast_track: boolean;
     pay: boolean;
+    /** v2 §7.1: đưa phiếu đã duyệt vào hàng thanh toán (kế toán, payment:mark). */
+    queue_payment?: boolean;
+    /** RENEW-04 (v2 §7.3): ghi kết quả thực hiện phương án đảo hạn (rollover:act; đã duyệt / đã thực thi). */
+    rollover_result?: boolean;
+    /** Huỷ hồ sơ (người lập / approval:override; Nháp, Yêu cầu bổ sung, Đã duyệt). */
+    cancel?: boolean;
     override: boolean;
     attach: boolean;
     export: boolean;

@@ -23,7 +23,7 @@ import {
   Tabs,
   Tag,
 } from 'antd';
-import type { TableColumnsType, TableProps } from 'antd';
+import type { SegmentedProps, TableColumnsType, TableProps } from 'antd';
 import {
   ddmmyyyy,
   num,
@@ -40,12 +40,25 @@ import { useUi } from '../app/store.tsx';
 export const FgSpace = Space;
 export const FgDivider = Divider;
 export const FgTabs = Tabs;
-export const FgSegmented = Segmented;
 export const FgDescriptions = Descriptions;
 export const FgDropdown = Dropdown;
 export const FgPopover = Popover;
 export const FgCollapse = Collapse;
 export const FgPagination = Pagination;
+
+/**
+ * Nhóm chọn một mục. `value` là mục đang chọn; `null` = CHƯA chọn mục nào (ví dụ form chưa có hướng).
+ * Không dùng `undefined` để nghĩa là "chưa chọn": antd coi `undefined` là không điều khiển và rơi về mục đầu
+ * tiên, nên hiển thị mục đó như đã chọn trong khi state đang trống (lỗi biểu mẫu công nợ, v2 §9.1).
+ */
+export function FgSegmented<ValueType>({
+  value,
+  ...rest
+}: Omit<SegmentedProps<ValueType>, 'value'> & { value?: ValueType | null }): ReactNode {
+  // rc-segmented coi `value !== undefined` là điều khiển được, nên `null` giữ đúng trạng thái "chưa chọn".
+  // Kiểu của antd không nhận `null`, nên ép kiểu ở đúng một điểm này.
+  return <Segmented<ValueType> {...rest} value={value as ValueType | undefined} />;
+}
 
 export function FgModal({
   open,

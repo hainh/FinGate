@@ -40,6 +40,7 @@ import { DEFAULT_CALENDAR, slaDeadline, type WorkingCalendar } from '../calendar
 import { nextDocumentCode } from '../numbering/index.ts';
 import { notifyNextApprover, rebuildEvidence, syncBalancesForDocument } from '../side-effects.ts';
 import { amountLockedByAutomation } from '../automation/locks.ts';
+import { assertDocumentAmountCoversLinks } from '../links/index.ts';
 import { loanExceedsSpend } from '../automation/policy.ts';
 import { AUTOMATION_SESSION_ID } from '../automation/actions/common.ts';
 import { bookedBalance } from '../ledger/index.ts';
@@ -196,10 +197,10 @@ export async function submitDocument(input: {
 
   const evidence = await rebuildEvidence(doc);
   const assigned = await assignUsers(matrix.steps.map((s, i) => newStep(s.order, s.role, i === 0 ? 'current' : 'waiting')), doc);
-  // Công ty khuyết chức danh nào → bước đó không cần duyệt, tự đẩy lên cấp cao hơn
+  // Công ty khuyết chức danh nào → bước đó không cần duyệt, bị bỏ khỏi chuỗi
   // (feature "Nếu cty thiếu chức danh nào thì không cần chức danh đó phải duyệt").
-  // Bước cao nhất khuyết đã được `assignUsers` đẩy lên cấp cao hơn còn người TRƯỚC khi bỏ,
-  // nên chuỗi không bao giờ rỗng vì lý do khuyết chức danh.
+  // Chỉ khi cả chuỗi không còn ai phụ trách, `assignUsers` đẩy bước cao nhất lên cấp cao hơn còn người
+  // TRƯỚC khi bỏ, nên chuỗi không bao giờ rỗng vì lý do khuyết chức danh.
   const { steps, dropped: vacantSteps } = dropVacantSteps(assigned);
 
   const cal = await calendarFor(doc.company_id);
@@ -360,8 +361,12 @@ export function newStep(order: number, role: Role, state: StepRow['state']): Ste
   };
 }
 
-/** Gán người duyệt cụ thể cho từng step: assignment theo công ty + role (+ delegation). */
-export async function assignUsers(steps: StepRow[], doc: DomainDoc): Promise<StepRow[]> {
+/**
+ * Gán người duyệt cụ thể cho từng step: assignment theo công ty + role (+ delegation).
+ * `decidedApprover`: chuỗi còn cấp ĐÃ DUYỆT nằm ngoài `steps` (chạy lại giữ nguyên bước `done`) —
+ * cần để biết chuỗi có còn người hay không khi quyết định đẩy cấp lên Chủ tịch (xem bên dưới).
+ */
+export async function assignUsers(steps: StepRow[], doc: DomainDoc, opts: { decidedApprover?: boolean } = {}): Promise<StepRow[]> {
   const companies = [String(doc.company_id)];
   if (doc.kind === 'internal' && doc.target?.company_id) companies.push(String(doc.target.company_id));
 
@@ -395,13 +400,17 @@ export async function assignUsers(steps: StepRow[], doc: DomainDoc): Promise<Ste
 
   for (const step of steps) step.user_id = pickUser(step.role);
 
-  // Bước CAO NHẤT của matrix khuyết chức danh → đẩy yêu cầu duyệt lên cấp cao hơn còn người
-  // thay vì bỏ hẳn (tránh hồ sơ "duyệt xong ngay khi gửi"). Thêm TRƯỚC delegation để bước
-  // mới cũng được áp ủy quyền.
+  // Chuỗi KHÔNG còn ai có người phụ trách (kể cả cấp đã duyệt khi chạy lại) → bước CAO NHẤT khuyết
+  // được đẩy yêu cầu duyệt lên cấp cao hơn còn người, thay vì bỏ hẳn (tránh hồ sơ "duyệt xong ngay
+  // khi gửi"). Thêm TRƯỚC delegation để bước mới cũng được áp ủy quyền. Chủ tịch chỉ vào chuỗi này
+  // (không do cấp dưới khuyết — v2 §7.2, chỉ theo ngưỡng vượt).
+  // Chuỗi CÒN cấp có người (vd KTT) thì cấp khuyết chỉ bị bỏ, KHÔNG thêm cấp ngoài ma trận: CTA khuyết
+  // PGĐ với khoản < 50 triệu ⇒ KTT là cấp cuối (v2 §7.2 "KTT → PGĐ").
   const top = steps.at(-1);
-  if (top && top.user_id == null) {
+  const chainHasApprover = !!opts.decidedApprover || steps.some((s) => s.user_id != null);
+  if (top && !chainHasApprover) {
     const available = new Set(activeAssignments.map((a) => a.role as Role));
-    const role = escalatedTopRole(top.role, available);
+    const role = escalatedTopRole(top.role, available, { allowChairman: true });
     const uid = role ? pickUser(role) : null;
     if (role && uid) steps.push({ ...newStep(steps.length + 1, role, 'waiting'), user_id: uid });
   }
@@ -562,12 +571,19 @@ export async function transition(input: {
   if (resolvedAmount.increased && body.confirm_amount_minor !== effectiveAmountMinor.toString()) {
     throw new ApiError({
       code: 'FG-WF-007',
+      // tăng số tiền phiếu chi (v2 §6.3): tiêu đề nói đúng nguyên nhân, không gọi là "ngoài ngân sách"
+      title: 'Số tiền duyệt tăng — cần xác nhận',
       detail: `Số tiền duyệt tăng từ ${formatMoney(money(originalAmountMinor, doc.amount.currency), { mode: 'compact' })} lên ${formatMoney(
         money(effectiveAmountMinor, doc.amount.currency),
         { mode: 'compact' },
       )} — cần xác nhận`,
       data: { need_confirm_amount: true, amount_minor: effectiveAmountMinor.toString(), previous_amount_minor: originalAmountMinor.toString() },
     });
+  }
+  // v2 §9.2 / §11.2: cấp duyệt HẠ số tiền phiếu không được xuống dưới số đã phân bổ (cấn trừ / trả nợ / giải ngân).
+  // Chặn ở đây (trước khi ghi) — cùng quy tắc FG-LINK-002 như PATCH /documents/:id; liên kết không tự gỡ khi duyệt.
+  if (resolvedAmount.changed) {
+    await assertDocumentAmountCoversLinks({ documentId: String(doc._id), amountMinor: effectiveAmountMinor, currency: doc.amount.currency, willResync: () => false });
   }
 
   // 2. step-up verify cho hành động nhạy cảm (§7.2) — mặc định TẮT (APPROVAL_STEP_UP=false)
@@ -761,7 +777,9 @@ export async function transition(input: {
   if (isDecision && needsAmountRetype(effectiveAmountMinor, inPlan) && body.confirm_amount_minor !== effectiveAmountMinor.toString()) {
     throw new ApiError({
       code: 'FG-WF-007',
-      detail: 'Khoản vượt ngưỡng hoặc ngoài ngân sách — cần gõ lại số tiền để xác nhận',
+      // ngoài ngân sách và vượt ngưỡng là hai nguyên nhân khác nhau — tiêu đề nêu đúng cái đang xảy ra
+      title: inPlan ? 'Khoản vượt ngưỡng — cần xác nhận' : 'Khoản ngoài ngân sách — cần xác nhận',
+      detail:'Khoản vượt ngưỡng hoặc ngoài ngân sách — cần gõ lại số tiền để xác nhận',
       data: { need_confirm_amount: true, amount_minor: effectiveAmountMinor.toString(), in_plan: inPlan },
     });
   }

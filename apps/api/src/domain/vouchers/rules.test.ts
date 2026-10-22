@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { ApiError } from '@fingate/shared';
 import {
   assertAmountEditAllowed,
+  assertDisbursementNotChosenLoan,
   assertDocumentLinkable,
   assertLenderBank,
   assertTagSelection,
+  assertTransferTargetAccount,
   assertTransferTargetFits,
   assertVoucherPartner,
   diffIds,
@@ -21,6 +23,7 @@ const P_BANK = 'b'.repeat(24);
 const P_CUST = 'd'.repeat(24);
 const ACC = 'e'.repeat(24);
 const LOAN = 'f'.repeat(24);
+const LOAN_OTHER = '1'.repeat(24);
 
 /** Mã lỗi của một hàm ném ApiError ('' nếu không ném). */
 function codeOf(fn: () => unknown): string {
@@ -198,6 +201,37 @@ describe('chuyển tiền nội bộ theo ID (§11.6)', () => {
 
   it('công ty nhận phải khác công ty lập phiếu', () => {
     expect(codeOf(() => assertTransferTargetFits('spend', { company_id: CO }, CO))).toBe('FG-VAL-001');
+  });
+
+  it('có công ty nhận thì bắt buộc TK đích theo ID (thiếu / null ⇒ FG-VAL-001); không có đích ⇒ không kiểm', () => {
+    expect(codeOf(() => assertTransferTargetAccount(null))).toBe('');
+    expect(codeOf(() => assertTransferTargetAccount({ account_id: null }))).toBe('FG-VAL-001');
+    expect(codeOf(() => assertTransferTargetAccount({ account_id: undefined }))).toBe('FG-VAL-001');
+    expect(codeOf(() => assertTransferTargetAccount({ account_id: ACC }))).toBe('');
+  });
+});
+
+describe('gỡ liên kết giải ngân theo lựa chọn vay trên phiếu (§11.2, §11.4 (b))', () => {
+  const manualToChosen = { origin: 'manual', relation: 'disbursement', to_type: 'bank_debt', to_id: LOAN };
+  const chosen = { kind: 'borrow', mode: 'existing', existing_loan_id: LOAN };
+
+  it('liên kết thủ công tới khoản ĐANG CHỌN ("Gắn khoản vay đã có") ⇒ FG-WF-005, dù gỡ từ phiếu hay từ khoản vay', () => {
+    expect(codeOf(() => assertDisbursementNotChosenLoan(manualToChosen, chosen))).toBe('FG-WF-005');
+  });
+
+  it('gỡ được khi lựa chọn vay đã đổi / để sau / vay mới / không vay, hoặc liên kết tới khoản khác', () => {
+    expect(codeOf(() => assertDisbursementNotChosenLoan(manualToChosen, { ...chosen, existing_loan_id: LOAN_OTHER }))).toBe('');
+    expect(codeOf(() => assertDisbursementNotChosenLoan(manualToChosen, { ...chosen, mode: 'later', existing_loan_id: null }))).toBe('');
+    expect(codeOf(() => assertDisbursementNotChosenLoan(manualToChosen, { ...chosen, mode: 'new' }))).toBe('');
+    expect(codeOf(() => assertDisbursementNotChosenLoan(manualToChosen, { kind: 'fund', mode: 'existing', existing_loan_id: LOAN }))).toBe('');
+    expect(codeOf(() => assertDisbursementNotChosenLoan(manualToChosen, null))).toBe('');
+    expect(codeOf(() => assertDisbursementNotChosenLoan(manualToChosen, undefined))).toBe('');
+  });
+
+  it('liên kết tự động (không thuộc lựa chọn thủ công), quan hệ khác hoặc không tới nợ NH thì không chặn ở đây', () => {
+    expect(codeOf(() => assertDisbursementNotChosenLoan({ ...manualToChosen, origin: 'automation' }, chosen))).toBe('');
+    expect(codeOf(() => assertDisbursementNotChosenLoan({ ...manualToChosen, relation: 'repayment' }, chosen))).toBe('');
+    expect(codeOf(() => assertDisbursementNotChosenLoan({ ...manualToChosen, to_type: 'debt_voucher' }, chosen))).toBe('');
   });
 });
 

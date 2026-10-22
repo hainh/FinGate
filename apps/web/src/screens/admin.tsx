@@ -39,7 +39,7 @@ import { FgApprovalTimeline } from '../components/finance.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, toastOk, useToast } from '../components/pagekit.tsx';
 import { PartnerPicker } from '../components/partner-picker.tsx';
-import { AUDIT_ACTION_LABEL, ROLES_LABEL } from '../components/labels.ts';
+import { ROLES_LABEL, auditActionLabel } from '../components/labels.ts';
 import { ApiRequestError, apiCall } from '../app/api.ts';
 import { RECURRING_PARTNER_TYPES, useCreateRecurring, useRecurringRules, type RecurringCadence, type RecurringCreateInput, type RecurringRow } from '../app/v2/exec.ts';
 import { APPROVAL_ORDER, DOC_KIND_LABEL, DOC_KINDS, type DocKind } from '@fingate/shared';
@@ -1737,12 +1737,24 @@ function ThresholdEditor({
 
 /* ================= ADM-12 ================= */
 
+/** Cặp `{ id, name }` (tag, đối tác…) — chỉ có đúng hai khoá này và `name` là chuỗi. */
+function isNamedRef(x: unknown): x is { name: string } {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return false;
+  const keys = Object.keys(x);
+  return typeof (x as { name?: unknown }).name === 'string' && keys.every((k) => k === 'id' || k === 'name');
+}
+
 /** Stringify giá trị trong diff audit cho dễ đọc (object → JSON nhiều dòng). */
 function prettyDiffValue(v: unknown): string {
   if (v === null || v === undefined) return '—';
   if (typeof v === 'string') return v;
   if (typeof v === 'bigint') return v.toString();
   if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  // tên tag thêm / bỏ (mảng) hoặc `{ id, name }`: chỉ nêu tên, không đưa id thô (ObjectId) ra cột
+  if (isNamedRef(v)) return v.name;
+  if (Array.isArray(v) && v.length && v.every((x) => typeof x === 'string' || isNamedRef(x))) {
+    return v.map((x) => (typeof x === 'string' ? x : x.name)).join(', ');
+  }
   try {
     return JSON.stringify(v, (_k, val) => (typeof val === 'bigint' ? val.toString() : val), 2);
   } catch {
@@ -1830,7 +1842,7 @@ export function AuditLogScreen(): ReactNode {
                       </span>
                     ),
                   },
-                  { title: 'Hành động', dataIndex: 'action', key: 'act', ellipsis: true, render: (v: string) => AUDIT_ACTION_LABEL[v] ?? v },
+                  { title: 'Hành động', dataIndex: 'action', key: 'act', ellipsis: true, render: (v: string) => auditActionLabel(v) },
                   {
                     title: 'Đối tượng',
                     key: 'subj',

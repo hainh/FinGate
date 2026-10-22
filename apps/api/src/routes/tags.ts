@@ -1,7 +1,7 @@
 /**
  * Tag — nhãn tự do gắn phiếu, danh bạ theo công ty (v2/v2.md §6.2, §13).
  *
- * GET    /tags         danh sách / gợi ý (mặc định ẩn tag đã ẩn; include_hidden cần tag:manage)
+ * GET    /tags         danh sách / gợi ý (mặc định ẩn tag đã ẩn; include_hidden cần tag:manage; phân trang offset/limit)
  * GET    /tags/:id     chi tiết + số phiếu đang gắn
  * POST   /tags         tạo (tag:create) — trùng tên đang hiện → trả tag đã có (200)
  * PATCH  /tags/:id     đổi tên / màu / ẩn-hiện (tag:manage)
@@ -37,13 +37,14 @@ export function tagRoutes(app: FastifyInstance): void {
         const actor = requireActor(req);
         const scope = requireScope(req);
         const q = validate(tagListQuery, req.query);
-        const items = await listTags(scope, {
+        const page = await listTags(scope, {
           companyId: q.company_id ?? null,
           q: q.q ?? null,
           includeHidden: q.include_hidden === 'true' && actor.permissions.includes('tag:manage'),
+          offset: q.offset,
           limit: q.limit,
         });
-        return ok(reply, { items, total: items.length });
+        return ok(reply, { items: page.items, total: page.total });
       },
     }),
   );

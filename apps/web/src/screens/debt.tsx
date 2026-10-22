@@ -31,12 +31,14 @@ import {
   AGING_BUCKET_LABEL,
   DEBT_FILL_LABEL,
   DIRECTION_TONE,
+  OFFSET_EFFECT_LABEL,
   accountCodeOf,
   directionFromSide,
   docKindOfDirection,
   hasDeadOffsetLink,
   minorOf,
   newRequestId,
+  offsetEffectOf,
   parseAgingBucket,
   parseDirection,
   sideOfDirection,
@@ -600,7 +602,8 @@ export function DebtVoucherFormScreen(): ReactNode {
             />
             <FgField label="Hướng công nợ *" error={errors['direction']} help="Phải thu: đối tác nợ công ty · Phải trả: công ty nợ đối tác">
               <FgSegmented
-                value={f.direction ?? undefined}
+                // `null` = chưa chọn (không truyền `undefined`: antd sẽ hiển thị mục đầu như đã chọn).
+                value={f.direction}
                 onChange={(v) => setF((s) => ({ ...s, direction: String(v) as DebtDirection }))}
                 options={DIRECTION_OPTIONS}
                 disabled={locked || readOnly}
@@ -703,8 +706,11 @@ function offsetColumns(onRemove: ((row: OffsetLinkRow) => void) | null): TableCo
     {
       title: 'Hiệu lực',
       key: 'effective',
-      render: (_v, r: OffsetLinkRow) =>
-        r.executed ? <FgToneChip tone="success">Đã cấn trừ</FgToneChip> : <FgToneChip tone="warning">Chờ thực thi — chưa trừ</FgToneChip>,
+      // Phiếu đã huỷ / từ chối / hết hạn không bao giờ trừ — không ghi "Chờ thực thi" (v2 §9.2).
+      render: (_v, r: OffsetLinkRow) => {
+        const eff = OFFSET_EFFECT_LABEL[offsetEffectOf(r)];
+        return <FgToneChip tone={eff.tone}>{eff.label}</FgToneChip>;
+      },
     },
     {
       title: 'Số tiền phân bổ',
@@ -861,7 +867,7 @@ export function DebtDetailScreen(): ReactNode {
 
             <OwnerAttachmentSection base="/debts" ownerId={d._id} attachments={d.attachments} onChanged={() => void query.refetch()} />
 
-            <ChangeHistoryCard history={d.history} />
+            <ChangeHistoryCard history={d.history} kind="debt" />
 
             {linkOpen && id ? <OffsetPickerModal debtId={id} direction={d.direction} onClose={() => setLinkOpen(false)} /> : null}
 

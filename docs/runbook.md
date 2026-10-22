@@ -128,6 +128,7 @@ pnpm infra:prod               # build + chạy app + Mongo bằng Docker (Profil
 | Mongo không kết nối (`db":"down"`) | `pnpm infra:up`; đợi healthcheck `healthy` (`docker ps`) |
 | Đăng nhập không được / sai mật khẩu | Mật khẩu demo là `123qweasdzxc`; nếu DB đã bị seed bằng `FIELD_KEY` khác thì reset: `pnpm db:seed --force` |
 | Banner **"Máy chủ đang thức dậy"** kẹt ở màn đăng nhập | **Đã sửa** (`apps/web/src/app/api.ts`: reset `coldStart` khi nhận *bất kỳ* response, kể cả 401 của `/me`) |
+| Đang đăng nhập mà bị đá về màn Đăng nhập khi API khởi động lại (502 lúc tải `/me`) | **Đã sửa** (`apps/web/src/app/store.tsx`: chỉ 401 / `FG-AUTH-001` mới là hết phiên; lỗi khác hiện "Hệ thống đang gặp sự cố" + nút **Thử lại** và tự tải lại `/me`, không xoá phiên) |
 | TOTP mất sau khi restart | Dev tự sinh `FIELD_KEY` mỗi lần nếu `.env` không đặt → đặt `FIELD_KEY` cố định trong `.env` |
 | **Mọi phiên "ghi nhớ" chết sau deploy** (ADR-19) | Token hash = HMAC(`SESSION_SECRET`) → `SESSION_SECRET` đổi là mất hết. `render.yaml` để `generateValue: true`: giá trị **được giữ qua các lần deploy**, nhưng **tạo lại service mới từ blueprint = secret mới = tất cả đăng xuất**. Muốn an toàn tuyệt đối: chuyển sang `sync: false` và dán một chuỗi ≥ 32 byte cố định trong Render Environment. `FIELD_KEY` đổi thì TOTP không giải mã được (không đăng xuất, nhưng phải bật lại 2FA). |
 

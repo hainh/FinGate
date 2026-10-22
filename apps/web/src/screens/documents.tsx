@@ -4,7 +4,7 @@
  *
  * URL là state của danh sách: /chi?status=pending.gd&q=ABC&sort=-waiting — deep-link từ notification
  * mở đúng hồ sơ và QUAY LẠI vẫn giữ bộ lọc (?from=). Bộ lọc v2: `partner_id` (đối tác) và `tag_ids`
- * (CSV, phiếu có ÍT NHẤT MỘT tag) — chỉ với danh sách phiếu (`source === 'documents'`).
+ * (CSV, phiếu có ÍT NHẤT MỘT tag) — với danh sách phiếu và hàng chờ (`source === 'documents' | 'queue'`).
  * Bulk bar hiển thị TỔNG TIỀN tính qua shared `sum()` (BigInt minor units, không Number()).
  */
 
@@ -23,7 +23,7 @@ import {
   sum,
   today,
 } from '@fingate/shared';
-import { useDocuments, useProcessed, useQueue, type DocListFilters } from '../app/queries.ts';
+import { useDocuments, useProcessed, useQueue, type DocListFilters, type QueueFilters } from '../app/queries.ts';
 import type { QueueRow } from '../app/types.ts';
 import { FgButton, FgMoneyStack, FgSelect, FgStatusChip, FgText } from '../components/primitives.tsx';
 import { FgEmptyState, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
@@ -55,10 +55,16 @@ const MINE_OPTIONS = [
   { value: 'approved_by_me', label: 'Tôi đã duyệt' },
 ];
 
+/**
+ * Mọi bước đang chờ duyệt (`pending.*`). Danh sách chờ duyệt phải gồm CẢ các bước: cấp cao hơn vẫn thấy
+ * phiếu của cấp dưới (duyệt vượt cấp, docs/01_Blueprint.md). API so khớp đúng từng trạng thái trong mảng.
+ */
+export const PENDING_APPROVAL_STATUSES: string[] = ['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'];
+
 /** CHI-01 — swimlane màn Chi: "đã duyệt chờ chi" lên đầu cho kế toán thực thi. */
 const SPEND_LANES = [
   { key: 'cho-chi', title: 'Đã duyệt — chờ chi', statuses: ['approved', 'processing'] },
-  { key: 'cho-duyet', title: 'Đang chờ duyệt', statuses: ['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'] },
+  { key: 'cho-duyet', title: 'Đang chờ duyệt', statuses: PENDING_APPROVAL_STATUSES },
   { key: 'nhap', title: 'Nháp / cần bổ sung / từ chối', statuses: ['draft', 'changes_requested', 'rejected'] },
   { key: 'da-chi', title: 'Đã chi', statuses: ['paid'] },
   { key: 'khac', title: 'Hủy / hết hiệu lực', statuses: ['cancelled', 'expired', 'overdue'] },
@@ -67,7 +73,7 @@ const SPEND_LANES = [
 /** THU-01 — swimlane màn Thu: "đã duyệt chờ thu" lên đầu cho kế toán thực hiện. */
 const INCOME_LANES = [
   { key: 'cho-thu', title: 'Đã duyệt — chờ thu', statuses: ['approved', 'processing'] },
-  { key: 'cho-duyet', title: 'Đang chờ duyệt', statuses: ['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'] },
+  { key: 'cho-duyet', title: 'Đang chờ duyệt', statuses: PENDING_APPROVAL_STATUSES },
   { key: 'nhap', title: 'Nháp / cần bổ sung / từ chối', statuses: ['draft', 'changes_requested', 'rejected'] },
   { key: 'da-thu', title: 'Đã thu', statuses: ['paid'] },
   { key: 'khac', title: 'Hủy / hết hiệu lực', statuses: ['cancelled', 'expired', 'overdue'] },
@@ -75,14 +81,16 @@ const INCOME_LANES = [
 
 /** Tag trong một ô: tối đa 2 chip, phần còn lại thành "+N". */
 function TagList({ tags }: { tags: DocTagRef[] }): ReactNode {
-  if (!tags.length) return <FgText style="caption" color="muted">—</FgText>;
-  const shown = tags.slice(0, 2);
+  // bỏ mục null/thiếu (phản hồi cũ): một mục hỏng không được làm sập cả danh sách
+  const list = tags.filter((t): t is DocTagRef => !!t);
+  if (!list.length) return <FgText style="caption" color="muted">—</FgText>;
+  const shown = list.slice(0, 2);
   return (
     <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4, maxWidth: '100%' }}>
       {shown.map((t) => (
         <TagChip key={t._id} name={t.name} color={t.color} />
       ))}
-      {tags.length > shown.length ? <FgText style="caption" color="muted">+{tags.length - shown.length}</FgText> : null}
+      {list.length > shown.length ? <FgText style="caption" color="muted">+{list.length - shown.length}</FgText> : null}
     </span>
   );
 }
@@ -283,9 +291,10 @@ export function DocListScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qDebounced]);
 
-  // [v2] lọc theo đối tác / tag — chỉ danh sách phiếu (queue và processed không có tham số này)
-  const partnerParam = source === 'documents' ? get('partner_id') : '';
-  const tagParam = source === 'documents' ? get('tag_ids') : '';
+  // [v2] lọc theo đối tác / tag — danh sách phiếu và hàng chờ "Chờ tôi duyệt" (processed không có tham số này)
+  const filterable = source === 'documents' || source === 'queue';
+  const partnerParam = filterable ? get('partner_id') : '';
+  const tagParam = filterable ? get('tag_ids') : '';
   const tagIds = useMemo(() => parseTagParam(tagParam), [tagParam]);
 
   const filters: DocListFilters = useMemo(
@@ -305,9 +314,21 @@ export function DocListScreen({
     [qDebounced, get('status'), get('mine'), get('sort'), fixed, swimlanes, partnerParam, tagIds],
   );
 
-  const queue = useQueue({ limit: 100 }, source === 'queue');
+  // Hàng chờ nhận đủ bộ lọc của server (q, trạng thái, đối tác, tag) — trước đây bị bỏ, bảng không bao giờ được lọc.
+  const queueFilters: QueueFilters = useMemo(
+    () => ({
+      limit: 100,
+      q: qDebounced || undefined,
+      status: get('status') || undefined,
+      partner_id: partnerParam || undefined,
+      tag_ids: tagIds.length ? tagIds : undefined,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [qDebounced, get('status'), partnerParam, tagIds],
+  );
+  const queue = useQueue(queueFilters, source === 'queue');
   const docs = useDocuments(filters, source === 'documents');
-  const processed = useProcessed(100, source === 'processed');
+  const processed = useProcessed(100, source === 'processed', qDebounced || undefined);
   const query = source === 'queue' ? queue : source === 'processed' ? processed : docs;
 
   const [selected, setSelected] = useState<Record<string, QueueRow>>({});
@@ -351,8 +372,8 @@ export function DocListScreen({
         {source === 'documents' ? (
           <FgSelect ariaLabel="Phạm vi hồ sơ" options={MINE_OPTIONS} value={get('mine')} onChange={(v) => setFilter('mine', v ?? '')} style={{ width: 170 }} />
         ) : null}
-        {source === 'documents' && can('partner:read') ? <PartnerFilter value={partnerParam} onChange={(id) => setFilter('partner_id', id)} /> : null}
-        {source === 'documents' ? (
+        {filterable && can('partner:read') ? <PartnerFilter value={partnerParam} onChange={(id) => setFilter('partner_id', id)} /> : null}
+        {filterable ? (
           <TagFilter value={tagIds} onChange={(ids) => setFilter('tag_ids', ids.join(','))} companyId={scope === SCOPE_ALL ? null : scope} />
         ) : null}
         {sortOnTable ? null : (
@@ -579,7 +600,7 @@ export function SpendListScreen(): ReactNode {
 
 /** CHI-04 — ghim pending.* (cùng khung, filter ghim qua URL mặc định). */
 export function SpendPendingScreen(): ReactNode {
-  return <DocListScreen title="Chi chờ duyệt" source="documents" fixed={{ kind: 'spend', status: 'pending.gd' }} sortOnTable />;
+  return <DocListScreen title="Chi chờ duyệt" source="documents" fixed={{ kind: 'spend', status: PENDING_APPROVAL_STATUSES }} sortOnTable />;
 }
 
 /** CHI-07 — đã thanh toán. */

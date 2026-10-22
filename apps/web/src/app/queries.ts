@@ -33,17 +33,31 @@ import type {
   TransitionResult,
 } from './types.ts';
 
-export function useOverview() {
+/**
+ * Tổng quan dashboard. `tagIds` (v2 §6.2): lọc số liệu theo phiếu (dự kiến thu–chi hôm nay, chờ duyệt,
+ * thiếu chứng từ); rỗng = không lọc. Đổi bộ lọc giữ dữ liệu cũ trong cùng phạm vi (keepDataWithinScope).
+ */
+export function useOverview(tagIds: string[] = []) {
   const { scope, can } = useAuth();
+  const tagKey = tagIds.join(',');
   return useQuery({
-    queryKey: ['overview', scope],
+    queryKey: ['overview', scope, tagKey],
     // Tài khoản quản lý thuần (không có doc:read) không gọi dashboard — tránh 403 vô nghĩa.
     enabled: can('doc:read'),
-    queryFn: () => apiData<DashboardOverview>('/dashboard/overview', { query: { scope } }),
+    queryFn: () => apiData<DashboardOverview>('/dashboard/overview', { query: { scope, tag_ids: tagKey || undefined } }),
   });
 }
 
-export function useQueue(params: { limit?: number } = {}, enabled = true) {
+/** Bộ lọc gửi lên hàng chờ "Chờ tôi duyệt" (GET /queue): ô tìm, trạng thái, đối tác, tag (v2 §5.2, §12). */
+export interface QueueFilters {
+  limit?: number;
+  q?: string;
+  status?: string;
+  partner_id?: string;
+  tag_ids?: string[];
+}
+
+export function useQueue(params: QueueFilters = {}, enabled = true) {
   const { scope, can } = useAuth();
   return useQuery({
     queryKey: ['queue', scope, params],
@@ -95,12 +109,13 @@ export function useDecisionPack(id: string | undefined) {
   });
 }
 
-export function useProcessed(limit = 50, enabled = true) {
+/** "Tôi đã duyệt" (APPR-02). `q`: ô tìm (mã, tiêu đề, đối tác, STK/MST, tag) — cùng cách khớp với hàng chờ. */
+export function useProcessed(limit = 50, enabled = true, q?: string) {
   const { scope, can } = useAuth();
   return useQuery({
-    queryKey: ['queue-processed', scope, limit],
+    queryKey: ['queue-processed', scope, limit, q ?? ''],
     enabled: enabled && can('approval:act'),
-    queryFn: () => apiCall<ListResult<QueueRow>>('/queue/processed', { query: { scope, limit } }),
+    queryFn: () => apiCall<ListResult<QueueRow>>('/queue/processed', { query: { scope, limit, q: q || undefined } }),
   });
 }
 

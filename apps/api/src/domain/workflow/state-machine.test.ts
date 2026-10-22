@@ -40,11 +40,21 @@ describe('escalatedTopRole — bước khuyết chức danh đẩy lên cấp ca
 
   it('bỏ qua cả những cấp cao hơn cũng khuyết', () => {
     expect(escalatedTopRole('deputy_director', ['chief_accountant', 'deputy_chairman'])).toBe('deputy_chairman');
-    expect(escalatedTopRole('director', ['chief_accountant', 'chairman'])).toBe('chairman');
+  });
+
+  it('không đẩy lên Chủ tịch chỉ vì cấp dưới khuyết (Chủ tịch chỉ vào chuỗi theo ngưỡng vượt)', () => {
+    // CTA: P.TGĐ khuyết, còn KTT/GĐ và Chủ tịch (cấp Tập đoàn) → khoản dưới ngưỡng không được thêm Chủ tịch
+    expect(escalatedTopRole('deputy_chairman', ['chief_accountant', 'director', 'chairman'])).toBeNull();
+    expect(escalatedTopRole('director', ['chief_accountant', 'chairman'])).toBeNull();
+  });
+
+  it('chỉ đẩy lên Chủ tịch khi người gọi cho phép (cả chuỗi không còn ai có người phụ trách)', () => {
+    expect(escalatedTopRole('deputy_chairman', ['chairman'], { allowChairman: true })).toBe('chairman');
   });
 
   it('không còn cấp nào cao hơn có người → null', () => {
     expect(escalatedTopRole('chairman', ['director'])).toBeNull();
+    expect(escalatedTopRole('chairman', ['chairman'], { allowChairman: true })).toBeNull();
     expect(escalatedTopRole('chief_accountant', ['chief_accountant'])).toBeNull();
     expect(escalatedTopRole('chief_accountant', [])).toBeNull();
   });

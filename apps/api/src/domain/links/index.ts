@@ -22,6 +22,7 @@ import {
 import { Models } from '../../db/models.ts';
 import { mirrorAudit } from '../audit/index.ts';
 import { emitDomainEvent } from '../events/index.ts';
+import { assertOffsetDirection, directionOf, type DebtDirection } from '../debt/rules.ts';
 
 /* ================================================================== *
  * Kiểu
@@ -76,6 +77,8 @@ export interface LinkEndpoint {
   kind: string | null;
   /** Phiếu: trạng thái hồ sơ; khoản vay: trạng thái; công nợ: null. */
   status: string | null;
+  /** Khoản công nợ: hướng (`receivable` phải thu / `payable` phải trả); đối tượng khác: không có. */
+  direction?: DebtDirection | null;
 }
 
 export interface LinkActor {
@@ -226,6 +229,8 @@ export function assertRelationRules(relation: LinkRelation, from: LinkEndpoint, 
     if (!from.partner_id || !to.partner_id) fail('Cả hai đối tượng phải đã gắn đối tác');
     if (from.partner_id !== to.partner_id) fail('Đối tác của hai đối tượng không khớp');
   }
+  // cấn trừ đúng hướng từ CẢ HAI phía (v2 §9.2, §11.2): phiếu thu ↔ phải thu, phiếu chi ↔ phải trả
+  if (relation === 'offset' && to.type === 'debt_voucher' && to.direction) assertOffsetDirection(to.direction, from.kind);
 }
 
 /* ================================================================== *
@@ -367,8 +372,8 @@ export async function loadEndpoint(type: LinkObjectType, id: string): Promise<Li
   }
   if (type === 'debt_voucher') {
     const d = await Models.DebtVoucher.findById(id)
-      .select({ code: 1, company_id: 1, partner_id: 1, value_minor: 1 })
-      .lean<{ code?: string; company_id: unknown; partner_id?: unknown; value_minor?: unknown } | null>();
+      .select({ code: 1, company_id: 1, partner_id: 1, value_minor: 1, direction: 1, side: 1 })
+      .lean<{ code?: string; company_id: unknown; partner_id?: unknown; value_minor?: unknown; direction?: string | null; side?: string | null } | null>();
     if (!d) return notFound('khoản công nợ');
     return {
       type,
@@ -380,6 +385,7 @@ export async function loadEndpoint(type: LinkObjectType, id: string): Promise<Li
       total_minor: toBig(d.value_minor),
       kind: null,
       status: null,
+      direction: directionOf(d),
     };
   }
   const b = await Models.BankDebt.findById(id)
@@ -604,6 +610,93 @@ async function assertCapacity(
     const committed = links.reduce((s, l) => s + (relation === 'repayment' ? principalPartOf(l) : allocationOf(l)), 0n);
     const add = relation === 'repayment' ? (split ? split.principal : amount) : amount;
     assertWithinCapacity({ limit: to.total_minor, committed, add, what: `Khoản vay ${to.code}` });
+  }
+}
+
+/**
+ * Sức chứa GIẢI NGÂN của khoản vay (gốc) — kiểm TRƯỚC khi lưu phiếu thu gắn khoản có sẵn (v2 §11.4 (b):
+ * tổng giải ngân không vượt gốc). Cùng quy tắc FG-LINK-002 như `createLink`; `excludeDocumentId` bỏ
+ * giải ngân của chính phiếu đang sửa để không tính trùng.
+ */
+export async function assertLoanDisbursementCapacity(input: { loanId: string; amountMinor: bigint; excludeDocumentId?: string | null }): Promise<void> {
+  const loan = await loadEndpoint('bank_debt', input.loanId);
+  const links = await reservingLinks(await activeLinksWhere({ to_type: 'bank_debt', to_id: loan.id, relation: 'disbursement' }));
+  const committed = disbursedExcludingDocument(links, input.excludeDocumentId ?? null);
+  assertWithinCapacity({ limit: loan.total_minor, committed, add: input.amountMinor, what: `Khoản vay ${loan.code}` });
+}
+
+/** Σ giải ngân đang giữ sức chứa của khoản vay, BỎ giải ngân của phiếu `excludeDocumentId` (phiếu đang sửa). */
+export function disbursedExcludingDocument(links: LinkRecord[], excludeDocumentId: string | null): bigint {
+  return links
+    .filter((l) => !(excludeDocumentId && l.from_type === 'document' && l.from_id === excludeDocumentId))
+    .reduce((s, l) => s + allocationOf(l), 0n);
+}
+
+/**
+ * Đổi số tiền phiếu (sửa hồ sơ): tổng phân bổ CÒN LẠI của phiếu không được vượt số tiền mới (v2 §9.2, §11.2).
+ * Kiểm trên liên kết hiện có — `createLink` chỉ kiểm lúc tạo nên không bắt được việc hạ số tiền sau đó.
+ * `willResync(l)` = liên kết mà chính lần lưu này (hoặc quy tắc tự động) sẽ gỡ / đồng bộ lại theo số tiền mới: không tính.
+ */
+export async function assertDocumentAmountCoversLinks(input: {
+  documentId: string;
+  amountMinor: bigint;
+  currency?: string | null;
+  willResync: (link: LinkRecord) => boolean;
+}): Promise<void> {
+  const links = await activeLinksWhere({ from_type: 'document', from_id: input.documentId, relation: { $in: [...AMOUNT_RELATIONS] } });
+  const committed = links.filter((l) => !input.willResync(l)).reduce((s, l) => s + allocationOf(l), 0n);
+  if (committed <= input.amountMinor) return;
+  const cur = input.currency ?? 'VND';
+  throw new ApiError({
+    code: 'FG-LINK-002',
+    detail: `Số tiền phiếu ${formatMoney(money(input.amountMinor, cur), { mode: 'compact' })} thấp hơn số đã phân bổ ${formatMoney(money(committed, cur), { mode: 'compact' })} (cấn trừ / trả nợ / giải ngân) — gỡ bớt liên kết trước`,
+    data: { amount_minor: input.amountMinor.toString(), committed_minor: committed.toString() },
+  });
+}
+
+/**
+ * Phiếu thu sang "vay MỚI" (R2 `mode: new`, v2 §11.4 (a)): khoản vay tự sinh giải ngân TOÀN BỘ số tiền phiếu, nên phiếu
+ * không được còn phân bổ nào khác (giải ngân gán tay tới khoản có sẵn, cấn trừ, trả nợ…). `willResync` = liên kết mà
+ * chính lần lưu này gỡ / đồng bộ lại (không tính). Vi phạm ⇒ FG-LINK-002 CHẶN LƯU — không để lượt R2 sau lưu lỗi và
+ * để lại khoản vay "Chờ giải ngân" thiếu liên kết (v2 §10.2, §11.2).
+ */
+export async function assertDocumentFreeForNewLoan(input: {
+  documentId: string;
+  amountMinor: bigint;
+  currency?: string | null;
+  willResync: (link: LinkRecord) => boolean;
+}): Promise<void> {
+  const links = await activeLinksWhere({ from_type: 'document', from_id: input.documentId, relation: { $in: [...AMOUNT_RELATIONS] } });
+  const committed = documentAllocatedTotal(
+    links.filter((l) => !input.willResync(l)),
+    input.documentId,
+  );
+  if (committed <= 0n) return;
+  const cur = input.currency ?? 'VND';
+  throw new ApiError({
+    code: 'FG-LINK-002',
+    detail: `Phiếu đã phân bổ ${formatMoney(money(committed, cur), { mode: 'compact' })} cho liên kết khác (giải ngân thủ công / cấn trừ / trả nợ) — "Tạo khoản vay mới" cần giải ngân toàn bộ ${formatMoney(money(input.amountMinor, cur), { mode: 'compact' })}. Gỡ các liên kết đó trước, hoặc chọn "Gắn khoản vay đã có"`,
+    data: { amount_minor: input.amountMinor.toString(), committed_minor: committed.toString() },
+  });
+}
+
+/** Quan hệ mang kiểm khớp đối tác (cấn trừ, trả nợ, giải ngân). */
+const PARTNER_MATCH_RELATIONS = (Object.keys(RELATION_SPECS) as LinkRelation[]).filter((r) => RELATION_SPECS[r].partnerMatch);
+
+/**
+ * Đổi đối tác của phiếu (sửa hồ sơ): mọi liên kết theo quan hệ khớp đối tác phải còn khớp đối tác MỚI, nếu không
+ * phải gỡ trước (v2 §9.2, §11.2 — FG-LINK-001). Liên kết Tự động (quy tắc R2) được đồng bộ theo đối tác mới nên không chặn.
+ */
+export async function assertPartnerChangeKeepsLinks(input: { documentId: string; nextPartnerId: string | null }): Promise<void> {
+  const links = await activeLinksWhere({ from_type: 'document', from_id: input.documentId, relation: { $in: PARTNER_MATCH_RELATIONS } });
+  for (const link of links) {
+    if (link.origin === 'automation') continue;
+    const other = await loadEndpoint(link.to_type, link.to_id);
+    if (input.nextPartnerId && other.partner_id === input.nextPartnerId) continue;
+    throw new ApiError({
+      code: 'FG-LINK-001',
+      detail: `Phiếu đang liên kết "${BUSINESS_LINK_RELATION_LABEL[link.relation]}" với ${LINK_OBJECT_TYPE_LABEL[link.to_type]} của đối tác khác — gỡ liên kết trước khi đổi đối tác`,
+    });
   }
 }
 

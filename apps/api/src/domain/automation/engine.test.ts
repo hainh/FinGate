@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '@fingate/shared';
 
 /* Mô hình hoá tầng DB: ghi nhận các lần cập nhật lượt chạy và cảnh báo. */
 const { updates, alerts } = vi.hoisted(() => ({
@@ -278,5 +279,54 @@ describe('automation › chạy các bước của lượt (executeRunSteps)', (
     expect(status).toBe('done');
     expect(lastSavedSteps()[0]?.status).toBe('skipped');
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('automation › nguyên nhân lỗi của bước (ApiError)', () => {
+  /** Chạy một bước ném `err` rồi trả về `error` đã ghi vào bước. */
+  async function savedErrorOf(err: unknown): Promise<string | null> {
+    registerRule('R3', {
+      steps: [
+        {
+          name: 'create_voucher',
+          run: async () => {
+            throw err;
+          },
+        },
+      ],
+    });
+    const status = await executeRunSteps(makeRun(mergeStepRecords(['create_voucher'], [])), rule, getRuleHandler('R3')!, view);
+    expect(status).toBe('failed');
+    return lastSavedSteps().find((s) => s.name === 'create_voucher')?.error ?? null;
+  }
+
+  it('lỗi có errors: ghi nguyên nhân (không chỉ tiêu đề "Dữ liệu không hợp lệ"), cảnh báo KTT cũng mang nguyên nhân', async () => {
+    const cause = 'Tài khoản không tồn tại hoặc đã đóng/phong tỏa';
+    expect(await savedErrorOf(new ApiError({ code: 'FG-VAL-001', errors: { 'source.account_id': cause } }))).toBe(cause);
+
+    const subject = alerts.at(-1)?.subject as { error?: string } | undefined;
+    expect(subject?.error).toContain(cause);
+  });
+
+  it('có cả detail và errors: ghi cả hai, bỏ trùng; không có nguyên nhân thì giữ tiêu đề', async () => {
+    const dup = 'Tài khoản không thuộc công ty của phiếu';
+    expect(await savedErrorOf(new ApiError({ code: 'FG-RBAC-002', detail: dup, errors: { 'source.account_id': dup } }))).toBe(dup);
+    expect(
+      await savedErrorOf(
+        new ApiError({
+          code: 'FG-RBAC-002',
+          detail: 'Không dùng được quỹ Tập đoàn cho phiếu công ty con',
+          errors: { 'source.account_id': 'Tài khoản Tập đoàn — chỉ dùng cho phiếu cấp Tập đoàn' },
+        }),
+      ),
+    ).toBe('Không dùng được quỹ Tập đoàn cho phiếu công ty con; Tài khoản Tập đoàn — chỉ dùng cho phiếu cấp Tập đoàn');
+    expect(await savedErrorOf(new ApiError({ code: 'FG-VAL-001' }))).toBe('Dữ liệu không hợp lệ');
+  });
+
+  it('lỗi thường giữ nguyên thông điệp; thông điệp quá dài bị cắt còn 500 ký tự', async () => {
+    expect(await savedErrorOf(new Error('Chưa có khoản vay để giải ngân'))).toBe('Chưa có khoản vay để giải ngân');
+    const long = await savedErrorOf(new Error('x'.repeat(600)));
+    expect(long).toHaveLength(500);
+    expect(long?.endsWith('...')).toBe(true);
   });
 });

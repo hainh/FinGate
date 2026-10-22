@@ -5,6 +5,7 @@ import {
   assertWithinCapacity,
   debtOffsetAppliedFrom,
   debtRemainingOf,
+  disbursedExcludingDocument,
   documentAllocatedTotal,
   loanOutstandingOf,
   loanRepaidPrincipalFrom,
@@ -75,6 +76,17 @@ describe('links › quy tắc theo quan hệ (v2 §11.2)', () => {
     expect(codeOf(() => assertRelationRules('offset', ep(), debtOtherPartner))).toBe('FG-LINK-001');
     const debtBank = ep({ type: 'debt_voucher', id: 'v1', partner_type: 'bank', kind: null, status: null });
     expect(codeOf(() => assertRelationRules('offset', ep(), debtBank))).toBe('FG-LINK-001');
+  });
+
+  it('cấn trừ đúng hướng từ cả hai phía: phiếu thu ↔ khoản phải thu, phiếu chi ↔ khoản phải trả (v2 §9.2)', () => {
+    const receivable = ep({ type: 'debt_voucher', id: 'v1', partner_type: 'customer', kind: null, status: null, direction: 'receivable' });
+    const payable = ep({ type: 'debt_voucher', id: 'v2', partner_type: 'customer', kind: null, status: null, direction: 'payable' });
+    const receipt = ep({ kind: 'income', partner_type: 'customer' });
+    const spend = ep({ kind: 'spend', partner_type: 'customer' });
+    expect(() => assertRelationRules('offset', receipt, receivable)).not.toThrow();
+    expect(() => assertRelationRules('offset', spend, payable)).not.toThrow();
+    expect(codeOf(() => assertRelationRules('offset', receipt, payable))).toBe('FG-LINK-001');
+    expect(codeOf(() => assertRelationRules('offset', spend, receivable))).toBe('FG-LINK-001');
   });
 
   it('cấn trừ không áp dụng cho phiếu đảo hạn / chuyển nội bộ', () => {
@@ -150,6 +162,21 @@ describe('links › số tiền, tách gốc / lãi / phí, sức chứa', () =>
     }
     expect(err?.code).toBe('FG-LINK-002');
     expect(err?.detail).toContain('Phiếu X');
+  });
+
+  it('giải ngân khi lưu phiếu gắn khoản có sẵn: giải ngân của phiếu khác được tính, của chính phiếu đang sửa thì không', () => {
+    const disb = (from: string, amount: bigint): LinkRecord =>
+      ({ _id: `l-${from}`, from_type: 'document', from_id: from, to_type: 'bank_debt', to_id: 'loan', relation: 'disbursement', amount_minor: amount, split: null, status: 'active' }) as unknown as LinkRecord;
+    // khoản 30 triệu đã có 30 triệu của phiếu khác: phiếu mới 10 triệu vượt sức chứa
+    const others = [disb('d-other', 30_000_000n)];
+    expect(disbursedExcludingDocument(others, 'd-new')).toBe(30_000_000n);
+    expect(() => assertWithinCapacity({ limit: 30_000_000n, committed: disbursedExcludingDocument(others, 'd-new'), add: 10_000_000n, what: 'Khoản vay X' })).toThrow();
+    // sửa chính phiếu đang gắn: giải ngân của nó không tính trùng → 30 triệu vẫn vừa khoản
+    const self = [disb('d-self', 30_000_000n)];
+    expect(disbursedExcludingDocument(self, 'd-self')).toBe(0n);
+    expect(() => assertWithinCapacity({ limit: 30_000_000n, committed: disbursedExcludingDocument(self, 'd-self'), add: 30_000_000n, what: 'Khoản vay X' })).not.toThrow();
+    // không có phiếu loại trừ: tính đủ
+    expect(disbursedExcludingDocument([...others, ...self], null)).toBe(60_000_000n);
   });
 
   it('toBig an toàn với dữ liệu lạ', () => {

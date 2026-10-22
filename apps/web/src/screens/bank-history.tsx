@@ -13,7 +13,8 @@ import { FgButton, FgMoney } from '../components/primitives.tsx';
 import { FgEmptyState, FgSkeletonTable, FgTable, FgTag } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery } from '../components/pagekit.tsx';
-import type { BankTransactionRow } from '../app/types.ts';
+import type { BankAccountDetail, BankTransactionRow } from '../app/types.ts';
+import { bankAccountOptionLabel } from '../app/v2/documents.ts';
 
 /** Ngày giờ chính xác tới giây (giờ địa phương). */
 function atLabel(at: string | null): string {
@@ -22,12 +23,28 @@ function atLabel(at: string | null): string {
   return d.isValid() ? d.format('DD/MM/YYYY HH:mm:ss') : '—';
 }
 
+/**
+ * Tên TK trong tiêu đề BANK-05, ví dụ "BIDV · 122983878772 · TK lịch sử A": CÓ TÊN TK theo cùng quy ước
+ * nhãn với ô chọn TK (`bankAccountOptionLabel`) để các TK cùng ngân hàng vẫn phân biệt được (v2 §4.1, bug #6).
+ */
+export function bankAccountTitleName(a: BankAccountDetail | null | undefined): string {
+  if (!a) return 'Tài khoản tiền';
+  return bankAccountOptionLabel({
+    bank_name: a.bank_name,
+    // màn chi tiết trả đủ số TK (API không che số), nên đưa thẳng vào trường số TK của nhãn
+    account_number_masked: a.account_number,
+    account_name: a.account_name,
+    is_group: a.is_group,
+    company_name: a.company_name,
+  });
+}
+
 export function BankAccountHistoryScreen(): ReactNode {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const account = useBankAccount(id);
   const query = useBankAccountTransactions(id);
-  const name = account.data ? `${account.data.bank_name} ${account.data.account_number}` : 'Tài khoản tiền';
+  const name = bankAccountTitleName(account.data);
   return (
     <>
       <FgPageHeader

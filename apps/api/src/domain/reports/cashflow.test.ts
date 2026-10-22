@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildForecastSeries, netInstallments, parseHorizon, weekdayOf, type ForecastFlow } from './cashflow.ts';
+import { buildForecastSeries, loansCoveredByReceipts, netInstallments, parseHorizon, weekdayOf, type ForecastFlow } from './cashflow.ts';
 import { buildRemainingSchedule, buildSchedule, simpleInterest } from '../loan-schedule/index.ts';
+import { PIPELINE_STATUSES } from '../ledger/planned.ts';
 
 describe('buildForecastSeries — dự báo theo ngày', () => {
   it('đầu/cuối kỳ, vi phạm tối thiểu và tổng theo nhóm', () => {
@@ -68,6 +69,36 @@ describe('netInstallments — trừ phiếu trả nợ đã có trong pipeline',
     const left = netInstallments(one, 600n);
     expect(left).toEqual([{ due_date: '2027-01-01', principal: 500n, interest: 0n, total: 500n }]);
     for (const r of netInstallments(rows, 150n)) expect(r.principal + r.interest).toBe(r.total);
+  });
+});
+
+describe('loansCoveredByReceipts — giải ngân có hiệu lực (v2 §11.2, §12)', () => {
+  it('phiếu nháp / trả về CHƯA có hiệu lực ⇒ khoản vay vẫn "chưa có ngày"; phiếu trong pipeline hoặc đã thực thi ⇒ đã có giải ngân', () => {
+    const links = [
+      { loanId: 'loan-draft', receiptId: 'rc-draft' },
+      { loanId: 'loan-pipeline', receiptId: 'rc-pipeline' },
+      { loanId: 'loan-paid', receiptId: 'rc-paid' },
+      { loanId: 'loan-returned', receiptId: 'rc-returned' },
+    ];
+    const statuses = new Map([
+      ['rc-draft', 'draft'],
+      ['rc-pipeline', 'pending.gd'],
+      ['rc-paid', 'paid'],
+      ['rc-returned', 'changes_requested'],
+    ]);
+    expect([...loansCoveredByReceipts(links, statuses)].sort()).toEqual(['loan-paid', 'loan-pipeline']);
+  });
+
+  it.each([...PIPELINE_STATUSES, 'paid'])('phiếu ở trạng thái %s có hiệu lực', (status) => {
+    expect(loansCoveredByReceipts([{ loanId: 'L', receiptId: 'R' }], new Map([['R', status]]))).toEqual(new Set(['L']));
+  });
+
+  it.each(['draft', 'rejected', 'cancelled', 'expired', 'changes_requested'])('phiếu ở trạng thái %s chưa có hiệu lực', (status) => {
+    expect(loansCoveredByReceipts([{ loanId: 'L', receiptId: 'R' }], new Map([['R', status]]))).toEqual(new Set());
+  });
+
+  it('phiếu không còn tồn tại không tính là có hiệu lực', () => {
+    expect(loansCoveredByReceipts([{ loanId: 'L', receiptId: 'R' }], new Map())).toEqual(new Set());
   });
 });
 

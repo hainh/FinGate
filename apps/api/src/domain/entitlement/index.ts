@@ -153,6 +153,17 @@ export function scopeFor(identity: ResolvedIdentity, requested?: string | null):
   return { companyIds: [primary] };
 }
 
+/**
+ * Công ty mà người dùng được tham chiếu NGOÀI công ty đang xem — công ty nhận của chuyển tiền nội bộ
+ * (v2 §6.3, §11.6) và tài khoản của công ty đó khi chọn tài khoản nhận. Quy tắc theo PHÂN CÔNG (mọi công ty
+ * người dùng được gán), không theo bộ chuyển phạm vi (chỉ xem MỘT công ty mỗi lúc). Quyền toàn tập đoàn: mọi công ty.
+ */
+export function companyReachableByActor(identity: { scope_all: boolean; assignments: { company_id: string }[] } | null | undefined, companyId: string): boolean {
+  if (!identity) return false;
+  if (identity.scope_all) return true;
+  return identity.assignments.some((a) => a.company_id === companyId);
+}
+
 export function actorInfoFrom(identity: ResolvedIdentity, sessionId: string): ActorInfo {
   const u = identity.user;
   return {
@@ -185,6 +196,12 @@ export interface DocPermissions {
   request_changes: boolean;
   fast_track: boolean;
   pay: boolean;
+  /** v2 §7.1: đưa phiếu ĐÃ DUYỆT vào hàng thanh toán (DaDuyet → DangThanhToan) — kế toán có `payment:mark`. */
+  queue_payment: boolean;
+  /** RENEW-04 (v2 §7.3): ghi KẾT QUẢ thực hiện phương án đảo hạn — quyền `rollover:act`, phiếu đã duyệt / đã thực thi. */
+  rollover_result: boolean;
+  /** Huỷ hồ sơ (người lập, hoặc người có `approval:override`) khi đang Nháp / Yêu cầu bổ sung / Đã duyệt. */
+  cancel: boolean;
   override: boolean;
   attach: boolean;
   export: boolean;
@@ -204,6 +221,11 @@ const ROLES_FROM_CHIEF_ACCOUNTANT: readonly string[] = ['chief_accountant', 'dep
 
 /** Trạng thái người lập còn được xoá/sửa (kết hợp gate chưa ai KTT+ duyệt ở vòng hiện tại). */
 const MAINTAINABLE_STATUSES: readonly string[] = ['draft', 'pending.ktt', 'changes_requested', 'rejected'];
+/**
+ * Trạng thái người lập / người có `approval:override` được HUỶ (v2 §7.1: Nháp → Huỷ, Yêu cầu bổ sung → Huỷ,
+ * Đã duyệt → Huỷ). Trùng với cạnh `cancel` của máy trạng thái (workflow/state-machine.ts TRANSITIONS).
+ */
+const CANCELLABLE_STATUSES: readonly string[] = ['draft', 'changes_requested', 'approved'];
 
 /** Vai trò xoá được phiếu ở BẤT KỲ thời điểm/trạng thái, không vướng gate người lập hay "chưa ai duyệt". */
 export const UNRESTRICTED_DELETE_ROLES: readonly Role[] = ['chairman'];
@@ -237,6 +259,8 @@ export function documentPermissions(
   actor: { user_id: string; permissions: string[]; amount_limit_minor: bigint; role: Role },
   doc: {
     status: string;
+    /** Loại phiếu (`rollover` = phương án đảo hạn). Thiếu ⇒ không coi là đảo hạn. */
+    kind?: string | null;
     created_by: string;
     amount_minor: bigint;
     steps: { order: number; role: Role; user_id: string | null; state: string; action?: string | null }[];
@@ -249,6 +273,8 @@ export function documentPermissions(
   },
 ): DocPermissions {
   const has = (p: Permission) => actor.permissions.includes(p);
+  // Phương án đảo hạn không phải dòng tiền: không "Thực thi" / "Đưa vào hàng thanh toán", ghi kết quả ở RENEW-04.
+  const isRollover = doc.kind === 'rollover';
   const mine = doc.created_by === actor.user_id;
   // Người lập xoá/sửa được khi phiếu còn nháp, đang CHỜ Kế toán trưởng duyệt (vòng hiện tại),
   // bị trả về bổ sung, hoặc bị từ chối — miễn chưa ai từ KTT trở lên duyệt ở vòng này.
@@ -299,7 +325,14 @@ export function documentPermissions(
       approveAllowed && !!current && iAmStep.some((s) => s.state === 'waiting'),
     // "Thực thi" phiếu đã duyệt xong: kế toán viên (payment:mark) thực hiện, KHÔNG giới hạn
     // bởi hạn mức duyệt — hạn mức là thẩm quyền duyệt, không phải quyền ghi nhận dòng tiền.
-    pay: (doc.status === 'approved' || doc.status === 'processing') && has('payment:mark'),
+    // Phương án đảo hạn KHÔNG có "Thực thi" (workflow.transition chặn pay/queue_payment với rollover).
+    pay: !isRollover && (doc.status === 'approved' || doc.status === 'processing') && has('payment:mark'),
+    // v2 §7.1 — "Đưa vào hàng thanh toán" chỉ từ Đã duyệt (cùng quyền thực thi); từ Đang thanh toán thì đi thẳng "Thực thi"
+    queue_payment: !isRollover && doc.status === 'approved' && has('payment:mark'),
+    // RENEW-04: đúng điều kiện của POST /documents/:id/rollover-result (rollover:act; approved/paid) — UI chỉ hiện form khi server nhận
+    rollover_result: isRollover && inScope && (doc.status === 'approved' || doc.status === 'paid') && has('rollover:act'),
+    // server (workflow.transition) chỉ cho người lập hoặc người có approval:override huỷ — UI phải hiện nút đúng luật này
+    cancel: inScope && (mine || has('approval:override')) && CANCELLABLE_STATUSES.includes(doc.status),
     override: has('approval:override'),
     attach: (doc.status === 'draft' || doc.status === 'changes_requested' || has('doc:create')) && has('doc:read'),
     export: has('report:export'),

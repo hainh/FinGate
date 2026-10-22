@@ -78,3 +78,15 @@ describe('queueFilter — đối tác & tag (v2)', () => {
     expect(f.$or as Record<string, unknown>[]).toHaveLength(2);
   });
 });
+
+describe('queueFilter — lọc trạng thái (Chi chờ duyệt ghim mọi pending.*)', () => {
+  const PENDING_STEPS = ['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'];
+
+  it('status là mảng → $in gồm đủ các bước đã chọn (không rơi về một bước)', () => {
+    expect(queueFilter(base({ kind: 'spend', status: PENDING_STEPS })).status).toEqual({ $in: PENDING_STEPS });
+  });
+
+  it('status là một chuỗi vẫn so khớp đúng trạng thái đó', () => {
+    expect(queueFilter(base({ kind: 'spend', status: 'pending.gd' })).status).toBe('pending.gd');
+  });
+});

@@ -95,7 +95,8 @@ export const partnerSearchQuery = z.object({
   type: z.union([partnerType, z.array(partnerType).min(1)]).optional(),
   status: partnerStatus.optional(),
   q: z.string().max(200).optional(),
-  limit: z.coerce.number().int().min(1).max(200).default(20),
+  // trần 1000: màn nhập lô khoản vay cần đủ mọi ngân hàng đang hoạt động để kiểm mã (không chỉ 200 đầu)
+  limit: z.coerce.number().int().min(1).max(1000).default(20),
 });
 export type PartnerSearchQuery = z.infer<typeof partnerSearchQuery>;
 

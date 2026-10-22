@@ -43,6 +43,8 @@ const envSchema = z.object({
   R2_ACCESS_KEY_ID: z.string().default(''),
   R2_SECRET_ACCESS_KEY: z.string().default(''),
   R2_BUCKET: z.string().default('fingate-docs'),
+  /** Số request tối đa / phút / IP (dev e2e chạy nhiều trình duyệt song song thì nâng lên) */
+  RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(300),
   MAX_UPLOAD_BYTES: z.coerce.number().int().default(25 * 1024 * 1024),
   /** hạn mức dung lượng chứng từ per company (mặc định 5 GB — trần R2 free 10 GB, arch §19.2-7) */
   COMPANY_STORAGE_BYTES: z.coerce.number().int().default(5 * 1024 * 1024 * 1024),

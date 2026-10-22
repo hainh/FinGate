@@ -4,7 +4,8 @@
  * - Nhút duyệt LUÔN chứa số tiền: "Duyệt khoản 4,80 tỷ".
  * - Confirm 7 câu hỏi (decision-pack — FE zero logic tiền).
  * - Step-up: FG-AUTH-008 / data.need_verify → mật khẩu hoặc OTP → retry kèm verify.
- * - FG-WF-007 → gõ lại đúng số tiền → retry kèm confirm_amount_minor.
+ * - FG-WF-007 → gõ lại đúng số tiền → retry kèm confirm_amount_minor (khoản lớn / ngoài ngân sách,
+ *   hoặc tăng số tiền phiếu chi — v2 §6.3). confirm_amount_minor CHỈ gửi sau khi người duyệt đã gõ lại.
  * - 409 FG-WF-011 → hiện "ai vừa sửa lúc nào" + refetch, KHÔNG ghi đè im lặng.
  * - Mutation luôn kèm request_id (idempotency) — api.ts tự thêm.
  */
@@ -17,10 +18,10 @@ import {
   money,
   moneyFromWire,
   parseMoneyInput,
-  cmp,
   statusLabel,
   today,
   ZERO,
+  type Money,
 } from '@fingate/shared';
 import { ApiRequestError } from '../app/api.ts';
 import { useBankAccounts, useDecisionPack, useTransition, type TransitionInput } from '../app/queries.ts';
@@ -29,7 +30,8 @@ import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgPassword, FgSelect, FgS
 import { FgModal } from '../components/uitk.tsx';
 import { FgDecisionPack, directionOf } from '../components/finance.tsx';
 import { LoanBanner } from '../components/voucher-v2.tsx';
-import { hasAutoLoanRun } from '../app/v2/documents.ts';
+import { bankAccountOptionLabel, hasAutoLoanRun } from '../app/v2/documents.ts';
+import { checkRetypedAmount } from '../app/v2/amount-retype.ts';
 
 /* ================= step-up ================= */
 
@@ -100,7 +102,7 @@ export interface RunExtra {
 export function useTransitionRunner() {
   const transition = useTransition();
   const [stepUp, setStepUp] = useState<null | { input: TransitionInput; extra: RunExtra }>(null);
-  const [retype, setRetype] = useState<null | { input: TransitionInput; extra: RunExtra; expected: string }>(null);
+  const [retype, setRetype] = useState<null | { input: TransitionInput; extra: RunExtra; expected: string; increaseFrom: string | null }>(null);
   const [conflict, setConflict] = useState<null | { message: string }>(null);
   const [hardError, setHardError] = useState<null | { title: string; detail?: string; code: string }>(null);
   const [stepErr, setStepErr] = useState<string | null>(null);
@@ -128,8 +130,14 @@ export function useTransitionRunner() {
         setStepErr(p.detail ?? 'Xác thực không đúng — thử lại.');
         return false;
       }
-      if (p.code === 'FG-WF-007' && !extra.confirm_amount_minor) {
-        setRetype({ input, extra, expected: String(p.data?.amount_minor ?? input.confirm_amount_minor ?? '') });
+      // FG-WF-007: khoản lớn / ngoài ngân sách, hoặc TĂNG số tiền (server kèm previous_amount_minor) → gõ lại trước khi gửi lại
+      if (p.code === 'FG-WF-007' && !(extra.confirm_amount_minor ?? input.confirm_amount_minor)) {
+        setRetype({
+          input,
+          extra,
+          expected: String(p.data?.amount_minor ?? ''),
+          increaseFrom: p.data?.previous_amount_minor != null ? String(p.data.previous_amount_minor) : null,
+        });
         return false;
       }
       if (p.code === 'FG-WF-011') {
@@ -159,10 +167,18 @@ export function useTransitionRunner() {
           }}
         />
       ) : null}
-      {retype ? <RetypeAmountModal expected={retype.expected} busy={transition.isPending} onCancel={() => setRetype(null)} onConfirm={async (m) => {
-        const okDone = await attempt(retype.input, { ...retype.extra, confirm_amount_minor: m });
-        if (okDone) setRetype(null);
-      }} /> : null}
+      {retype ? (
+        <RetypeAmountModal
+          expected={retype.expected ? money(retype.expected) : ZERO()}
+          increaseFrom={retype.increaseFrom ? money(retype.increaseFrom) : null}
+          busy={transition.isPending}
+          onCancel={() => setRetype(null)}
+          onConfirm={async (m) => {
+            const okDone = await attempt(retype.input, { ...retype.extra, confirm_amount_minor: m });
+            if (okDone) setRetype(null);
+          }}
+        />
+      ) : null}
       {conflict ? (
         <FgModal
           open
@@ -188,48 +204,75 @@ export function useTransitionRunner() {
   return { run, runAsync, success, busy: transition.isPending, modals, conflict };
 }
 
+/**
+ * Gõ lại đúng số tiền để xác nhận. Hai trường hợp dùng chung một modal:
+ * - `increaseFrom` có giá trị: người duyệt TĂNG số tiền phiếu chi (v2 §6.3, §7.2);
+ * - không có: khoản lớn > 5 tỷ / ngoài ngân sách (DS §7.14 rule 4, server FG-WF-007).
+ * Chỉ gọi `onConfirm` khi số gõ KHỚP `expected`; chưa khớp thì modal giữ nguyên và chưa gửi gì lên server.
+ */
 function RetypeAmountModal({
   expected,
+  increaseFrom,
   onConfirm,
   onCancel,
   busy,
 }: {
-  expected: string;
+  /** số tiền phải gõ lại (đúng số tiền hiệu lực sau khi duyệt) */
+  expected: Money;
+  /** số tiền cũ khi đang tăng số tiền; null/undefined = khoản lớn / ngoài ngân sách */
+  increaseFrom?: Money | null;
   onConfirm: (minor: string) => void;
   onCancel: () => void;
   busy?: boolean;
 }): ReactNode {
   const [text, setText] = useState('');
   const [err, setErr] = useState<string | null>(null);
-  const expectedMoney = expected ? money(expected) : ZERO();
   return (
     <FgModal
       open
-      title="Xác nhận số tiền"
+      title={increaseFrom ? 'Xác nhận tăng số tiền' : 'Xác nhận số tiền'}
       onCancel={onCancel}
-      okText="Xác nhận"
+      okText={increaseFrom ? 'Xác nhận duyệt' : 'Xác nhận'}
       onOk={() => {
-        try {
-          const typed = parseMoneyInput(text);
-          if (cmp(typed, expectedMoney) !== 0) {
-            setErr('Số tiền nhập lại KHÔNG khớp — đọc kỹ và nhập lại.');
-            return;
-          }
-          onConfirm(typed.minor.toString());
-        } catch {
-          setErr('Định dạng số tiền không hợp lệ.');
+        const checked = checkRetypedAmount(text, expected);
+        if (!checked.ok) {
+          setErr(checked.error);
+          return;
         }
+        onConfirm(checked.minor);
       }}
       confirmLoading={busy}
     >
-      <FgAlert
-        tone="warning"
-        title="Khoản này ngoài ngân sách / vượt ngưỡng — xác nhận có chủ đích."
-        description={<>Gõ lại đúng số tiền <strong>{formatMoney(expectedMoney, { mode: 'full' })}</strong> để tiếp tục.</>}
-      />
+      {increaseFrom ? (
+        <FgAlert
+          tone="warning"
+          title="Bạn đang tăng số tiền của phiếu chi"
+          description={
+            <>
+              Từ <strong>{formatMoney(increaseFrom, { mode: 'full' })}</strong> lên <strong>{formatMoney(expected, { mode: 'full' })}</strong>. Gõ lại đúng số tiền
+              mới để xác nhận. Thao tác được ghi vào lịch sử phê duyệt và audit log.
+            </>
+          }
+        />
+      ) : (
+        <FgAlert
+          tone="warning"
+          title="Khoản này ngoài ngân sách / vượt ngưỡng — xác nhận có chủ đích."
+          description={<>Gõ lại đúng số tiền <strong>{formatMoney(expected, { mode: 'full' })}</strong> để tiếp tục.</>}
+        />
+      )}
       <div style={{ marginTop: 16 }}>
         <FgField label="Nhập lại số tiền" error={err}>
-          <FgInput autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder="2,5 tỷ" inputMode="numeric" />
+          <FgInput
+            autoFocus
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              setErr(null);
+            }}
+            placeholder="2,5 tỷ"
+            inputMode="numeric"
+          />
         </FgField>
       </div>
     </FgModal>
@@ -245,7 +288,7 @@ export function ApprovalConfirmModal({
   onDone,
 }: {
   doc: DocumentDetail;
-  action: 'approve' | 'reject' | 'request_changes' | 'submit' | 'pay' | 'approve_with_reason' | 'cancel';
+  action: 'approve' | 'reject' | 'request_changes' | 'submit' | 'pay' | 'queue_payment' | 'approve_with_reason' | 'cancel';
   onClose: () => void;
   onDone: () => void;
 }): ReactNode {
@@ -259,7 +302,7 @@ export function ApprovalConfirmModal({
   const canChangeAccount = action === 'approve' || action === 'approve_with_reason';
   const accountOptions = (accounts.data?.items ?? [])
     .filter((a) => a.status === 'active' && a.kind === doc.source.fund)
-    .map((a) => ({ value: a._id, label: `${a.is_group ? 'Tập đoàn' : (a.company_name ?? '—')} · ${a.bank_name} ${a.account_number_masked}` }));
+    .map((a) => ({ value: a._id, label: bankAccountOptionLabel(a, true) }));
   const [accountId, setAccountId] = useState<string>(doc.source.account_id ?? '');
   const accountChanged = accountId !== (doc.source.account_id ?? '');
   const amount = moneyFromWire(doc.amount)!;
@@ -289,11 +332,13 @@ export function ApprovalConfirmModal({
     request_changes: 'Yêu cầu bổ sung',
     submit: 'Gửi duyệt',
     pay: `Thực thi ${formatMoney(amount, { mode: 'compact' })}`,
+    queue_payment: 'Đưa vào hàng thanh toán',
     cancel: 'Hủy hồ sơ',
   };
   const danger = action === 'reject' || action === 'cancel';
 
-  const send = async (amountMinor?: string) => {
+  /** `confirmMinor` chỉ truyền khi người duyệt ĐÃ GÕ LẠI số tiền (tăng số tiền / khoản lớn) — tuyệt đối không echo tự động. */
+  const send = async (amountMinor?: string, confirmMinor?: string) => {
     const execution: TransitionInput['execution'] = isPay ? { paid_at: paidAt, bank_ref: bankRef.trim() || undefined } : undefined;
     await runner.runAsync({
       id: doc._id,
@@ -306,8 +351,8 @@ export function ApprovalConfirmModal({
       // cần `reason` >=20 ký tự (FG-WF-004) → gửi kèm để user không phải làm lại.
       reason: needsReason ? opinion : opinion && opinion.trim().length >= 20 ? opinion : undefined,
       amount_minor: amountMinor,
-      // tăng số tiền → gửi kèm xác nhận đúng số mới
-      confirm_amount_minor: amountMinor,
+      // v2 §6.3: xác nhận do người duyệt tự gõ lại (tăng số tiền / khoản lớn), không phải số tự echo
+      confirm_amount_minor: confirmMinor,
       execution,
     });
     // onDone sẽ chạy qua useEffect(runner.success) — kể cả retry muộn
@@ -439,7 +484,7 @@ export function ApprovalConfirmModal({
           <FgField
             label="Số tiền duyệt"
             error={amountErr}
-            help={`Đề nghị ban đầu: ${formatMoney(amount, { mode: 'full' })}. Bỏ trống = giữ nguyên; tăng số tiền phải xác nhận lại.`}
+            help={`Đề nghị ban đầu: ${formatMoney(amount, { mode: 'full' })}. Bỏ trống = giữ nguyên; tăng số tiền phải gõ lại số mới để xác nhận.`}
           >
             <FgInput
               value={amountText}
@@ -462,29 +507,16 @@ export function ApprovalConfirmModal({
         </FgField>
       </div>
       {amountConfirm ? (
-        <FgModal
-          open
-          title="Xác nhận tăng số tiền"
-          okText="Xác nhận duyệt"
+        <RetypeAmountModal
+          expected={money(amountConfirm.nextMinor.toString(), amount.currency)}
+          increaseFrom={amount}
           onCancel={() => setAmountConfirm(null)}
-          onOk={() => {
-            const next = amountConfirm.nextMinor.toString();
+          onConfirm={(minor) => {
+            // đã gõ lại đúng số mới → gửi số tiền mới kèm đúng số vừa gõ (server đối chiếu cả hai)
             setAmountConfirm(null);
-            void send(next);
+            void send(minor, minor);
           }}
-        >
-          <FgAlert
-            tone="warning"
-            title="Bạn đang tăng số tiền của phiếu chi"
-            description={
-              <>
-                Từ <strong>{formatMoney(amount, { mode: 'full' })}</strong> lên{' '}
-                <strong>{formatMoney(money(amountConfirm.nextMinor, amount.currency), { mode: 'full' })}</strong>. Thao tác được ghi vào lịch sử phê
-                duyệt và audit log.
-              </>
-            }
-          />
-        </FgModal>
+        />
       ) : null}
       {runner.modals}
     </FgModal>

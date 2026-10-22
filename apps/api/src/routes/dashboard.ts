@@ -7,6 +7,7 @@
  *
  * v2: `/dashboard/overview` lấy bản cache của `dashboardOverview` rồi GHI ĐÈ bằng số liệu sổ cái
  * và phần bổ sung (top đối tác, khoản vay chờ giải ngân, lượt tự động lỗi) — không sửa bản cache.
+ * `?tag_ids=a,b` (v2 §6.2) lọc số liệu theo phiếu; nhóm "theo tag" dùng `/reports/theo-tag`.
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -27,6 +28,8 @@ import { ok } from '../lib/serialize.ts';
 import { scopedFind, scopedOne } from '../lib/mongo.ts';
 import { cashflowHistoryQuery, dashboardQuery, reportQuery, searchQuery, newsletterQuery, notificationListQuery } from '@fingate/shared';
 import { asBigInt, awaitingBadge, cashflowHistory, compact, dashboardOverview, docHref, maturityLadder, scopeOf, wire } from '../domain/queries/index.ts';
+import { tagFilterSuffix } from '../domain/queries/dashboard-tags.ts';
+import { parseIdList } from '../domain/vouchers/rules.ts';
 import { buildNewsletter, cachedNewsletter, storeNewsletter } from '../domain/newsletter/index.ts';
 import { reportPreset } from '../domain/reports/index.ts';
 import { cashflowForecast, parseHorizon, FORECAST_HORIZONS } from '../domain/reports/cashflow.ts';
@@ -140,15 +143,17 @@ export function dashboardRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const actor = requireActor(req);
         const scope = requireScope(req);
-        validate(dashboardQuery, req.query);
+        const q = validate(dashboardQuery, req.query);
+        // v2 §6.2: lọc theo tag — ID sai định dạng → FG-VAL-001 (422), không lặng lẽ trả số liệu không lọc
+        const tagIds = parseIdList(q.tag_ids);
         const [base, extras] = await Promise.all([
-          dashboardOverview(scope, actor.user_id, actor.role, actor.permissions.includes('payment:mark')),
+          dashboardOverview(scope, actor.user_id, actor.role, actor.permissions.includes('payment:mark'), tagIds),
           // phần bổ sung không phụ thuộc người xem: cache 20 giây như phần cơ sở (máy 0.1 CPU, §8.3)
           cacheThrough(`dash-extras:${JSON.stringify(scope.companyIds)}:${today()}`, () => dashboardExtras(scope, today()), 20_000),
         ]);
         // không sửa `base` (bản cache của queries) — dựng object mới
         const data = overlayOverview(base, extras);
-        return ok(reply, { data }, { maxAge: 15, etag: `ov-${actor.user_id}-${today()}`, staleWhileRevalidate: 30 });
+        return ok(reply, { data }, { maxAge: 15, etag: `ov-${actor.user_id}-${today()}${tagFilterSuffix(tagIds)}`, staleWhileRevalidate: 30 });
       },
     }),
   );

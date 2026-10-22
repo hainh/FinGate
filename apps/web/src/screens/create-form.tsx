@@ -15,6 +15,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { DatePicker } from 'antd';
 import dayjs from 'dayjs';
 import {
@@ -36,15 +37,18 @@ import {
 } from '@fingate/shared';
 import { ApiRequestError, apiCall, apiData } from '../app/api.ts';
 import { SCOPE_ALL, useAuth, useCurrentCompanyId } from '../app/store.tsx';
-import { useBankAccounts, useCompanies, useDocument } from '../app/queries.ts';
+import { useBankAccounts, useDocument } from '../app/queries.ts';
 import type { DocumentDetail } from '../app/types.ts';
 import { usePartner, usePartnerLoans } from '../app/v2/partners.ts';
 import { budgetLineLabel, useBudgetLineOptions, useVoucherCategories } from '../app/v2/vouchers.ts';
-import { useLoanList } from '../app/v2/debts.ts';
+import { interestRateText, useLoanList } from '../app/v2/debts.ts';
 import {
   LOAN_OPEN_STATUSES,
+  bankAccountOptionLabel,
   defaultLoanDueDate,
   loanOptionsBody,
+  refreshDocumentAfterSave,
+  rolloverLoanOptionLabel,
   useLoanDefaults,
   transferTargetBody,
   type LoanTermsValues,
@@ -207,7 +211,8 @@ function formFromDocument(doc: DocumentDetail, kind: PageKind): FormState {
             receiveAccountId: loan.receive_account_id ?? '',
             amount: loanAmount,
             contractNo: terms?.contract_no ?? '',
-            interestRate: terms?.interest_rate ?? '',
+            // hiển thị theo dấu phẩy VN như lúc nhập (dữ liệu lưu trước đây có thể là "9.5")
+            interestRate: interestRateText(terms?.interest_rate),
             termMonths: terms?.term_months ?? null,
             dueDate: terms?.due_date ?? '',
             repaymentPeriod: terms?.repayment_period ?? '',
@@ -235,9 +240,9 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
   const scopeAll = scope === SCOPE_ALL;
   const companyName = me?.companies.find((c) => c.company_id === currentCompany)?.company_name ?? null;
   const { message } = useToast();
+  const qc = useQueryClient();
   const existing = useDocument(id);
   const accounts = useBankAccounts(currentCompany);
-  const companies = useCompanies();
   const [f, setF] = useState<FormState>(() => initial(kind));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -248,6 +253,16 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
 
   const partnerQ = usePartner(f.partnerId);
   const partnerName = partnerQ.data?.name ?? '';
+  /** Loại đối tác vừa chọn từ ô (có ngay, không chờ chi tiết tải xong). */
+  const [pickedPartner, setPickedPartner] = useState<{ id: string; type: PartnerType } | null>(null);
+  /** Loại của đối tác đang chọn: từ lựa chọn vừa rồi, hoặc từ chi tiết đã tải (đến sau). */
+  const partnerType: PartnerType | null = !f.partnerId
+    ? null
+    : pickedPartner?.id === f.partnerId
+      ? pickedPartner.type
+      : partnerQ.data?._id === f.partnerId
+        ? partnerQ.data.type
+        : null;
   const isBorrow = kind === 'income' && f.loan.on;
   const isFund = kind === 'spend' && f.loan.on;
   const hasPartnerField = kind === 'spend' || kind === 'income' || kind === 'rollover';
@@ -281,25 +296,24 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
   );
   const openLoans = (loansQ.data?.items ?? []).filter((l) => LOAN_OPEN_STATUSES.includes(l.status));
 
-  // Tài khoản: nguồn (theo hình thức tiền của phiếu); nhận giải ngân = TK ngân hàng của công ty lập phiếu.
+  // Tài khoản: nguồn (theo hình thức tiền của phiếu) — ô này cũng là TK đích của phiếu thu; nhận giải ngân = TK ngân hàng của công ty lập phiếu.
+  // Mọi nhãn đều có TÊN TK (phân biệt các TK cùng ngân hàng); ô nguồn gộp cả Tập đoàn nên thêm tên công ty đầu nhãn.
   const sourceAccountOptions = (accounts.data?.items ?? [])
     .filter((a) => a.status === 'active' && a.kind === f.fund)
-    .map((a) => ({
-      value: a._id,
-      label: `${a.is_group ? 'Tập đoàn' : (a.company_name ?? '—')} · ${a.bank_name} ${a.account_number_masked}`,
-    }));
+    .map((a) => ({ value: a._id, label: bankAccountOptionLabel(a, true) }));
   const receiveAccountOptions = (accounts.data?.items ?? [])
     .filter((a) => a.status === 'active' && a.kind === 'bank' && !a.is_group && a.company_id === currentCompany)
-    .map((a) => ({ value: a._id, label: `${a.bank_name} · ${a.account_number_masked}${a.account_name ? ` · ${a.account_name}` : ''}` }));
+    .map((a) => ({ value: a._id, label: bankAccountOptionLabel(a) }));
 
   // Chuyển nội bộ: công ty khác (trong danh bạ phạm vi) + TK đang hoạt động của công ty đó.
   const targetAccounts = useBankAccounts(f.transferCompanyId || null);
-  const companyOptions = (companies.data?.items ?? [])
-    .filter((c) => c._id !== currentCompany && c.status !== 'inactive')
-    .map((c) => ({ value: c._id, label: `${c.name} (${c.code})` }));
+  // Công ty nhận: mọi công ty NGƯỜI DÙNG ĐƯỢC GÁN (me.companies), không chỉ công ty đang xem ở bộ chuyển phạm vi.
+  const companyOptions = (me?.companies ?? [])
+    .filter((c) => c.company_id !== currentCompany)
+    .map((c) => ({ value: c.company_id, label: `${c.company_name} (${c.company_code})` }));
   const transferAccountOptions = (targetAccounts.data?.items ?? [])
     .filter((a) => a.status === 'active' && a.company_id === f.transferCompanyId)
-    .map((a) => ({ value: a._id, label: `${a.bank_name} · ${a.account_number_masked}${a.account_name ? ` · ${a.account_name}` : ''}` }));
+    .map((a) => ({ value: a._id, label: bankAccountOptionLabel(a) }));
 
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setF((s) => ({ ...s, [k]: v }));
   const setLoan = (patch: Partial<LoanState>) => setF((s) => ({ ...s, loan: { ...s.loan, ...patch } }));
@@ -327,6 +341,14 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
       rolloverLoanId: loanParam || s.rolloverLoanId,
     }));
   }, [id, existing.data, kind, query]);
+
+  // Phiếu thu đi vay: bên nộp tiền chỉ là Ngân hàng (§11.4). Kiểm lại MỖI KHI loại đối tác biết được — kể cả
+  // chi tiết đối tác tải xong sau khi đã bật "đi vay" hoặc người dùng chọn đối tác ngay sau khi bật.
+  useEffect(() => {
+    if (kind !== 'income' || !f.loan.on || !f.partnerId || !partnerType || partnerType === 'bank') return;
+    message.info('Phiếu thu đi vay: bên nộp tiền phải là Ngân hàng — chọn lại đối tác');
+    setF((s) => ({ ...s, partnerId: null }));
+  }, [kind, f.loan.on, f.partnerId, partnerType, message]);
 
   /**
    * Điều khoản vay gửi lên: ô để trống ⇒ KHÔNG gửi số mặc định cứng. Server dùng tham số của công ty và tính lại
@@ -441,17 +463,23 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
       const knownId = id ?? draftRef.current?.id ?? null;
       let docId: string;
       let version: number;
+      /** Chi tiết vừa lưu (PATCH trả về cùng dạng GET): đặt vào bản đệm để màn chi tiết không hiện bản trước khi sửa. */
+      let saved: DocumentDetail | null = null;
       if (knownId) {
         const ifMatch = id ? existing.data?.version ?? 1 : draftRef.current?.version ?? 1;
-        const res = await apiCall<{ version?: number }>(`/documents/${knownId}`, { method: 'PATCH', body: { ...body, if_match: ifMatch } });
+        const res = await apiCall<{ version?: number; data?: DocumentDetail }>(`/documents/${knownId}`, { method: 'PATCH', body: { ...body, if_match: ifMatch } });
         docId = knownId;
         version = res.version ?? ifMatch;
+        saved = res.data ?? null;
       } else {
         const created = await apiData<{ _id: string; version: number }>('/documents', { method: 'POST', body });
         docId = created._id;
         version = created.version;
       }
       if (!id) draftRef.current = { id: docId, version };
+      // Làm tươi trước khi sang màn chi tiết (kể cả khi bước gửi duyệt sau đó lỗi: hồ sơ đã được lưu).
+      // Lượt gửi duyệt đổi trạng thái sau PATCH ⇒ không đặt bản PATCH vào bản đệm.
+      refreshDocumentAfterSave(qc, scope, docId, submitNow ? null : saved);
       if (submitNow) {
         // gửi duyệt: lỗi ở đây giữ nguyên nháp (draftRef) để lần bấm sau không tạo trùng
         await apiData(`/documents/${docId}/transition`, { method: 'POST', body: { action: 'submit', if_match: version } });
@@ -519,7 +547,10 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                   label={partnerLabel}
                   required={partnerRequired}
                   value={f.partnerId}
-                  onChange={(id) => set('partnerId', id)}
+                  onChange={(id, p) => {
+                    set('partnerId', id);
+                    setPickedPartner(id && p ? { id, type: p.type } : null);
+                  }}
                   allowedTypes={partnerAllowed}
                   defaultType={partnerDefault}
                   companyId={currentCompany}
@@ -663,10 +694,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                       const picked = rolloverLoanOptions.find((l) => l._id === v);
                       setF((s) => ({ ...s, rolloverLoanId: String(v ?? ''), partnerId: picked?.partner_id ?? s.partnerId }));
                     }}
-                    options={rolloverLoanOptions.map((l) => ({
-                      value: l._id,
-                      label: `${l.code} · gốc ${formatMoney(moneyFromWire(l.principal) ?? money('0'), { mode: 'compact' })} · đáo hạn ${l.maturity_date}`,
-                    }))}
+                    options={rolloverLoanOptions.map((l) => ({ value: l._id, label: rolloverLoanOptionLabel(l) }))}
                     placeholder={f.partnerId ? 'Chọn khoản vay của ngân hàng này' : 'Chọn ngân hàng cho vay trước'}
                     disabled={!canEdit || !f.partnerId}
                     style={{ width: '100%' }}
@@ -708,13 +736,8 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                 <input
                   type="checkbox"
                   checked={f.loan.on}
-                  onChange={(e) => {
-                    const on = e.target.checked;
-                    // bật "đi vay" ⇒ bên nộp tiền phải là Ngân hàng: bỏ đối tác không phải ngân hàng (chọn lại)
-                    const wrongType = on && !!partnerQ.data && partnerQ.data.type !== 'bank';
-                    if (wrongType) message.info('Phiếu thu đi vay: bên nộp tiền phải là Ngân hàng — chọn lại đối tác');
-                    setF((s) => ({ ...s, loan: { ...s.loan, on }, partnerId: wrongType ? null : s.partnerId }));
-                  }}
+                  // bật "đi vay" ⇒ bên nộp tiền phải là Ngân hàng: effect ở trên bỏ đối tác không phải ngân hàng
+                  onChange={(e) => setLoan({ on: e.target.checked })}
                   style={{ width: 18, height: 18, marginTop: 1 }}
                   disabled={!canEdit}
                 />
@@ -885,7 +908,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                   <FgField
                     label="Công ty nhận *"
                     error={errors['transfer_target.company_id'] ?? null}
-                    help={companyOptions.length ? undefined : 'Không có công ty khác trong phạm vi đang xem — công ty nhận phải nằm trong phạm vi (server §7.5)'}
+                    help={companyOptions.length ? undefined : 'Bạn chưa được gán công ty nào khác — chuyển nội bộ cần công ty nhận mà bạn được gán'}
                   >
                     <FgSelect
                       options={companyOptions}

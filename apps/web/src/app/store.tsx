@@ -7,7 +7,7 @@
  * - `can(permission)` đọc `entitlements.permissions` — server là nguồn, UI chỉ ẩn nút/cột.
  */
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App as AntdApp, ConfigProvider } from 'antd';
 import viVN from 'antd/locale/vi_VN';
@@ -73,8 +73,24 @@ function keepDataWithinScope(prevData: unknown, prevQuery: { queryKey: readonly 
   return prevQuery && prevQuery.queryKey[1] === activeScope ? prevData : undefined;
 }
 
+/**
+ * Chỉ 401 hoặc FG-AUTH-001 mới nghĩa là phiên đã kết thúc. Mọi lỗi khác khi tải /me
+ * (502/503 lúc API khởi động lại, mất mạng, phản hồi hỏng…) là lỗi tạm thời: phiên vẫn còn.
+ */
+export function isSessionEnded(e: unknown): boolean {
+  return e instanceof ApiRequestError && (e.status === 401 || e.code === 'FG-AUTH-001');
+}
+
+/** Khoảng chờ trước lần tự tải lại /me thứ `failures`: 2s, 4s, 8s, 16s, tối đa 30s. */
+export function meRetryDelayMs(failures: number): number {
+  return Math.min(2_000 * 2 ** Math.max(0, failures - 1), 30_000);
+}
+
 interface AuthContextValue {
-  status: 'loading' | 'anon' | 'authed';
+  /**
+   * 'error': /me lỗi tạm thời, phiên được giữ nguyên — hiển thị "Thử lại" và tự tải lại /me.
+   */
+  status: 'loading' | 'anon' | 'authed' | 'error';
   me: MeProfile | null;
   /** 'all' hoặc company_id — scope đang hoạt động. */
   scope: string;
@@ -123,6 +139,8 @@ export function AppProviders({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<MeProfile | null>(null);
   const [status, setStatus] = useState<AuthContextValue['status']>('loading');
   const [scope, setScopeState] = useState<string>(SCOPE_ALL);
+  /** Số lần tải /me liên tiếp thất bại tạm thời (đặt lại về 0 khi thành công). */
+  const [meFailures, setMeFailures] = useState(0);
 
   const resolved = resolvedTheme(ui.theme);
 
@@ -142,6 +160,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
       const profile = await apiData<MeProfile>('/me');
       setMe(profile);
       setStatus('authed');
+      setMeFailures(0);
       const active = profile.scope?.active_company_id;
       const def = profile.prefs?.default_scope;
       const allowed = profile.scope?.company_ids ?? [];
@@ -164,8 +183,15 @@ export function AppProviders({ children }: { children: ReactNode }) {
       setScopeState(next);
       return profile;
     } catch (e) {
-      if (e instanceof ApiRequestError && (e.status === 401 || e.code === 'FG-AUTH-001')) setStatus('anon');
-      else setStatus('anon');
+      if (isSessionEnded(e)) {
+        setMe(null);
+        setStatus('anon');
+      } else {
+        // Lỗi tạm thời (502/503, mất mạng…): KHÔNG kết thúc phiên. Đã đăng nhập thì giữ nguyên;
+        // chưa có phiên thì hiện lỗi có "Thử lại", và effect dưới tự tải lại /me.
+        setStatus((prev) => (prev === 'authed' ? prev : 'error'));
+        setMeFailures((n) => n + 1);
+      }
       return null;
     }
   }, []);
@@ -193,6 +219,14 @@ export function AppProviders({ children }: { children: ReactNode }) {
     void loadMe();
   }, [loadMe]);
 
+  // Lỗi tạm thời: tự tải lại /me với khoảng chờ tăng dần. Mỗi lần thất bại đổi meFailures → hẹn lại;
+  // thành công → status 'authed' → effect huỷ hẹn.
+  useEffect(() => {
+    if (status !== 'error') return;
+    const timer = window.setTimeout(() => void loadMe(), meRetryDelayMs(meFailures));
+    return () => window.clearTimeout(timer);
+  }, [status, meFailures, loadMe]);
+
   useEffect(() => {
     setUnauthorizedHandler(() => {
       // chỉ đá về login khi ĐÃ có phiên (401 giữa-cau-thi). 401 của /me lúc mới mở máy = anon bình thường.
@@ -213,7 +247,9 @@ export function AppProviders({ children }: { children: ReactNode }) {
     if (!r.need_2fa) {
       markSignedOut(false);
       const profile = await loadMe();
-      go(homeFor(profile));
+      // /me lỗi tạm thời (profile null): chưa biết quyền để chọn trang đích → về "/";
+      // HomeRedirect hiện lỗi "Thử lại" và chọn trang khi tải lại được.
+      go(profile ? homeFor(profile) : '/');
     }
     return r;
   }, [loadMe, homeFor, go]);
@@ -222,7 +258,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
     await apiData('/auth/2fa', { method: 'POST', body: { challenge, code } });
     markSignedOut(false);
     const profile = await loadMe();
-    go(homeFor(profile));
+    go(profile ? homeFor(profile) : '/');
   }, [loadMe, homeFor, go]);
 
   const logout = useCallback(async () => {
@@ -239,15 +275,24 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
   const setScope = useCallback((s: string) => {
     // Cập nhật provider NGAY (đồng bộ), không chờ effect — request phát sinh ngay sau
-    // khi đổi phạm vi (invalidate + query key mới) phải gửi đúng header công ty.
+    // khi đổi phạm vi (query key mới) phải gửi đúng header công ty.
     setScopeProvider(() => (s && s !== SCOPE_ALL ? s : null));
     activeScope = s;
     setScopeState(s);
-    // đổi scope → refetch mọi số liệu, giữ nguyên filter (URL không đổi).
-    queryClient.invalidateQueries();
     // báo server biết scope hoạt động mới (không chặn UI nếu lỗi)
     void apiCall('/me/prefs', { method: 'PATCH', body: { default_scope: s } }).catch(() => undefined);
   }, []);
+
+  // đổi scope → refetch mọi số liệu, giữ nguyên filter (URL không đổi). Làm tươi SAU khi phạm vi mới
+  // đã render: query đang hiển thị lúc đó mang closure mới (đúng công ty, bộ lọc theo công ty đã bỏ).
+  // Làm tươi ngay trong setScope sẽ gửi lại tham số của phạm vi cũ (kể cả tag của công ty trước).
+  const renderedScope = useRef(scope);
+  useEffect(() => {
+    if (renderedScope.current === scope) return;
+    renderedScope.current = scope;
+    // cancelRefetch: false — query vừa được mount lại với phạm vi mới (đang tải) không bị gửi lần hai.
+    void queryClient.invalidateQueries(undefined, { cancelRefetch: false });
+  }, [scope]);
 
   // sync prefs người dùng từ server khi đăng nhập (theme/density ưu tiên thiết bị nếu đã chọn)
   useEffect(() => {

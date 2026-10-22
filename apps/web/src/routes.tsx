@@ -36,7 +36,7 @@ import { BackupScreen } from './screens/backup.tsx';
 import { TagsScreen } from './screens/tags.tsx';
 import { AlertsScreen, NewsletterScreen, NotificationsScreen, SearchScreen } from './screens/misc.tsx';
 import { DocumentFormScreen } from './screens/create-form.tsx';
-import { ForbiddenScreen, NotFoundScreen } from './screens/errors.tsx';
+import { ForbiddenScreen, NotFoundScreen, ServerErrorScreen } from './screens/errors.tsx';
 import { FgSpinner } from './components/uitk.tsx';
 
 // Ghi chú bundle: mọi màn import tĩnh để một module graph (Vite 8 dev tạo hai bản
@@ -57,8 +57,18 @@ function Guard({ children }: { children: ReactNode }): ReactNode {
         <FgSpinner center />
       </div>
     );
+  if (status === 'error') return <SessionErrorScreen />;
   if (status === 'anon') return <Navigate to="/dang-nhap" replace />;
   return <>{children}</>;
+}
+
+/**
+ * /me lỗi tạm thời (502, mất mạng): phiên vẫn còn nên KHÔNG về màn đăng nhập. Hiện lỗi có "Thử lại";
+ * store tự tải lại /me nên màn tiếp tục khi API sẵn sàng.
+ */
+function SessionErrorScreen(): ReactNode {
+  const { refreshMe } = useAuth();
+  return <ServerErrorScreen reset={() => void refreshMe()} />;
 }
 
 /**
@@ -115,6 +125,7 @@ function ShellInner({ children }: { children: ReactNode }): ReactNode {
 function HomeRedirect(): ReactNode {
   const { status, can } = useAuth();
   if (status === 'loading') return <FgSpinner center />;
+  if (status === 'error') return <SessionErrorScreen />;
   if (status === 'anon') return <Navigate to="/dang-nhap" replace />;
   return <Navigate to={can('doc:read') ? '/dashboard' : '/quantri'} replace />;
 }

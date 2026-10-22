@@ -7,7 +7,7 @@ import { ApiError, addDays, today } from '@fingate/shared';
 import { Models } from '../db/models.ts';
 import { oid } from '../lib/mongo.ts';
 import { loadPipelineDocs, plannedFlowsByAccount, plannedFlowsOf } from './ledger/planned.ts';
-import { maskAccount } from './queries/index.ts';
+import { bankAccountLabelOf, maskAccount } from './queries/index.ts';
 
 /**
  * Số dư tài khoản (v2 §4.2) — CHỈ từ sổ cái + phiếu chờ thực thi:
@@ -23,6 +23,8 @@ export interface LedgerAccountView {
   company_code: string;
   label: string;
   bank_name: string;
+  /** tên tài khoản (để phân biệt các TK cùng ngân hàng trong ô chọn). */
+  account_name: string;
   account_number_masked: string;
   kind: string;
   currency: string;
@@ -83,7 +85,7 @@ export async function ledgerAccountViews(
         ? { ...base, $or: [{ company_id: { $in: scope.companyIds } }, { is_group: true }] }
         : { ...base, company_id: { $in: scope.companyIds } };
   const accounts = await Models.BankAccount.find(filter as never)
-    .select({ company_id: 1, bank_name: 1, account_number: 1, kind: 1, currency: 1, min_balance_minor: 1, is_group: 1, status: 1 })
+    .select({ company_id: 1, bank_name: 1, account_name: 1, account_number: 1, kind: 1, currency: 1, min_balance_minor: 1, is_group: 1, status: 1 })
     .lean();
   if (!accounts.length) return [];
 
@@ -142,8 +144,9 @@ export async function ledgerAccountViews(
       company_id: companyId,
       company_name: cname.get(companyId) ?? (a.is_group ? 'Tập đoàn' : '—'),
       company_code: a.is_group ? groupCode : (ccode.get(companyId) ?? ''),
-      label: `${a.bank_name} ${masked}`,
+      label: bankAccountLabelOf({ bank_name: a.bank_name, account_number: a.account_number, account_name: a.account_name }),
       bank_name: String(a.bank_name ?? ''),
+      account_name: String(a.account_name ?? ''),
       account_number_masked: masked,
       kind: String(a.kind ?? 'bank'),
       currency: String(a.currency ?? 'VND'),

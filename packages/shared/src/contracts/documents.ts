@@ -87,12 +87,20 @@ export const loanOptions = z
   });
 export type LoanOptions = z.infer<typeof loanOptions>;
 
-/** Chuyển tiền nội bộ: công ty / tài khoản đích theo ID (v2 §11.6 — không nhận diện theo chuỗi). */
+/** Chuyển tiền nội bộ: công ty / tài khoản đích theo ID (v2 §11.6 — không nhận diện theo chuỗi). Dạng ĐỌC (dữ liệu cũ có thể thiếu TK). */
 export const transferTarget = z.object({
   company_id: objectId,
   account_id: objectId.nullable().optional(),
 });
 export type TransferTarget = z.infer<typeof transferTarget>;
+
+/**
+ * Chuyển tiền nội bộ — dạng GHI (tạo / sửa phiếu): phải chọn cả công ty VÀ tài khoản đích (v2 §11.6). R1 ghi phiếu thu
+ * vào đúng TK này sau khi phiếu chi thực thi, nên thiếu TK phải chặn ngay khi lưu (lúc đó tiền đã ra khỏi công ty nguồn).
+ */
+export const transferTargetInput = transferTarget.extend({
+  account_id: z.string({ error: 'Chọn tài khoản nhận của công ty đích' }).regex(/^[0-9a-f]{24}$/, 'Chọn tài khoản nhận của công ty đích'),
+});
 
 /** Nguồn gốc hồ sơ: thủ công, hoặc tự động (lượt chạy + quy tắc đã sinh ra). Server ghi, không nhận từ client. */
 export const documentOrigin = z.object({
@@ -193,7 +201,7 @@ const documentFields = z.object({
     /** ★ v2 [MỚI]: tuỳ chọn tự động — `options.loan`. */
     options: z.object({ loan: loanOptions.nullable().optional() }).nullable().optional(),
     /** ★ v2 [MỚI]: chuyển tiền nội bộ theo ID — thay dần `target` (v1). */
-    transfer_target: transferTarget.nullable().optional(),
+    transfer_target: transferTargetInput.nullable().optional(),
     evidence_required: z
     .array(evidenceType)
     .optional()
