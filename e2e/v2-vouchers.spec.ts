@@ -77,12 +77,12 @@ async function listFooterCount(page: Pg): Promise<number> {
   return m ? Number(m[1]) : -2;
 }
 
-/** Chân danh sách "Chờ tôi duyệt" đọc từ API: số hồ sơ và tổng tiền (minor, dạng chuỗi) của cùng lượt đọc. */
-async function queueSummary(page: Pg, co: string): Promise<{ count: number; amount: string }> {
+/** Chân danh sách "Chờ tôi duyệt" đọc từ API: số hồ sơ, tổng tiền (minor, dạng chuỗi) và chuỗi rút gọn của cùng lượt đọc. */
+async function queueSummary(page: Pg, co: string): Promise<{ count: number; amount: string; compact: string }> {
   const r = await H.api(page, 'GET', '/queue?limit=1', { scope: co });
   expect(r.status, r.text).toBeLessThan(300);
-  const s = H.unwrap<{ summary: { count: number; amount: string } }>(r.body).summary;
-  return { count: s.count, amount: String(s.amount) };
+  const s = H.unwrap<{ summary: { count: number; amount: string; compact: string } }>(r.body).summary;
+  return { count: s.count, amount: String(s.amount), compact: String(s.compact) };
 }
 
 /** Chạy đoạn mongosh trên CSDL test (container `fingate-mongo`, như v2-auto-r2) và đọc dòng JSON cuối. */
@@ -101,6 +101,133 @@ function executionTotalInDb(co: string): { n: number; sum: string } {
   return mongoEval<{ n: number; sum: string }>(
     `const c = ObjectId('${co}'); let n = 0; let sum = 0n; db.documents.find({ company_id: c, kind: 'spend', status: { $in: ['approved', 'processing'] } }, { 'amount.minor': 1 }).forEach((d) => { n++; sum += BigInt(d.amount.minor.toString()); }); print(JSON.stringify({ n: n, sum: sum.toString() }));`,
   );
+}
+
+/** Chuẩn hoá khoảng trắng (kể cả khoảng trắng không ngắt) để so chuỗi trên màn với chuỗi máy chủ. */
+const norm = (s: string): string => s.replace(/\s+/g, ' ').trim();
+
+/** Người xem hàng chờ: mã người dùng, vai trò trong công ty, có quyền thực thi (payment:mark) — đúng dữ liệu máy chủ dùng để lọc. */
+interface Viewer {
+  userId: string;
+  role: string;
+  canPay: boolean;
+}
+async function viewerOf(page: Pg, co: string): Promise<Viewer> {
+  const r = await H.api(page, 'GET', '/me', { scope: co });
+  expect(r.status, r.text).toBeLessThan(300);
+  const me = H.unwrap<{
+    user_id: string;
+    assignments?: { company_id: string; role: string }[];
+    entitlements?: { role?: string; permissions?: string[] };
+  }>(r.body);
+  const a = (me.assignments ?? []).find((x) => String(x.company_id) === co);
+  return {
+    userId: String(me.user_id),
+    role: String(a?.role ?? me.entitlements?.role ?? ''),
+    canPay: (me.entitlements?.permissions ?? []).includes('payment:mark'),
+  };
+}
+
+/**
+ * Hàng chờ "Chờ tôi duyệt" của một người xem, tính từ CSDL theo đúng luật máy chủ (queue / awaitingBadge):
+ * bước của người đó là cấp thấp nhất còn chờ, hoặc (có quyền thực thi) phiếu chi đã duyệt / đang thanh toán.
+ */
+function queueTruthInDb(co: string, v: Viewer): { n: number; sum: string } {
+  return mongoEval<{ n: number; sum: string }>(
+    `const co = ObjectId('${co}'); const uid = '${v.userId}'; const role = '${v.role}'; const canPay = ${v.canPay ? 'true' : 'false'};` +
+      ` const st = ['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'].concat(canPay ? ['approved', 'processing'] : []);` +
+      ` let n = 0; let sum = 0n;` +
+      ` db.documents.find({ company_id: co, status: { $in: st } }, { status: 1, kind: 1, 'amount.minor': 1, 'approval.steps': 1 }).forEach((d) => {` +
+      ` const steps = (d.approval && d.approval.steps) || [];` +
+      ` const pend = steps.filter((s) => s.state === 'current' || s.state === 'waiting');` +
+      ` let mine = false;` +
+      ` if (pend.length) { const min = Math.min(...pend.map((s) => s.order)); const s = pend.find((x) => x.order === min); mine = s.user_id != null ? String(s.user_id) === uid : s.role === role; }` +
+      ` const exec = canPay && d.kind === 'spend' && (d.status === 'approved' || d.status === 'processing');` +
+      ` if (mine || exec) { n++; sum += BigInt(String(d.amount.minor)); } });` +
+      ` print(JSON.stringify({ n: n, sum: sum.toString() }));`,
+  );
+}
+
+/** "" khi chân "Chờ tôi duyệt" của máy chủ (số hồ sơ, tổng tiền) khớp CSDL; ngược lại mô tả chỗ lệch để báo lỗi. */
+async function queueDiffVsDb(page: Pg, co: string, v: Viewer): Promise<string> {
+  const a = await queueSummary(page, co);
+  const truth = queueTruthInDb(co, v);
+  const b = await queueSummary(page, co);
+  if (a.count !== b.count || a.amount !== b.amount) return `hàng chờ đổi trong lúc đọc (${a.count} → ${b.count} hồ sơ)`;
+  if (truth.n !== a.count) return `số hồ sơ: máy chủ ${a.count}, CSDL ${truth.n}`;
+  if (truth.sum !== a.amount) {
+    return `tổng tiền: máy chủ ${a.amount}, CSDL ${truth.sum} (lệch ${BigInt(truth.sum) - BigInt(a.amount)} đ trên ${a.count} hồ sơ)`;
+  }
+  return '';
+}
+
+/** "" khi thẻ "chờ tôi duyệt" của tổng quan hôm nay (`/dashboard/today`) khớp CSDL. */
+async function todayDiffVsDb(page: Pg, co: string, v: Viewer): Promise<string> {
+  const truth = queueTruthInDb(co, v);
+  const r = await H.api(page, 'GET', '/dashboard/today', { scope: co });
+  expect(r.status, r.text).toBeLessThan(300);
+  const minor = String(H.unwrap<{ awaiting?: { amount?: { minor?: unknown } } }>(r.body)?.awaiting?.amount?.minor ?? '');
+  return minor === truth.sum ? '' : `thẻ tổng quan hôm nay: máy chủ ${minor}, CSDL ${truth.sum}`;
+}
+
+/** "" khi KPI "Chờ tôi duyệt" của tổng quan (số khoản và tổng tiền) khớp CSDL. */
+async function overviewDiffVsDb(page: Pg, co: string, v: Viewer): Promise<string> {
+  const truth = queueTruthInDb(co, v);
+  const r = await H.api(page, 'GET', '/dashboard/overview', { scope: co });
+  expect(r.status, r.text).toBeLessThan(300);
+  const o = H.unwrap<{ kpi?: { awaiting_me?: { amount?: { minor?: unknown } } }; counts?: { awaiting_me?: number } }>(r.body);
+  const cnt = o.counts?.awaiting_me;
+  const amt = String(o.kpi?.awaiting_me?.amount?.minor ?? '');
+  if (cnt !== truth.n) return `tổng quan: số khoản máy chủ ${cnt}, CSDL ${truth.n}`;
+  return amt === truth.sum ? '' : `KPI tổng quan: máy chủ ${amt}, CSDL ${truth.sum}`;
+}
+
+/** Chân danh sách trên màn ("N hồ sơ · tổng X đang chờ") → "N | X"; "" khi chân chưa hiện. */
+async function listFooterText(page: Pg): Promise<string> {
+  const foot = page.getByText(/hồ sơ · tổng/).first();
+  await foot.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => undefined);
+  if ((await foot.count()) === 0) return '';
+  const t = norm((await foot.innerText()) ?? '');
+  const m = t.match(/(\d+)\s*hồ sơ · tổng\s*(.+?)\s*đang chờ/);
+  return m ? `${m[1]} | ${m[2]}` : `không đọc được chân danh sách: ${t}`;
+}
+
+/** Thẻ "Chờ tôi duyệt" (KPI) trên Tổng quan: số tiền rút gọn đang hiện; "" khi chưa thấy thẻ. */
+async function dashboardKpiText(page: Pg): Promise<string> {
+  const card = page.locator('.fg-kpi').filter({ hasText: 'Chờ tôi duyệt' }).first();
+  await card.waitFor({ state: 'visible', timeout: 15_000 }).catch(() => undefined);
+  if ((await card.count()) === 0) return '';
+  return norm((await card.locator('.fg-kpi-value').first().textContent()) ?? '');
+}
+
+/** Số thông báo web của người dùng gắn với một hồ sơ (tuỳ chọn: tiêu đề khớp mẫu). Hộp thư: GET /notifications (NOTI-01). */
+async function notificationsOf(page: Pg, co: string, docId: string, title?: RegExp): Promise<number> {
+  const r = await H.api(page, 'GET', '/notifications?limit=100', { scope: co });
+  expect(r.status, r.text).toBeLessThan(300);
+  const items = (H.unwrap<{ items?: { document_id?: unknown; title?: string }[] }>(r.body)?.items ?? []) as { document_id?: unknown; title?: string }[];
+  return items.filter((n) => String(n.document_id ?? '') === docId && (title ? title.test(String(n.title ?? '')) : true)).length;
+}
+
+/**
+ * Đợi tới khi số thông báo khớp đạt ngưỡng (thông báo ghi SAU chuyển trạng thái, best-effort, không nằm trong giao dịch),
+ * tối đa ~20 giây. Trả về số đọc được lần cuối.
+ */
+async function notificationsWait(page: Pg, co: string, docId: string, title: RegExp, atLeast: number): Promise<number> {
+  let n = 0;
+  for (let i = 0; i < 20; i++) {
+    n = await notificationsOf(page, co, docId, title);
+    if (n >= atLeast) return n;
+    await page.waitForTimeout(1_000);
+  }
+  return n;
+}
+
+/** Mã phiếu của MỘT trang danh sách (`/queue` hoặc `/documents`, phân trang theo page/limit) và tổng số hồ sơ. */
+async function pageCodes(page: Pg, co: string, path: string, query: string): Promise<{ total: number; codes: string[] }> {
+  const r = await H.api(page, 'GET', `${path}?${query}`, { scope: co });
+  expect(r.status, r.text).toBeLessThan(300);
+  const body = H.unwrap<{ items?: { code: string }[]; total?: number }>(r.body);
+  return { total: Number(body.total ?? 0), codes: (body.items ?? []).map((i) => String(i.code)) };
 }
 
 /** Nhãn huy hiệu antd: rỗng khi 0 (antd ẩn), "99+" khi trên 99. */
@@ -1030,7 +1157,9 @@ test.describe('Phiếu thu/chi, phê duyệt và thực thi (CTA)', () => {
     await expect(staff.getByText(newName).first()).toBeVisible({ timeout: 20_000 });
     expect((await H.getPartner(staff, co, partnerId)).name).toBe(newName);
 
-    await staff.reload();
+    // tải lại bằng openDoc (không staff.reload()): phạm vi mặc định nằm trên tài khoản DÙNG CHUNG, tiến trình khác có thể
+    // đổi nó giữa chừng → openDoc đặt lại CTA và thử lại khi báo "không có quyền" (cùng cách với các test khác)
+    await H.openDoc(staff, 'spend', id);
     await expect(staff.getByText(newName).first()).toBeVisible({ timeout: 20_000 });
     await expect(staff.getByText(oldName)).toHaveCount(0);
   });
@@ -1484,76 +1613,397 @@ test.describe('Phiếu thu/chi, phê duyệt và thực thi (CTA)', () => {
   });
 
   /* ------------------------------------------------------------------ */
-  test('v2 §7.1 · phiếu Đang thanh toán → Yêu cầu bổ sung (cạnh DangThanhToan --> YeuCauBoSung): KTT đưa về bổ sung được qua máy chủ và có nút trên giao diện', async ({ as }) => {
+  test('v2 §7.1 · phiếu Đang thanh toán → Yêu cầu bổ sung (cạnh DangThanhToan --> YeuCauBoSung): máy chủ và giao diện cho KTT, không đổi số dư, KTV gửi lại', async ({ as }) => {
+    test.setTimeout(420_000);
+    const staff = await as('staff');
+    const chief = await as('chief');
+    const director = await as('director');
+    const chairman = await as('chairman');
+    const co = await H.companyId(staff, CO_NAME);
+    const coB = await H.companyId(staff, 'CTB');
+    const partner = uniq('NCC đang thanh toán');
+    const partnerId = await H.createPartner(staff, co, 'supplier', partner);
+    const accountId = await H.createAccount(chief, co, uniq('NH đang thanh toán'));
+    const pages = { chief, director, chairman };
+
+    // hai phiếu chi 5 triệu đã duyệt xong, đưa vào hàng thanh toán → Đang thanh toán (processing)
+    const toProcessing = async (title: string): Promise<{ id: string; code: string }> => {
+      const { id } = await H.submittedVoucherApi(staff, co, { partnerId, accountId, amount: SPEND, title });
+      expect(await H.approveToFinal(pages, co, id), `${title}: duyệt xong cấp cuối`).toBe('approved');
+      const q = await H.transitionApi(staff, co, id, { action: 'queue_payment' });
+      expect(q.status, `đưa vào hàng thanh toán: ${q.text}`).toBeLessThan(300);
+      await H.expectStatus(staff, co, id, 'processing');
+      return { id, code: String((await H.getDoc(staff, co, id)).code) };
+    };
+    const shown = await toProcessing(uniq('Đang TT hiển thị'));
+    const probe = await toProcessing(uniq('Đang TT thử máy chủ'));
+    const balance0 = await H.balanceOf(staff, co, accountId);
+    expect(balance0, 'tài khoản mới chưa có số dư').toBe(0n);
+
+    // (1) ranh giới quyền trên máy chủ: các lượt bị chặn không đổi trạng thái
+    const byStaff = await H.transitionApi(staff, co, probe.id, { action: 'request_changes', reason: 'KTV thử đưa về bổ sung' });
+    expect(byStaff.status, `KTV không có quyền đưa phiếu đang thanh toán về bổ sung: ${byStaff.text}`).toBeGreaterThanOrEqual(400);
+    expect(byStaff.body?.code, 'mã lỗi quyền khi KTV thử đưa về bổ sung').toBe('FG-RBAC-001');
+    const byApprove = await H.transitionApi(chief, co, probe.id, { action: 'approve' });
+    expect(byApprove.status, `duyệt không có ở trạng thái Đang thanh toán (máy trạng thái): ${byApprove.text}`).toBeGreaterThanOrEqual(400);
+    const byReject = await H.transitionApi(chief, co, probe.id, { action: 'reject', reason: 'Thử từ chối khi đang thanh toán' });
+    expect(byReject.status, `từ chối không có ở trạng thái Đang thanh toán: ${byReject.text}`).toBeGreaterThanOrEqual(400);
+    const ver = Number((await H.getDoc(staff, co, probe.id)).version);
+    const outOfScope = await H.api(chief, 'POST', `/documents/${probe.id}/transition`, {
+      scope: coB,
+      data: { action: 'request_changes', reason: 'Thử từ phạm vi công ty khác', if_match: ver },
+    });
+    expect(outOfScope.status, `phạm vi CTB không đưa được phiếu của CTA về bổ sung: ${outOfScope.text}`).toBeGreaterThanOrEqual(400);
+    await H.expectStatus(staff, co, probe.id, 'processing');
+
+    // (2) máy chủ: KTT (approval:act, trong hạn mức) đưa phiếu đang thanh toán về bổ sung (cạnh DangThanhToan → YeuCauBoSung, v2 §7.1).
+    // Lý do là trường `reason` (server yêu cầu; `opinion` bị từ chối 422 FG-VAL-001).
+    const r = await H.transitionApi(chief, co, probe.id, { action: 'request_changes', reason: 'Kiểm tra cạnh đang thanh toán về bổ sung' });
+    expect(r.status, `máy chủ phải cho KTT đưa phiếu đang thanh toán về bổ sung (cạnh v2 §7.1): ${r.text.slice(0, 200)}`).toBeLessThan(300);
+    await H.expectStatus(chief, co, probe.id, 'changes_requested');
+
+    // (3) quyền trên hồ sơ (can) khớp máy chủ, đọc trên phiếu còn đang thanh toán
+    const cDoc = await H.getDoc(chief, co, shown.id);
+    expect(cDoc.status, 'phiếu đang ở Đang thanh toán').toBe('processing');
+    expect(cDoc.can.request_changes, 'can.request_changes = true với KTT (khớp máy chủ)').toBe(true);
+    expect(cDoc.can.approve, 'không có Duyệt khi Đang thanh toán').toBe(false);
+    expect(cDoc.can.reject, 'không có Từ chối khi Đang thanh toán').toBe(false);
+    const sDoc = await H.getDoc(staff, co, shown.id);
+    expect(sDoc.can.request_changes, 'KTV không có quyền yêu cầu bổ sung phiếu đang thanh toán').toBe(false);
+
+    // (4) giao diện KTT: nút "Yêu cầu bổ sung" hiện trên phiếu đang thanh toán và bấm được
+    await H.openDoc(chief, 'spend', shown.id);
+    await expect(chief.getByText('Đang thanh toán').first(), 'hồ sơ hiện trạng thái Đang thanh toán').toBeVisible({ timeout: 20_000 });
+    await expect(
+      H.actionBar(chief).getByRole('button', { name: 'Yêu cầu bổ sung', exact: true }),
+      'giao diện: KTT thấy nút "Yêu cầu bổ sung" trên phiếu đang thanh toán (v2 §7.1)',
+    ).toBeVisible();
+    await H.uiDecision(chief, 'Yêu cầu bổ sung', 'Yêu cầu bổ sung', 'Cần bổ sung chứng từ thanh toán');
+    await H.expectStatus(chief, co, shown.id, 'changes_requested');
+
+    // (5) đưa về bổ sung không ghi sổ cái
+    expect(await H.balanceOf(staff, co, accountId), 'đưa về bổ sung không đổi số dư').toBe(balance0);
+
+    // (6) KTV: phiếu bị đưa về bổ sung có nút Gửi duyệt; gửi lại → chuỗi duyệt mới, phiếu về hàng chờ KTT
+    await H.openDoc(staff, 'spend', shown.id);
+    await expect(H.actionBar(staff).getByRole('button', { name: 'Gửi duyệt', exact: true }), 'KTV thấy Gửi duyệt sau khi bị đưa về bổ sung').toBeVisible();
+    await H.uiSubmit(staff);
+    await H.expectStatus(staff, co, shown.id, 'pending.ktt');
+    expect(await inQueue(chief, co, partner, shown.code), 'KTT: phiếu gửi lại nằm trong hàng chờ').toBe(true);
+    expect(await H.balanceOf(staff, co, accountId), 'gửi lại không đổi số dư').toBe(balance0);
+
+    // (7) lịch sử giữ lượt Đang thanh toán → Yêu cầu bổ sung (từ / sang)
+    const doc = await H.getDoc(staff, co, shown.id);
+    const hist = (doc.history ?? []) as { action: string; from?: string | null; to?: string | null }[];
+    expect(
+      hist.some((h) => h.action === 'request_changes' && h.from === 'processing' && h.to === 'changes_requested'),
+      'lịch sử ghi lượt từ Đang thanh toán sang Yêu cầu bổ sung',
+    ).toBe(true);
+    await staff.getByRole('tab', { name: 'Audit log' }).click();
+    await expect
+      .soft(staff.getByText('Đang thanh toán → Yêu cầu bổ sung', { exact: true }).first(), 'nhật ký: chuyển trạng thái hiển thị nhãn tiếng Việt')
+      .toBeVisible();
+  });
+
+  /* ------------------------------------------------------------------ */
+  test('US-APR-01: tổng tiền "chờ tôi duyệt" cộng đủ mọi hồ sơ trong hàng chờ của từng người xem (API, thẻ tổng quan, chân danh sách, KPI), không chỉ 500 hồ sơ đầu', async ({ as }) => {
+    test.setTimeout(420_000);
+    const staff = await as('staff');
+    const chief = await as('chief');
+    const director = await as('director');
+    const co = await H.companyId(staff, CO_NAME);
+    const vStaff = await viewerOf(staff, co);
+    const vChief = await viewerOf(chief, co);
+    const vDirector = await viewerOf(director, co);
+    const poll = { timeout: 40_000, intervals: [1_000, 2_000, 3_000] };
+
+    // 1) API: tổng máy chủ = tổng CSDL theo luật hàng chờ của từng người (KTV có quyền thực thi; KTT và GĐ duyệt)
+    await expect.poll(() => queueDiffVsDb(staff, co, vStaff), { message: 'KTV: tổng hàng chờ khớp CSDL', ...poll }).toBe('');
+    await expect.poll(() => queueDiffVsDb(chief, co, vChief), { message: 'KTT: tổng hàng chờ khớp CSDL', ...poll }).toBe('');
+    await expect.poll(() => queueDiffVsDb(director, co, vDirector), { message: 'GĐ: tổng hàng chờ khớp CSDL', ...poll }).toBe('');
+    // 2) thẻ "hôm nay" (KTV) và KPI tổng quan (KTT) cùng số với CSDL
+    await expect.poll(() => todayDiffVsDb(staff, co, vStaff), { message: 'KTV: thẻ tổng quan hôm nay khớp CSDL', ...poll }).toBe('');
+    await expect.poll(() => overviewDiffVsDb(chief, co, vChief), { message: 'KTT: KPI tổng quan khớp CSDL', ...poll }).toBe('');
+
+    // 3) giao diện KTT (phạm vi CTA): chân danh sách = số hồ sơ + tổng rút gọn đúng của máy chủ (không tự cộng từng dòng)
+    await H.gotoCta(chief, '/cho-toi-duyet');
+    await expectShownCount(
+      chief,
+      'chân danh sách (số hồ sơ | tổng tiền)',
+      () => listFooterText(chief),
+      async () => {
+        const q = await queueSummary(chief, co);
+        return `${q.count} | ${norm(q.compact)}`;
+      },
+    );
+    // 4) thẻ KPI "Chờ tôi duyệt" trên Tổng quan hiện đúng số tiền của máy chủ
+    await H.gotoCta(chief, '/dashboard');
+    await expectShownCount(
+      chief,
+      'KPI "Chờ tôi duyệt" trên Tổng quan',
+      () => dashboardKpiText(chief),
+      async () => {
+        const r = await H.api(chief, 'GET', '/dashboard/overview', { scope: co });
+        expect(r.status, r.text).toBeLessThan(300);
+        return norm(String(H.unwrap<{ kpi?: { awaiting_me?: { compact?: string } } }>(r.body).kpi?.awaiting_me?.compact ?? ''));
+      },
+    );
+  });
+
+  /* ------------------------------------------------------------------ */
+  test('APPR-01 · hàng chờ "Chờ tôi duyệt" có hơn một trang thì có phân trang để xem hết hồ sơ (docs/03_screens.md, FgPagination)', async ({ as }) => {
+    test.setTimeout(120_000);
+    const staff = await as('staff');
+    const chief = await as('chief');
+    const co = await H.companyId(staff, CO_NAME);
+    const q = await queueSummary(chief, co);
+    // cỡ trang mặc định của màn danh sách là 50 (DocListScreen): từ 51 hồ sơ trở lên là có trang 2
+    test.skip(q.count <= 50, `hàng chờ CTA chỉ có ${q.count} hồ sơ (không vượt một trang 50 dòng): không có gì để phân trang`);
+
+    // API: /queue phải nhận page (trang 2 không lặp hồ sơ của trang 1)
+    const p1 = await pageCodes(chief, co, '/queue', 'limit=50&page=1');
+    const p2 = await pageCodes(chief, co, '/queue', 'limit=50&page=2');
+    expect(p2.codes.length, 'API /queue?page=2: có hồ sơ ở trang 2').toBeGreaterThan(0);
+    expect(p2.codes.filter((c) => p1.codes.includes(c)), 'API /queue?page=2: không lặp lại hồ sơ của trang 1 (bỏ qua page là lỗi)').toEqual([]);
+
+    await H.gotoCta(chief, '/cho-toi-duyet');
+    const rows = chief.locator('.ant-table-tbody tr.ant-table-row');
+    await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+    const shownRows = await rows.count();
+    await expect(
+      chief.locator('.ant-pagination').first(),
+      `hàng chờ có ${q.count} hồ sơ nhưng màn chỉ hiện ${shownRows} dòng và không có điều khiển phân trang: phải có phân trang để xem các hồ sơ còn lại (APPR-01)`,
+    ).toBeVisible({ timeout: 10_000 });
+
+    // giao diện: bấm trang 2 → URL có page=2 và bảng hiện hồ sơ khác trang 1
+    const firstOnPage1 = ((await rows.first().innerText()) ?? '').trim();
+    await chief.locator('.ant-pagination-item-2').first().click();
+    await expect.poll(() => new URL(chief.url()).searchParams.get('page') ?? '', { message: 'bấm trang 2: URL có page=2', timeout: 10_000 }).toBe('2');
+    await expect
+      .poll(async () => ((await rows.first().innerText()) ?? '').trim(), { message: 'trang 2 hiện hồ sơ khác trang 1 (APPR-01)', timeout: 15_000 })
+      .not.toBe(firstOnPage1);
+  });
+
+  test('CHI-01 · danh sách phiếu chi có phân trang: API trang 2 khác trang 1; /chi hiện điều khiển và chuyển trang đổi hồ sơ', async ({ as }) => {
+    test.setTimeout(180_000);
+    const staff = await as('staff');
+    const co = await H.companyId(staff, CO_NAME);
+    const p1 = await pageCodes(staff, co, '/documents', 'kind=spend&limit=50&page=1');
+    test.skip(p1.total <= 50, `phiếu chi CTA chỉ có ${p1.total} hồ sơ (không vượt một trang 50 dòng): không có trang 2`);
+
+    // API: /documents phải nhận page (trước đây bỏ qua → trang 2 lặp trang 1, không xem được phần còn lại)
+    const p2 = await pageCodes(staff, co, '/documents', 'kind=spend&limit=50&page=2');
+    expect(p2.codes.length, 'API /documents?page=2: có hồ sơ ở trang 2').toBeGreaterThan(0);
+    expect(p2.codes.filter((c) => p1.codes.includes(c)), 'API /documents?page=2: không lặp lại hồ sơ của trang 1').toEqual([]);
+
+    // giao diện: chân danh sách "Hiển thị 1–50 / N hồ sơ" + điều khiển phân trang, bấm trang 2 đổi hàng
+    // phạm vi trên tài khoản dùng chung có thể bị tiến trình khác đổi lúc tải: đặt lại CTA và tải lại (như H.openDoc)
+    let footerShown = false;
+    for (let attempt = 1; attempt <= 3 && !footerShown; attempt++) {
+      await H.gotoCta(staff, '/chi');
+      footerShown = await staff
+        .getByText(/Hiển thị 1\D+50 \/ \d+ hồ sơ/)
+        .first()
+        .waitFor({ state: 'visible', timeout: 20_000 })
+        .then(() => true, () => false);
+    }
+    await expect(staff.getByText(/Hiển thị 1\D+50 \/ \d+ hồ sơ/).first(), 'chân danh sách /chi: "Hiển thị 1–50 / N hồ sơ"').toBeVisible({ timeout: 5_000 });
+    await expect(staff.locator('.ant-pagination').first(), 'danh sách phiếu chi có điều khiển phân trang khi nhiều hơn một trang').toBeVisible();
+    const firstRow = staff.locator('tr.ant-table-row').first();
+    await expect(firstRow).toBeVisible({ timeout: 20_000 });
+    const before = ((await firstRow.innerText()) ?? '').trim();
+    await staff.locator('.ant-pagination-item-2').first().click();
+    await expect.poll(() => new URL(staff.url()).searchParams.get('page') ?? '', { message: 'bấm trang 2: URL có page=2', timeout: 10_000 }).toBe('2');
+    await expect(staff.getByText(/Hiển thị 51\D+100 \/ \d+ hồ sơ/).first(), 'trang 2 hiện "Hiển thị 51–100"').toBeVisible({ timeout: 20_000 });
+    await expect
+      .poll(async () => ((await staff.locator('tr.ant-table-row').first().innerText()) ?? '').trim(), { message: 'trang 2 hiện hồ sơ khác trang 1 (CHI-01)', timeout: 15_000 })
+      .not.toBe(before);
+  });
+
+  /* ------------------------------------------------------------------ */
+  test('§6.3 hạn mức duyệt: KTT không duyệt được khoản vượt hạn mức (FG-RBAC-012), can khớp máy chủ; Chủ tịch duyệt vượt cấp được', async ({ as }) => {
+    test.setTimeout(240_000);
+    const staff = await as('staff');
+    const chief = await as('chief');
+    const chairman = await as('chairman');
+    const co = await H.companyId(staff, CO_NAME);
+    const partnerId = await H.createPartner(staff, co, 'supplier', uniq('NCC vượt hạn mức'));
+    const accountId = await H.createAccount(chief, co, uniq('NH vượt hạn mức'));
+    // 60 tỷ > hạn mức duyệt của KTT ở CTA (50 tỷ, assignments.amount_limit_minor); Chủ tịch không giới hạn
+    const BIG = 60_000_000_000;
+    const { id } = await H.submittedVoucherApi(staff, co, { partnerId, accountId, amount: BIG, title: uniq('Vượt hạn mức') });
+    await H.expectStatus(staff, co, id, 'pending.ktt');
+
+    const cDoc = await H.getDoc(chief, co, id);
+    expect(cDoc.can.approve, 'KTT: can.approve = false khi khoản vượt hạn mức duyệt của mình').toBe(false);
+    const r = await H.transitionApi(chief, co, id, { action: 'approve', confirm_amount_minor: String(BIG) });
+    expect(r.status, `máy chủ phải chặn KTT duyệt khoản vượt hạn mức: ${r.text}`).toBeGreaterThanOrEqual(400);
+    expect(r.body?.code, 'mã lỗi vượt hạn mức duyệt').toBe('FG-RBAC-012');
+    await H.expectStatus(chief, co, id, 'pending.ktt');
+
+    // Chủ tịch duyệt vượt cấp: có lý do và gõ lại đúng số tiền (khoản > 5 tỷ)
+    const ct = await H.transitionApi(chairman, co, id, {
+      action: 'approve_with_reason',
+      reason: 'Khoản lớn cần chi gấp theo chỉ đạo',
+      confirm_amount_minor: String(BIG),
+    });
+    expect(ct.status, `Chủ tịch duyệt vượt cấp khoản vượt hạn mức: ${ct.text}`).toBeLessThan(300);
+    await H.expectStatus(chairman, co, id, 'approved');
+  });
+
+  /* ------------------------------------------------------------------ */
+  test('§8 Chủ tịch xoá phiếu chi đã thực thi: bút toán được đảo, số dư trở lại trước khi chi', async ({ as }) => {
     test.setTimeout(300_000);
     const staff = await as('staff');
     const chief = await as('chief');
     const director = await as('director');
     const chairman = await as('chairman');
     const co = await H.companyId(staff, CO_NAME);
-    const partnerId = await H.createPartner(staff, co, 'supplier', uniq('NCC đang thanh toán'));
-    const accountId = await H.createAccount(chief, co, uniq('NH đang thanh toán'));
-    const pages = { chief, director, chairman };
+    const customerId = await H.createPartner(staff, co, 'customer', uniq('Khách xoá phiếu'));
+    const supplierId = await H.createPartner(staff, co, 'supplier', uniq('NCC xoá phiếu'));
+    const accountId = await H.createAccount(chief, co, uniq('NH xoá phiếu'));
 
-    // hai phiếu chi 5 triệu đã duyệt xong, đưa vào hàng thanh toán → Đang thanh toán (processing)
-    const toProcessing = async (title: string): Promise<string> => {
-      const { id } = await H.submittedVoucherApi(staff, co, { partnerId, accountId, amount: SPEND, title });
-      expect(await H.approveToFinal(pages, co, id), `${title}: duyệt xong cấp cuối`).toBe('approved');
-      const q = await H.transitionApi(staff, co, id, { action: 'queue_payment' });
-      expect(q.status, `đưa vào hàng thanh toán: ${q.text}`).toBeLessThan(300);
-      await H.expectStatus(staff, co, id, 'processing');
-      return id;
-    };
-    const shown = await toProcessing(uniq('Đang TT hiển thị'));
-    const probe = await toProcessing(uniq('Đang TT thử máy chủ'));
+    // nạp 20 triệu bằng phiếu thu (tự thực thi khi duyệt cuối)
+    const income = await H.createVoucherApi(staff, co, {
+      kind: 'income',
+      partnerId: customerId,
+      accountId,
+      amount: 20_000_000,
+      title: uniq('Nạp xoá phiếu'),
+      purpose: 'Nạp quỹ kiểm thử xoá phiếu đã thực thi',
+    });
+    await H.attachApi(staff, co, income.id, 'contract', 'hop-dong-nap-xoa.pdf');
+    await H.submitApi(staff, co, income.id);
+    expect(await H.approveToFinal({ chief, director, chairman }, co, income.id)).toBe('paid');
+    expect(await H.balanceOf(staff, co, accountId)).toBe(20_000_000n);
 
-    // (1) máy chủ: KTT (approval:act) đưa phiếu đang thanh toán về bổ sung — cạnh DangThanhToan → YeuCauBoSung (v2 §7.1).
-    // Lý do là trường `reason` (server yêu cầu; `opinion` bị từ chối 422 FG-VAL-001).
-    const r = await H.transitionApi(chief, co, probe, { action: 'request_changes', reason: 'Kiểm tra cạnh đang thanh toán về bổ sung' });
-    const serverAccepts = r.status < 300;
-    expect.soft(serverAccepts, `máy chủ phải cho KTT đưa phiếu đang thanh toán về bổ sung (cạnh v2 §7.1); hiện ${r.status} ${r.text.slice(0, 200)}`).toBe(true);
+    // chi 5 triệu: duyệt xong, có UNC, thực thi → còn 15 triệu
+    const { id } = await H.submittedVoucherApi(staff, co, { partnerId: supplierId, accountId, amount: SPEND, title: uniq('Chi xoá phiếu') });
+    expect(await H.approveToFinal({ chief, director, chairman }, co, id), 'chuỗi 5 triệu: duyệt xong cấp cuối').toBe('approved');
+    await H.attachApi(staff, co, id, 'bank_order', 'uy-nhiem-chi-xoa.pdf');
+    const todayVn = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+    const paid = await H.transitionApi(staff, co, id, { action: 'pay', execution: { paid_at: todayVn, bank_ref: 'FT26300DEL01' } });
+    expect(paid.status, `thực thi phiếu chi: ${paid.text}`).toBeLessThan(300);
+    await H.expectStatus(staff, co, id, 'paid');
+    expect(await H.balanceOf(staff, co, accountId)).toBe(15_000_000n);
 
-    // (2) quyền trên hồ sơ (can) khớp với những gì máy chủ chấp nhận (không có nút cho thao tác máy chủ từ chối)
-    const cDoc = await H.getDoc(chief, co, shown);
-    expect.soft(cDoc.status, 'phiếu đang ở Đang thanh toán').toBe('processing');
-    expect.soft(cDoc.can.request_changes, `can.request_changes khớp máy chủ (máy chủ chấp nhận = ${serverAccepts})`).toBe(serverAccepts);
-
-    // (3) giao diện KTT: phiếu đang thanh toán có nút "Yêu cầu bổ sung" (đường đi của cạnh v2 §7.1)
-    await H.gotoCta(chief, `/ho-so/chi/${shown}`);
-    await expect(chief.getByText('Đang thanh toán').first(), 'hồ sơ hiện trạng thái Đang thanh toán').toBeVisible({ timeout: 20_000 });
-    await expect
-      .soft(H.actionBar(chief).getByRole('button', { name: 'Yêu cầu bổ sung', exact: true }), 'giao diện: KTT thấy nút "Yêu cầu bổ sung" trên phiếu đang thanh toán (v2 §7.1)')
-      .toBeVisible();
-
-    // (4) KTV (không có approval:act) không được đưa phiếu về bổ sung
-    const sDoc = await H.getDoc(staff, co, shown);
-    expect(sDoc.can.request_changes, 'KTV không có quyền yêu cầu bổ sung phiếu đang thanh toán').toBe(false);
+    // Chủ tịch xoá phiếu đã thực thi (không cần xác thực lại): sổ cái được đảo bút toán, số dư trở lại 20 triệu
+    const del = await H.api(chairman, 'POST', `/documents/${id}/delete`, { scope: co, data: { reason: 'Xoá phiếu chi kiểm thử đã thực thi' } });
+    expect(del.status, `Chủ tịch xoá phiếu đã thực thi: ${del.text}`).toBeLessThan(300);
+    expect(await H.balanceOf(staff, co, accountId), 'xoá phiếu đã thực thi: số dư trở lại trước khi chi (bút toán đảo)').toBe(20_000_000n);
+    const gone = await H.api(staff, 'GET', `/documents/${id}`, { scope: co });
+    expect(gone.status, 'hồ sơ đã xoá không còn đọc được').toBeGreaterThanOrEqual(400);
   });
 
   /* ------------------------------------------------------------------ */
-  test('US-APR-01: tổng tiền "chờ tôi duyệt" (chân danh sách và thẻ tổng quan) cộng đủ mọi hồ sơ trong hàng chờ, không chỉ 500 hồ sơ đầu', async ({ as }) => {
+  test('v2 §7.2 · thông báo cấp kế tiếp: phiếu bị từ chối / yêu cầu bổ sung → người lập (KTV) nhận thông báo web; phiếu duyệt xong → người thanh toán nhận', async ({ as }) => {
+    test.setTimeout(240_000);
+    const staff = await as('staff');
+    const chief = await as('chief');
+    const director = await as('director');
+    const co = await H.companyId(staff, CO_NAME);
+    const partnerId = await H.createPartner(staff, co, 'supplier', uniq('NCC thông báo'));
+    const accountId = await H.createAccount(chief, co, uniq('NH thông báo'));
+    const rej = await H.submittedVoucherApi(staff, co, { partnerId, accountId, amount: SPEND, title: uniq('Thông báo từ chối') });
+    const cr = await H.submittedVoucherApi(staff, co, { partnerId, accountId, amount: SPEND, title: uniq('Thông báo bổ sung') });
+    const done = await H.submittedVoucherApi(staff, co, { partnerId, accountId, amount: SPEND, title: uniq('Thông báo duyệt xong') });
+
+    // KTT (cấp kế tiếp khi KTV gửi duyệt) nhận "đang chờ bạn duyệt": đọc làm mốc để so sau khi KTT xử lý
+    const waitingRe = /đang chờ bạn duyệt/;
+    const rejWaitingBefore = await notificationsWait(chief, co, rej.id, waitingRe, 1);
+    const crWaitingBefore = await notificationsWait(chief, co, cr.id, waitingRe, 1);
+    expect.soft(rejWaitingBefore, 'KTT (cấp kế tiếp): nhận "đang chờ bạn duyệt" khi KTV gửi duyệt (phiếu sẽ bị từ chối)').toBeGreaterThan(0);
+    expect.soft(crWaitingBefore, 'KTT (cấp kế tiếp): nhận "đang chờ bạn duyệt" khi KTV gửi duyệt (phiếu sẽ bị yêu cầu bổ sung)').toBeGreaterThan(0);
+
+    await H.openDoc(chief, 'spend', rej.id);
+    await H.uiDecision(chief, 'Từ chối', 'Từ chối', 'Thiếu biên bản nghiệm thu kèm theo');
+    await H.expectStatus(chief, co, rej.id, 'rejected');
+
+    await H.openDoc(chief, 'spend', cr.id);
+    await H.uiDecision(chief, 'Yêu cầu bổ sung', 'Yêu cầu bổ sung', 'Cần bổ sung biên bản nghiệm thu');
+    await H.expectStatus(chief, co, cr.id, 'changes_requested');
+
+    expect(await H.approveToFinal({ chief, director }, co, done.id), 'chuỗi 5 triệu: duyệt xong cấp cuối').toBe('approved');
+
+    // (1) người lập (KTV) nhận thông báo web khi phiếu bị từ chối / bị trả về bổ sung (người lập là cấp kế tiếp).
+    //     Thông báo ghi sau chuyển trạng thái (best-effort): đợi tới khi có, tối đa ~20 giây.
+    expect.soft(await notificationsWait(staff, co, rej.id, /bị từ chối/, 1), 'KTV (người lập): có thông báo "bị từ chối" về phiếu bị từ chối').toBeGreaterThan(0);
+    expect.soft(await notificationsWait(staff, co, cr.id, /bị yêu cầu bổ sung/, 1), 'KTV (người lập): có thông báo "bị yêu cầu bổ sung" về phiếu bị trả về').toBeGreaterThan(0);
+    expect.soft(await notificationsWait(staff, co, done.id, /cần thực hiện thanh toán/, 1), 'KTV (người thanh toán): có thông báo "cần thực hiện thanh toán"').toBeGreaterThan(0);
+
+    // đợi thêm để các thông báo "âm" (không được có) có thời gian xuất hiện trước khi đối chiếu
+    await staff.waitForTimeout(3_000);
+    // (2) người vừa từ chối / trả về không nhận thông báo "bị từ chối" / "đang chờ bạn duyệt" về chính phiếu đó
+    expect.soft(await notificationsOf(chief, co, rej.id, /bị từ chối/), 'KTT (người từ chối) không nhận thông báo "bị từ chối"').toBe(0);
+    expect.soft(await notificationsOf(chief, co, rej.id, waitingRe), 'KTT (người từ chối) không nhận thêm "đang chờ bạn duyệt" về phiếu vừa từ chối').toBe(rejWaitingBefore);
+    expect.soft(await notificationsOf(chief, co, cr.id, waitingRe), 'KTT (người trả về bổ sung) không nhận thêm "đang chờ bạn duyệt" về phiếu vừa trả về').toBe(crWaitingBefore);
+    expect.soft(await notificationsOf(chief, co, cr.id, /bị yêu cầu bổ sung/), 'KTT (người trả về bổ sung) không nhận thông báo "bị yêu cầu bổ sung"').toBe(0);
+    // (3) phiếu duyệt xong (cấp duyệt cuối là KTT): KTT vừa duyệt xong thì không nhận "cần thực hiện thanh toán"
+    expect.soft(await notificationsOf(chief, co, done.id, /cần thực hiện thanh toán/), 'KTT (người vừa duyệt xong) không nhận "cần thực hiện thanh toán"').toBe(0);
+  });
+
+  test('v2 §7.2 · thông báo cấp kế tiếp khi DUYỆT: KTT duyệt → GĐ nhận "đang chờ bạn duyệt"; KTT không nhận thêm', async ({ as }) => {
+    test.setTimeout(240_000);
+    const staff = await as('staff');
+    const chief = await as('chief');
+    const director = await as('director');
+    const co = await H.companyId(staff, CO_NAME);
+    const partnerId = await H.createPartner(staff, co, 'supplier', uniq('NCC thông báo duyệt'));
+    const accountId = await H.createAccount(chief, co, uniq('NH thông báo duyệt'));
+    // 60 triệu (50 triệu – 5 tỷ): KTT → GĐ
+    const { id } = await H.submittedVoucherApi(staff, co, { partnerId, accountId, amount: BAND_50M_5B, title: uniq('Thông báo duyệt') });
+    const waitingRe = /đang chờ bạn duyệt/;
+    // KTT nhận khi KTV gửi duyệt (cấp kế tiếp là KTT): mốc để so sau khi KTT duyệt
+    const kttBefore = await notificationsWait(chief, co, id, waitingRe, 1);
+    expect.soft(kttBefore, 'KTT (cấp kế tiếp khi KTV gửi duyệt): nhận "đang chờ bạn duyệt"').toBeGreaterThan(0);
+
+    await H.approveApi(chief, co, id);
+    await H.expectStatus(chief, co, id, 'pending.gd');
+    // GĐ là cấp kế tiếp sau khi KTT duyệt: nhận "đang chờ bạn duyệt" (web)
+    expect.soft(await notificationsWait(director, co, id, waitingRe, 1), 'GĐ (cấp kế tiếp sau khi KTT duyệt): nhận "đang chờ bạn duyệt"').toBeGreaterThan(0);
+    // KTT vừa duyệt không nhận thêm "đang chờ bạn duyệt" về phiếu đó
+    await staff.waitForTimeout(3_000);
+    expect.soft(await notificationsOf(chief, co, id, waitingRe), 'KTT (người vừa duyệt): không nhận thêm "đang chờ bạn duyệt" về phiếu đó').toBe(kttBefore);
+  });
+
+  test('CHI-01 (khối trạng thái): số hồ sơ các khối trên /chi cộng đủ toàn danh sách, không chỉ trang đang xem (footer ghi N hồ sơ)', async ({ as }) => {
     test.setTimeout(240_000);
     const staff = await as('staff');
     const co = await H.companyId(staff, CO_NAME);
-    let verified = false;
-    let last = '';
-    for (let attempt = 0; attempt < 5 && !verified; attempt++) {
-      // đọc API, đọc CSDL, đọc lại API: nếu hàng chờ đổi giữa chừng (tiến trình khác) thì đọc lại
-      const a = await queueSummary(staff, co);
-      const truth = executionTotalInDb(co);
-      const b = await queueSummary(staff, co);
-      if (a.count !== b.count || a.amount !== b.amount || truth.n !== a.count) {
-        last = `hàng chờ đổi trong lúc đọc (API ${a.count}→${b.count}, CSDL ${truth.n})`;
-        continue;
-      }
-      expect.soft(a.count, 'số hồ sơ chờ tôi duyệt khớp CSDL').toBe(truth.n);
-      expect.soft(a.amount, `chân danh sách: tổng tiền của ${a.count} hồ sơ phải cộng đủ tất cả (CSDL), không chỉ phần đầu danh sách`).toBe(truth.sum);
-      const dash = await H.api(staff, 'GET', '/dashboard/today', { scope: co });
-      expect(dash.status).toBeLessThan(300);
-      const minor = H.unwrap<{ awaiting?: { amount?: { minor?: string } } }>(dash.body)?.awaiting?.amount?.minor;
-      expect.soft(String(minor ?? ''), `thẻ tổng quan: tổng tiền chờ tôi duyệt (${a.count} hồ sơ) phải cộng đủ tất cả`).toBe(truth.sum);
-      verified = true;
+    const probe = await pageCodes(staff, co, '/documents', 'kind=spend&limit=50&page=1');
+    test.skip(probe.total <= 50, `phiếu chi CTA chỉ có ${probe.total} hồ sơ (một trang đủ): khối không thiếu hồ sơ`);
+    // phạm vi giao diện lấy từ tuỳ chọn của tài khoản DÙNG CHUNG: tiến trình khác có thể đổi nó lúc tải trang
+    // (khi đó /chi hiện ít hồ sơ, không có chân phân trang) → đặt lại CTA và tải lại, tối đa 3 lượt (như H.openDoc)
+    let footerShown = false;
+    for (let attempt = 1; attempt <= 3 && !footerShown; attempt++) {
+      await H.gotoCta(staff, '/chi');
+      footerShown = await staff
+        .getByText(/Hiển thị 1\D+50 \/ \d+ hồ sơ/)
+        .first()
+        .waitFor({ state: 'visible', timeout: 20_000 })
+        .then(() => true, () => false);
     }
-    expect(verified, `không đọc được số liệu ổn định để đối chiếu (${last})`).toBe(true);
+    await expect(staff.getByText(/Hiển thị 1\D+50 \/ \d+ hồ sơ/).first(), 'chân danh sách /chi (phạm vi CTA): "Hiển thị 1–50 / N hồ sơ"').toBeVisible({ timeout: 5_000 });
+    // các khối (Đã duyệt chờ chi / Đang chờ duyệt / Nháp… / Đã chi / Hủy…) phủ mọi trạng thái: tổng số hồ sơ của khối
+    // phải bằng tổng của danh sách; lỗi nếu khối chỉ đếm trang đang xem (≤ 50 dòng)
+    await expectShownCount(
+      staff,
+      'tổng số hồ sơ của các khối trên /chi (phải bằng số hồ sơ toàn danh sách)',
+      async () => {
+        // đợi khối đầu tiên hiện (sau tải lại trang khối có thể chưa vẽ); không có khối nào → 0
+        await staff
+          .locator('section')
+          .filter({ hasText: 'hồ sơ ·' })
+          .first()
+          .waitFor({ state: 'visible', timeout: 15_000 })
+          .catch(() => undefined);
+        const heads = await staff.locator('section').filter({ hasText: 'hồ sơ ·' }).allInnerTexts();
+        return heads.reduce((acc, t) => {
+          const m = norm(t).match(/(\d+) hồ sơ ·/);
+          return acc + (m ? Number(m[1]) : 0);
+        }, 0);
+      },
+      async () => (await pageCodes(staff, co, '/documents', 'kind=spend&limit=1&page=1')).total,
+    );
   });
 });

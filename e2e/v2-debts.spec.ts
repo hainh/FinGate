@@ -56,8 +56,17 @@ const LINK_HEAD = 'Cấn trừ bằng phiếu';
 async function pinCtaScope(page: Page): Promise<void> {
   const cta = await ctaId();
   await page.route('**/api/v1/me', async (route) => {
-    const res = await route.fetch();
-    const body = (await res.json()) as Record<string, any>;
+    // Máy chủ đang khởi động lại (node --watch): proxy trả lỗi rỗng hoặc treo. Handler không được ném lỗi (trang sẽ kẹt ở
+    // màn tải): khi fetch lỗi thì để yêu cầu đi thẳng, khi không phải JSON thì trả nguyên phản hồi — màn hình tự thử lại /me.
+    const res = await route.fetch().catch(() => null);
+    if (!res) return route.continue();
+    const text = await res.text();
+    let body: Record<string, any>;
+    try {
+      body = JSON.parse(text) as Record<string, any>;
+    } catch {
+      return route.fulfill({ response: res, body: text });
+    }
     const d = body.data ?? body;
     if (d.prefs) d.prefs.default_scope = cta;
     if (d.scope) d.scope.active_company_id = cta;

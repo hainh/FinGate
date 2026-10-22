@@ -51,6 +51,8 @@ export function useOverview(tagIds: string[] = []) {
 /** Bộ lọc gửi lên hàng chờ "Chờ tôi duyệt" (GET /queue): ô tìm, trạng thái, đối tác, tag (v2 §5.2, §12). */
 export interface QueueFilters {
   limit?: number;
+  /** trang (đánh số từ 1) — FgPagination. */
+  page?: number;
   q?: string;
   status?: string;
   partner_id?: string;
@@ -100,22 +102,26 @@ export function useDocument(id: string | undefined) {
   });
 }
 
-export function useDecisionPack(id: string | undefined) {
+/**
+ * Gói quyết định (7 câu hỏi). `sourceAccountId`: TK đang chọn ở cấp duyệt (đổi TK khi duyệt) — server tính q5/q6
+ * theo TK này; khoá theo TK để đổi TK là tải lại đúng số liệu, không dùng số của TK cũ.
+ */
+export function useDecisionPack(id: string | undefined, sourceAccountId?: string) {
   return useQuery({
-    queryKey: ['decision-pack', id],
+    queryKey: ['decision-pack', id, sourceAccountId ?? ''],
     enabled: !!id,
     staleTime: 60_000,
-    queryFn: () => apiData<DecisionPack>(`/documents/${id}/decision-pack`),
+    queryFn: () => apiData<DecisionPack>(`/documents/${id}/decision-pack`, { query: { source_account_id: sourceAccountId || undefined } }),
   });
 }
 
 /** "Tôi đã duyệt" (APPR-02). `q`: ô tìm (mã, tiêu đề, đối tác, STK/MST, tag) — cùng cách khớp với hàng chờ. */
-export function useProcessed(limit = 50, enabled = true, q?: string) {
+export function useProcessed(limit = 50, enabled = true, q?: string, page = 1) {
   const { scope, can } = useAuth();
   return useQuery({
-    queryKey: ['queue-processed', scope, limit, q ?? ''],
+    queryKey: ['queue-processed', scope, limit, q ?? '', page],
     enabled: enabled && can('approval:act'),
-    queryFn: () => apiCall<ListResult<QueueRow>>('/queue/processed', { query: { scope, limit, q: q || undefined } }),
+    queryFn: () => apiCall<ListResult<QueueRow>>('/queue/processed', { query: { scope, limit, page, q: q || undefined } }),
   });
 }
 

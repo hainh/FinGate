@@ -8,6 +8,8 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { tagName, UI, type TagRow, type TagUpdateBody } from '@fingate/shared';
 import { SCOPE_ALL, useAuth, useCurrentCompanyId } from '../app/store.tsx';
 import {
+  clampTagPage,
+  compareTagsForList,
   TAG_COLOR_PRESETS,
   tagColorOf,
   tagErrorMessage,
@@ -34,6 +36,12 @@ const VIEW_OPTIONS: { label: string; value: TagView }[] = [
 /** Server chỉ cho ẩn tag KHÔNG còn phiếu nào gắn (hiện lại thì luôn được). */
 const hideBlocked = (t: TagRow): boolean => !t.hidden && t.usage_count > 0;
 
+/**
+ * Cỡ trang của bảng. Danh bạ có thể hàng nghìn tag: render cả bảng mỗi lần ghi hoặc gõ tìm làm đơ
+ * giao diện vài giây (đo: mỗi lượt render ~2 s), nên bảng chỉ render một trang.
+ */
+const TAG_PAGE_SIZE = 25;
+
 export function TagsScreen(): ReactNode {
   const { can, me, scope } = useAuth();
   const companyId = useCurrentCompanyId();
@@ -43,6 +51,7 @@ export function TagsScreen(): ReactNode {
   const { message } = useToast();
   const [q, setQ] = useState('');
   const [view, setView] = useState<TagView>('all');
+  const [page, setPage] = useState(1);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<TagRow | null>(null);
   const [merging, setMerging] = useState<TagRow | null>(null);
@@ -54,9 +63,19 @@ export function TagsScreen(): ReactNode {
       tags
         .filter((t) => view === 'all' || (view === 'hidden' ? t.hidden : !t.hidden))
         .filter((t) => tagMatchesSearch(t, q))
-        .sort((a, b) => b.usage_count - a.usage_count || a.name.localeCompare(b.name, 'vi')),
+        .sort(compareTagsForList),
     [tags, view, q],
   );
+  // Đổi bộ lọc quay về trang 1; danh sách co lại (ẩn / lọc) thì kẹp trang vào số trang còn lại.
+  const currentPage = clampTagPage(page, rows.length, TAG_PAGE_SIZE);
+  const changeQuery = (value: string): void => {
+    setQ(value);
+    setPage(1);
+  };
+  const changeView = (value: TagView): void => {
+    setView(value);
+    setPage(1);
+  };
 
   const toggleHidden = (t: TagRow) =>
     update.mutate(
@@ -168,13 +187,13 @@ export function TagsScreen(): ReactNode {
       <div className="fg-filterbar">
         <FgInput
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => changeQuery(e.target.value)}
           placeholder="Tìm tag theo tên…"
           aria-label="Tìm tag theo tên"
           allowClear
           style={{ width: 280, maxWidth: '100%' }}
         />
-        <FgSegmented value={view} onChange={(v) => setView(v as TagView)} options={VIEW_OPTIONS} />
+        <FgSegmented value={view} onChange={(v) => changeView(v as TagView)} options={VIEW_OPTIONS} />
       </div>
       <FgText style="caption" color="muted">
         {UI.tag.hiddenNote}. Gộp tag: mọi phiếu đang gắn tag nguồn sẽ chuyển sang tag đích.
@@ -196,7 +215,24 @@ export function TagsScreen(): ReactNode {
             </div>
           ) : (
             <div className="fg-card" style={{ padding: 0 }}>
-              <FgTable<TagRow> rowKey="_id" dataSource={rows} pagination={false} columns={columns} />
+              <FgTable<TagRow>
+                // Đổi bộ lọc thì dựng lại bảng: danh sách thẻ trên mobile giữ số trang riêng, nếu không sẽ còn trang cũ (trống).
+                key={`${view}|${q}`}
+                rowKey="_id"
+                dataSource={rows}
+                columns={columns}
+                pagination={
+                  rows.length > TAG_PAGE_SIZE
+                    ? {
+                        current: currentPage,
+                        pageSize: TAG_PAGE_SIZE,
+                        onChange: (p: number) => setPage(p),
+                        showSizeChanger: false,
+                        size: 'small',
+                      }
+                    : false
+                }
+              />
             </div>
           )
         }
@@ -272,10 +308,11 @@ function TagFormModal({ companyId, editing, onClose }: { companyId: string; edit
           error={error}
           help="Tối đa 40 ký tự. Không phân biệt hoa thường; khoảng trắng thừa được bỏ."
         >
+          {/* Không đặt maxLength: giới hạn 40 ký tự tính SAU khi bỏ khoảng trắng thừa (tagName), nên trình duyệt
+              không được cắt chuỗi thô — nếu không, "Tên tag" mất phần cuối dù tên đã gộp vẫn hợp lệ. */}
           <FgInput
             id="tag-name"
             value={name}
-            maxLength={40}
             placeholder="VD: Dự án X"
             onChange={(e) => setName(e.target.value)}
             onPressEnter={() => void submit()}

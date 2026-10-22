@@ -21,7 +21,12 @@
  * Vòng kiểm lại 6: bug #1 (chuyển nội bộ thiếu TK nhận bị chặn khi lưu, khi sửa nháp và ngay trên form); bug #2 (modal duyệt
  * phiếu vay để chi: "Sau giao dịch" = 0 ₫ khi khoản vay về đúng TK nguồn trước khi chi, không báo dưới ngưỡng giả); lượt R1
  * lỗi vì TK đích bị khoá rồi chạy lại từ giao diện (một phiếu thu, cộng đúng một lần).
+ * Vòng kiểm lại 7: bug #1 — đường GỬI DUYỆT / DUYỆT / THỰC THI của nháp (hoặc phiếu đã gửi) thiếu TK nhận: API không cho
+ * ghi trạng thái đó nữa, nên spec đặt `transfer_target.account_id = null` trực tiếp trong DB test (dữ liệu cũ) rồi kiểm
+ * server chặn ở mỗi bước, phiếu không đổi trạng thái và không có bút toán ra khỏi TK nguồn. Bug #2 — modal duyệt: đổi "Tài
+ * khoản nguồn" ⇒ "Sau giao dịch" = số dư TK đã chọn − số tiền, cảnh báo ngưỡng theo TK đó, duyệt chốt ghi đúng TK đã chọn.
  */
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { Browser, Page } from '@playwright/test';
 import { test, expect, uniq, loginContext, type Role } from './fixtures';
@@ -57,7 +62,7 @@ import {
   setAccountStatus,
   sleep,
   stepOf,
-  switchScope,
+  switchScope as switchScopeClick,
   transition,
   vnToday,
   visibleOptions,
@@ -175,10 +180,41 @@ async function expectRerunAccepted(page: Page): Promise<void> {
   throw new Error('Không thấy thông báo "Đã chạy lại quy trình" sau 20 giây');
 }
 
+/**
+ * Đổi phạm vi (helper `switchScope`), rồi CHỜ máy chủ ghi `default_scope` (PATCH /me/prefs: ứng dụng gửi không chờ).
+ * Trang tải lại (goto) ngay sau khi đổi mà ghi chưa xong ⇒ trang mở ở phạm vi cũ và báo "ngoài phạm vi" (lượt kiểm lại 7).
+ */
+async function switchScope(page: Page, code: string): Promise<void> {
+  // `.catch` gắn NGAY khi tạo: switchScopeClick có thể chờ networkidle quá 15 giây (trang đang tải số liệu), khi đó lời hứa
+  // bị từ chối trước khi có người nghe ⇒ lỗi "unhandled rejection" làm hỏng lượt test (lỗi của spec, không phải của ứng dụng).
+  const saved = page.waitForResponse((r) => r.url().includes('/api/v1/me/prefs') && r.request().method() === 'PATCH', { timeout: 15_000 }).catch(() => undefined);
+  await switchScopeClick(page, code);
+  await saved;
+}
+
+/**
+ * Mở một trang của ứng dụng đã đăng nhập MÀ KHÔNG tải lại trang: đổi địa chỉ bằng History API rồi báo `popstate` (cùng cách
+ * ứng dụng tự chuyển trang sau đăng nhập). Tải lại trang đọc lại phạm vi mặc định của người dùng từ máy chủ, mà phạm vi này
+ * dùng chung giữa các tiến trình test (tiến trình khác có thể đổi nó giữa lúc ghi và lúc tải) ⇒ trang mở nhầm "ngoài phạm vi".
+ * Trang đầu tiên của phiên (about:blank) vẫn tải bằng goto.
+ */
+async function openPage(page: Page, path: string): Promise<void> {
+  if (page.url() === 'about:blank' || page.url() === '') {
+    await page.goto(path);
+  } else {
+    await page.evaluate((p) => {
+      window.history.pushState(null, '', p);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, path);
+    await sleep(300);
+  }
+  await page.waitForLoadState('networkidle').catch(() => undefined);
+}
+
 /** KTV mở form phiếu chi mới ở phạm vi CTA (form lấy tài khoản/công ty theo công ty đang xem). */
 async function openNewSpend(page: Page): Promise<void> {
   await switchScope(page, 'CTA');
-  await page.goto('/chi/moi');
+  await openPage(page, '/chi/moi');
   await page.waitForLoadState('networkidle');
   await expect(page.getByText('Tạo mới phiếu chi', { exact: false }).first()).toBeVisible();
 }
@@ -302,6 +338,18 @@ async function fundedCtaAccount(w: World, minMinor = 5_000_000n): Promise<string
   throw new Error('Không có TK ngân hàng CTA đủ số dư để chuyển nội bộ');
 }
 
+/**
+ * Phiếu chuyển nội bộ CŨ: có công ty nhận nhưng KHÔNG có TK nhận (lưu trước khi POST/PATCH kiểm TK nhận). API hiện tại
+ * không cho ghi trạng thái này, nên đặt trực tiếp trong DB test (container fingate-mongo, DB fingate) — chỉ đổi đúng một
+ * phiếu chuyển nội bộ theo id (lọc theo `transfer_target.company_id`).
+ */
+function legacyClearTransferAccount(docId: string): void {
+  if (!/^[0-9a-f]{24}$/i.test(docId)) throw new Error(`Mã phiếu không hợp lệ: ${docId}`);
+  const js = `db.documents.updateOne({ _id: ObjectId("${docId}"), "transfer_target.company_id": { $ne: null } }, { $set: { "transfer_target.account_id": null } })`;
+  const out = execFileSync('docker', ['exec', 'fingate-mongo', 'mongosh', '--quiet', 'fingate', '--eval', js], { encoding: 'utf8', timeout: 60_000 });
+  if (!/matchedCount:\s*1\b/.test(out)) throw new Error(`Không đặt được dữ liệu TK nhận cũ cho phiếu ${docId}: ${out.slice(0, 300)}`);
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // R3 — tạo phiếu, màn duyệt, chạy tự động (§11.5, US-AUTO-03/04)
 // ---------------------------------------------------------------------------------------------------------------
@@ -407,7 +455,7 @@ test('UI · KTT thấy "Chi bằng vốn vay <ngân hàng> <số tiền>, kỳ h
   const w = await world(as);
   const f = await fundPayment(w, { tag: 'MODAL' });
   await switchScope(w.chief, 'CTA');
-  await w.chief.goto(`/ho-so/chi/${f.id}`);
+  await openPage(w.chief, `/ho-so/chi/${f.id}`);
   await w.chief.waitForLoadState('networkidle');
   await assertNoPageCrash(w.chief, 'chi tiết phiếu vay để chi');
 
@@ -446,7 +494,7 @@ test('UI · ô "Tài khoản đích" của phiếu thu hiện tên từng tài k
   await createBankAccount(w.chairman, w.CTA, nameB, sharedBank);
 
   await switchScope(w.staff, 'CTA');
-  await w.staff.goto('/thu/moi');
+  await openPage(w.staff, '/thu/moi');
   await w.staff.waitForLoadState('networkidle');
   await assertNoPageCrash(w.staff, 'form phiếu thu mới');
   await expect(w.staff.getByText('Tạo mới phiếu thu', { exact: false }).first()).toBeVisible();
@@ -543,7 +591,7 @@ test('UI · chi tiết phiếu chi đã R3 hiện "Quy trình tự động: R3 �
   const loan = await getLoan(w.staff, w.CTA, generatedId(run, 'create_loan') as string);
 
   await switchScope(w.staff, 'CTA');
-  await w.staff.goto(`/ho-so/chi/${f.id}`);
+  await openPage(w.staff, `/ho-so/chi/${f.id}`);
   await w.staff.waitForLoadState('networkidle');
   await assertNoPageCrash(w.staff, 'chi tiết phiếu đã R3');
   await expect(w.staff.getByText('Quy trình tự động', { exact: false }).first()).toBeVisible({ timeout: 20_000 });
@@ -589,7 +637,7 @@ test('R3 · cấp duyệt hạ số tiền phiếu chi ⇒ khoản vay và phi�
 
   // Giám đốc hạ số tiền ngay trên modal duyệt (cấp cuối): 60.000.000 → 45.000.000
   await switchScope(w.director, 'CTA');
-  await w.director.goto(`/ho-so/chi/${f.id}`);
+  await openPage(w.director, `/ho-so/chi/${f.id}`);
   await w.director.waitForLoadState('networkidle');
   await assertNoPageCrash(w.director, 'chi tiết phiếu chờ GĐ');
   await w.director.getByRole('button', { name: /^Duyệt khoản/ }).first().click();
@@ -684,7 +732,7 @@ test('UI · KTV thực thi phiếu chi đã R3 từ chi tiết phiếu (US-EXE-0
   await attachUnc(w.staff, w.CTA, f.id);
 
   await switchScope(w.staff, 'CTA');
-  await w.staff.goto(`/ho-so/chi/${f.id}`);
+  await openPage(w.staff, `/ho-so/chi/${f.id}`);
   await w.staff.waitForLoadState('networkidle');
   await assertNoPageCrash(w.staff, 'chi tiết phiếu trước khi thực thi');
   await w.staff.getByRole('button', { name: 'Thực thi', exact: true }).first().click();
@@ -711,7 +759,7 @@ test('R6 · huỷ phiếu chi (nút Hủy hồ sơ) sau khi R3 chạy: khoản v
 
   // người lập huỷ từ giao diện (chi tiết phiếu đã duyệt)
   await switchScope(w.staff, 'CTA');
-  await w.staff.goto(`/ho-so/chi/${f.id}`);
+  await openPage(w.staff, `/ho-so/chi/${f.id}`);
   await w.staff.waitForLoadState('networkidle');
   await assertNoPageCrash(w.staff, 'chi tiết phiếu đã R3 trước khi huỷ');
   await cancelFromDetail(w.staff, 'Huỷ phiếu để kiểm thử R6');
@@ -735,7 +783,7 @@ test('R6 · huỷ phiếu chi (nút Hủy hồ sơ) sau khi R3 chạy: khoản v
 
   // Hiện trên màn Cảnh báo của KTT
   await switchScope(w.chief, 'CTA');
-  await w.chief.goto('/canh-bao');
+  await openPage(w.chief, '/canh-bao');
   await w.chief.waitForLoadState('networkidle');
   await expect(w.chief.getByText(f.code, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
 });
@@ -749,7 +797,7 @@ test('R6 · huỷ phiếu chi khi R3 lỗi giữa chừng (khoản vay chưa có
 
   // phiếu đã duyệt nhưng khoản vay chưa có tiền về ⇒ huỷ phiếu từ giao diện
   await switchScope(w.staff, 'CTA');
-  await w.staff.goto(`/ho-so/chi/${f.id}`);
+  await openPage(w.staff, `/ho-so/chi/${f.id}`);
   await w.staff.waitForLoadState('networkidle');
   await assertNoPageCrash(w.staff, 'chi tiết phiếu R3 lỗi trước khi huỷ');
   await cancelFromDetail(w.staff, 'Huỷ phiếu để kiểm thử R6 khi chưa giải ngân');
@@ -773,7 +821,7 @@ test('UI · nhãn TK có TÊN TK ở khung "Giải ngân vào" (modal duyệt) v
 
   // KTT mở modal duyệt: dòng "Giải ngân vào" phải nêu tên TK nhận giải ngân để phân biệt với TK khác cùng ngân hàng
   await switchScope(w.chief, 'CTA');
-  await w.chief.goto(`/ho-so/chi/${f.id}`);
+  await openPage(w.chief, `/ho-so/chi/${f.id}`);
   await w.chief.waitForLoadState('networkidle');
   await w.chief.getByRole('button', { name: /^Duyệt khoản/ }).first().click();
   const dlg = w.chief.getByRole('dialog');
@@ -793,7 +841,7 @@ test('UI · nhãn TK có TÊN TK ở khung "Giải ngân vào" (modal duyệt) v
 
   // chi tiết phiếu chi, tab "Dòng tiền liên quan": dòng "Tài khoản nguồn" (ảnh hưởng số dư)
   await switchScope(w.staff, 'CTA');
-  await w.staff.goto(`/ho-so/chi/${f.id}`);
+  await openPage(w.staff, `/ho-so/chi/${f.id}`);
   await w.staff.waitForLoadState('networkidle');
   await assertNoPageCrash(w.staff, 'chi tiết phiếu chi R3 (nhãn TK)');
   await w.staff.getByText('Dòng tiền liên quan', { exact: false }).first().click();
@@ -803,7 +851,7 @@ test('UI · nhãn TK có TÊN TK ở khung "Giải ngân vào" (modal duyệt) v
   expect.soft(srcRow, 'chi tiết phiếu chi: "Tài khoản nguồn" có tên TK').toContain(f.accountName);
 
   // chi tiết phiếu thu tự động, cùng tab: dòng "Tài khoản đích"
-  await w.staff.goto(`/ho-so/thu/${receiptId}`);
+  await openPage(w.staff, `/ho-so/thu/${receiptId}`);
   await w.staff.waitForLoadState('networkidle');
   await assertNoPageCrash(w.staff, 'chi tiết phiếu thu tự động R3 (nhãn TK)');
   await w.staff.getByText('Dòng tiền liên quan', { exact: false }).first().click();
@@ -820,7 +868,7 @@ test('UI · tiêu đề "Lịch sử giao dịch" của tài khoản (BANK-05) c
   const name = uniq('TK lịch sử A');
   const accountId = await createBankAccount(w.chairman, w.CTA, name, sharedBank);
   await switchScope(w.chief, 'CTA');
-  await w.chief.goto(`/ngan-hang/taikhoan/${accountId}`);
+  await openPage(w.chief, `/ngan-hang/taikhoan/${accountId}`);
   await w.chief.waitForLoadState('networkidle');
   await assertNoPageCrash(w.chief, 'lịch sử giao dịch của tài khoản');
   const title = (await w.chief.getByText('Lịch sử giao dịch ·', { exact: false }).first().innerText()).replace(/\s+/g, ' ');
@@ -839,7 +887,7 @@ test('UI · người lập huỷ được phiếu chi đã duyệt từ giao di�
   await approveToFinal(w.approvers, w.CTA, d.id);
 
   await switchScope(w.staff, 'CTA');
-  await w.staff.goto(`/ho-so/chi/${d.id}`);
+  await openPage(w.staff, `/ho-so/chi/${d.id}`);
   await w.staff.waitForLoadState('networkidle');
   await assertNoPageCrash(w.staff, 'chi tiết phiếu đã duyệt');
   await expect(w.staff.getByRole('button', { name: /^(Hủy|Huỷ)( hồ sơ)?$/ })).toHaveCount(1);
@@ -897,7 +945,7 @@ test('UI · KTT thấy lượt R3 lỗi trên chi tiết phiếu (kèm nguyên n
   const { f, recvId } = await failedR3(w, 'LỖI UI');
 
   await switchScope(w.chief, 'CTA');
-  await w.chief.goto(`/ho-so/chi/${f.id}`);
+  await openPage(w.chief, `/ho-so/chi/${f.id}`);
   await w.chief.waitForLoadState('networkidle');
   await assertNoPageCrash(w.chief, 'chi tiết phiếu có lượt lỗi');
   await expect(w.chief.getByText('Lỗi — cần chạy lại', { exact: false }).first()).toBeVisible({ timeout: 20_000 });
@@ -920,7 +968,7 @@ test('Tự động hoá · màn lượt chạy liệt kê lượt R3, mở chi t
   must(await setAccountStatus(w.chairman, w.CTA, recvId, 'active'), 'mở lại TK nhận giải ngân');
 
   await switchScope(w.chief, 'CTA');
-  await w.chief.goto('/quantri/tu-dong');
+  await openPage(w.chief, '/quantri/tu-dong');
   await w.chief.waitForLoadState('networkidle');
   await w.chief.getByText('Lượt chạy', { exact: true }).first().click();
   await w.chief.waitForLoadState('networkidle');
@@ -1040,7 +1088,7 @@ test('UI · phiếu chi "Nhận: tài khoản nội bộ" lập, gửi duyệt v
   await approveToFinal(w.approvers, w.CTA, id);
   await attachUnc(w.staff, w.CTA, id);
   await switchScope(page, 'CTA');
-  await page.goto(`/ho-so/chi/${id}`);
+  await openPage(page, `/ho-so/chi/${id}`);
   await page.waitForLoadState('networkidle');
   await assertNoPageCrash(page, 'chi tiết phiếu nội bộ đã duyệt');
   await page.getByRole('button', { name: 'Thực thi', exact: true }).first().click();
@@ -1183,7 +1231,7 @@ test('Âm tính · phiếu chi thường (không vay, không chuyển nội bộ
   const runs = await runsOf(w.staff, w.CTA, created.id);
   expect(runs.filter((r) => r.rule_code === 'R3' || r.rule_code === 'R1')).toHaveLength(0);
   await switchScope(w.staff, 'CTA');
-  await w.staff.goto(`/ho-so/chi/${created.id}`);
+  await openPage(w.staff, `/ho-so/chi/${created.id}`);
   await w.staff.waitForLoadState('networkidle');
   await assertNoPageCrash(w.staff, 'chi tiết phiếu chi thường');
   await expect(w.staff.getByText('Quy trình tự động', { exact: true })).toHaveCount(0);
@@ -1605,7 +1653,7 @@ test('R1 · phiếu chi chuyển nội bộ đã thực thi: panel "Quy trình t
   const receipt = await getDoc(w.chairman, w.CTB, generatedId(run, 'create_voucher') as string);
 
   await switchScope(w.staff, 'CTA');
-  await w.staff.goto(`/ho-so/chi/${created.id}`);
+  await openPage(w.staff, `/ho-so/chi/${created.id}`);
   await w.staff.waitForLoadState('networkidle');
   await assertNoPageCrash(w.staff, 'chi tiết phiếu chuyển nội bộ đã thực thi');
   await expect(w.staff.getByText('Quy trình tự động', { exact: false }).first()).toBeVisible({ timeout: 20_000 });
@@ -1717,6 +1765,85 @@ test('UI · "Nhận: tài khoản nội bộ" đã chọn công ty nhận nhưng
   expect(page.url(), 'không chuyển sang hồ sơ mới khi thiếu TK nhận').not.toMatch(/\/ho-so\/chi\//);
 });
 
+test('Âm tính · gửi duyệt nháp chuyển nội bộ thiếu TK nhận (nháp lưu trước đây) ⇒ 422 FG-VAL-001, vẫn là nháp, không vào hàng duyệt (§11.6, bug #1)', async ({ as }) => {
+  test.setTimeout(T);
+  const w = await world(as);
+  const supplierId = await createPartner(w.staff, w.CTA, 'supplier', uniq('NCC V8 nháp cũ'));
+  const srcId = await fundedCtaAccount(w);
+  const ctbAcc = await createBankAccount(w.chairman, w.CTB, uniq('TK CTB V8 nháp cũ'));
+  const created = await createSpend(w.staff, {
+    companyId: w.CTA,
+    partnerId: supplierId,
+    amountMinor: '1500000',
+    sourceAccountId: srcId,
+    purpose: uniq('Chuyển V8 nháp cũ'),
+    transferTarget: { companyId: w.CTB, accountId: ctbAcc },
+  });
+  legacyClearTransferAccount(created.id);
+  const draft = await getDoc(w.staff, w.CTA, created.id);
+  expect(String(draft.transfer_target?.company_id ?? ''), 'nháp vẫn mang công ty nhận').toBe(w.CTB);
+  expect(draft.transfer_target?.account_id ?? null, 'nháp không còn TK nhận (dữ liệu cũ)').toBeNull();
+  const res = await transition(w.staff, w.CTA, created.id, 'submit');
+  expect(res.status, 'gửi duyệt phiếu chuyển nội bộ thiếu TK nhận phải bị từ chối (không HTTP 200)').toBe(422);
+  expect(JSON.stringify(res.body), 'mã lỗi FG-VAL-001 về TK nhận của công ty đích').toMatch(/FG-VAL-001/);
+  const after = await getDoc(w.staff, w.CTA, created.id);
+  expect(after.status, 'phiếu vẫn là nháp, không vào hàng duyệt').toBe('draft');
+});
+
+test('Âm tính · phiếu chuyển nội bộ đã gửi duyệt rồi mất TK nhận (dữ liệu cũ) ⇒ KTT không duyệt được (422 FG-VAL-001), phiếu chưa duyệt (§11.6, bug #1)', async ({ as }) => {
+  test.setTimeout(T);
+  const w = await world(as);
+  const supplierId = await createPartner(w.staff, w.CTA, 'supplier', uniq('NCC V8 duyệt'));
+  const srcId = await fundedCtaAccount(w);
+  const ctbAcc = await createBankAccount(w.chairman, w.CTB, uniq('TK CTB V8 duyệt'));
+  const created = await createSpend(w.staff, {
+    companyId: w.CTA,
+    partnerId: supplierId,
+    amountMinor: '1500000',
+    sourceAccountId: srcId,
+    purpose: uniq('Chuyển V8 duyệt'),
+    transferTarget: { companyId: w.CTB, accountId: ctbAcc },
+  });
+  must(await transition(w.staff, w.CTA, created.id, 'submit'), 'gửi duyệt chuyển nội bộ (TK nhận còn hợp lệ)');
+  const pending = await getDoc(w.staff, w.CTA, created.id);
+  legacyClearTransferAccount(created.id);
+  const res = await transition(w.chief, w.CTA, created.id, 'approve');
+  expect(res.status, 'duyệt phiếu thiếu TK nhận phải bị từ chối').toBe(422);
+  expect(JSON.stringify(res.body), 'mã lỗi FG-VAL-001 về TK nhận của công ty đích').toMatch(/FG-VAL-001/);
+  const after = await getDoc(w.chief, w.CTA, created.id);
+  expect(after.status, 'phiếu không đổi trạng thái khi duyệt bị chặn').toBe(pending.status);
+  expect(after.status, 'phiếu chưa được duyệt').not.toMatch(/^(approved|paid)$/);
+});
+
+test('Âm tính · thực thi phiếu chuyển nội bộ đã duyệt mà mất TK nhận (dữ liệu cũ) ⇒ 422, không có tiền ra khỏi TK nguồn, không chạy R1 (§8, §11.6, bug #1)', async ({ as }) => {
+  test.setTimeout(T);
+  const w = await world(as);
+  const supplierId = await createPartner(w.staff, w.CTA, 'supplier', uniq('NCC V8 thực thi'));
+  const srcId = await fundedCtaAccount(w);
+  const ctbAcc = await createBankAccount(w.chairman, w.CTB, uniq('TK CTB V8 thực thi'));
+  const created = await createSpend(w.staff, {
+    companyId: w.CTA,
+    partnerId: supplierId,
+    amountMinor: '1500000',
+    sourceAccountId: srcId,
+    purpose: uniq('Chuyển V8 thực thi'),
+    transferTarget: { companyId: w.CTB, accountId: ctbAcc },
+  });
+  must(await transition(w.staff, w.CTA, created.id, 'submit'), 'gửi duyệt chuyển nội bộ (thực thi)');
+  await approveToFinal(w.approvers, w.CTA, created.id);
+  const approved = await getDoc(w.staff, w.CTA, created.id);
+  expect(approved.status, 'phiếu đã duyệt chốt trước khi mất TK nhận').toBe('approved');
+  legacyClearTransferAccount(created.id);
+  await attachUnc(w.staff, w.CTA, created.id);
+  const res = await payByApi(w.staff, w.CTA, created.id);
+  expect(res.status, 'thực thi phiếu thiếu TK nhận phải bị từ chối trước khi tiền ra khỏi TK nguồn').toBe(422);
+  expect(JSON.stringify(res.body), 'mã lỗi FG-VAL-001 về TK nhận của công ty đích').toMatch(/FG-VAL-001/);
+  const after = await getDoc(w.staff, w.CTA, created.id);
+  expect(after.status, 'phiếu vẫn Đã duyệt, chưa thanh toán').toBe('approved');
+  expect(await entriesOfDoc(w.chairman, w.CTA, srcId, String(after.code)), 'không có bút toán ra ở TK nguồn').toEqual([]);
+  expect((await runsOf(w.staff, w.CTA, created.id)).filter((r) => r.rule_code === 'R1'), 'không chạy R1 khi thực thi bị chặn').toEqual([]);
+});
+
 test('UI · modal duyệt phiếu vay để chi: "Sau giao dịch" = 0 ₫ khi khoản vay về đúng TK nguồn trước khi chi (6 tr về, 6 tr chi), không báo dưới ngưỡng giả (bug #2, US-AUTO-04)', async ({ as }) => {
   test.setTimeout(T);
   const w = await world(as);
@@ -1733,7 +1860,7 @@ test('UI · modal duyệt phiếu vay để chi: "Sau giao dịch" = 0 ₫ khi k
   });
   must(await transition(w.staff, w.CTA, created.id, 'submit'), 'gửi duyệt D1 UI');
   await switchScope(w.chief, 'CTA');
-  await w.chief.goto(`/ho-so/chi/${created.id}`);
+  await openPage(w.chief, `/ho-so/chi/${created.id}`);
   await w.chief.waitForLoadState('networkidle');
   await assertNoPageCrash(w.chief, 'chi tiết phiếu vay để chi (D1 UI)');
   await w.chief.getByRole('button', { name: /^Duyệt khoản/ }).first().click();
@@ -1832,7 +1959,7 @@ test('UI · phiếu thu giải ngân do R3 sinh ra mang nhãn "Tự động · R
   const run = await waitForRun(w.staff, w.CTA, f.id, 'R3', 'done');
   const receiptId = generatedId(run, 'create_voucher') as string;
   await switchScope(w.chief, 'CTA');
-  await w.chief.goto(`/ho-so/thu/${receiptId}`);
+  await openPage(w.chief, `/ho-so/thu/${receiptId}`);
   await w.chief.waitForLoadState('networkidle');
   await assertNoPageCrash(w.chief, 'phiếu thu giải ngân tự động (R3)');
   await expect(w.chief.getByText('Tự động · R3', { exact: true }).first(), 'nhãn Tự động · R3 trên phiếu thu sinh ra').toBeVisible({ timeout: 20_000 });
@@ -1860,7 +1987,7 @@ test('UI · phiếu thu chuyển nội bộ do R1 sinh ra ở CTB mang nhãn "T�
   const run = await waitForRun(w.staff, w.CTA, created.id, 'R1', 'done');
   const receiptId = generatedId(run, 'create_voucher') as string;
   await switchScope(w.chief, 'CTB');
-  await w.chief.goto(`/ho-so/thu/${receiptId}`);
+  await openPage(w.chief, `/ho-so/thu/${receiptId}`);
   await w.chief.waitForLoadState('networkidle');
   await assertNoPageCrash(w.chief, 'phiếu thu chuyển nội bộ tự động (R1) ở CTB');
   await expect(w.chief.getByText('Tự động · R1', { exact: true }).first(), 'nhãn Tự động · R1 trên phiếu thu ở CTB').toBeVisible({ timeout: 20_000 });
@@ -1887,17 +2014,16 @@ test('UI · modal duyệt: KTT đổi "Tài khoản nguồn" ngay khi duyệt �
   let bId = '';
   for (const a of accs) {
     if (a.kind !== 'bank' || a.status !== 'active' || String(a._id) === accA) continue;
-    if ((await balanceOf(w.chairman, w.CTA, String(a._id))) > 5_000_000n) {
+    if ((await balanceOf(w.chairman, w.CTA, String(a._id))) > 6_000_000n) {
       bId = String(a._id);
       break;
     }
   }
   expect(bId, 'có TK CTA khác có số dư để đổi sang').toBeTruthy();
   const bName = String(accs.find((a) => String(a._id) === bId)?.account_name ?? '');
-  const bBal = await balanceOf(w.chairman, w.CTA, bId);
 
   await switchScope(w.chief, 'CTA');
-  await w.chief.goto(`/ho-so/chi/${created.id}`);
+  await openPage(w.chief, `/ho-so/chi/${created.id}`);
   await w.chief.waitForLoadState('networkidle');
   await w.chief.getByRole('button', { name: /^Duyệt khoản/ }).first().click();
   const dlg = w.chief.getByRole('dialog');
@@ -1923,14 +2049,45 @@ test('UI · modal duyệt: KTT đổi "Tài khoản nguồn" ngay khi duyệt �
     await sleep(25);
   }
   expect(await optB.count(), 'mục TK B có trong danh sách của modal').toBeGreaterThan(0);
+  // bấm sau khi hiệu ứng mở danh sách xong (ant-slide-up-appear): bấm giữa hiệu ứng có thể bị bỏ qua (điểm bấm còn đang co giãn)
+  await expect.poll(async () => (await dd.getAttribute('class')) ?? '', { timeout: 5_000, message: 'hiệu ứng mở danh sách đã xong' }).not.toMatch(/-(appear|enter)\b/);
+  // gói quyết định của TK B mà modal tải khi chọn: số liệu trên modal phải khớp chính phản hồi này (không dùng số đọc trước đó: TK dùng chung)
+  const packForB = w.chief.waitForResponse((r) => r.url().includes(`/decision-pack?source_account_id=${bId}`) && r.request().method() === 'GET', { timeout: 20_000 });
   await optB.first().click();
-  await sleep(300);
+  const pB = ((await (await packForB).json()) as { data?: any })?.data as any;
 
   // sau khi đổi, khối nguồn tiền phải nêu TK vừa chọn và số dư trước giao dịch của TK đó (không giữ số của TK cũ)
   await expect
     .poll(async () => ((await row('Tài khoản nguồn').innerText()) ?? '').replace(/\s+/g, ' '), { timeout: 8_000, message: 'khối nguồn tiền theo TK vừa chọn' })
     .toContain(bName);
-  const beforeText = ((await row('Số dư trước giao dịch').innerText()) ?? '').replace(/\s+/g, ' ');
-  console.log('[ĐỔI TK pack sau khi chọn B]', JSON.stringify({ src: await row('Tài khoản nguồn').innerText(), before: beforeText, expectB: bBal.toString() }));
-  expect(beforeText.replace(/\D/g, ''), 'số dư trước giao dịch là số dư TK vừa chọn, không phải TK cũ (0)').toContain(bBal.toString());
+  expect(String(pB?.q5_source?.account_label ?? ''), 'gói quyết định của server nêu TK B là TK nguồn').toContain(bName);
+  const beforeB = BigInt(String(pB?.q6_impact?.balance_before?.minor ?? '0'));
+  const afterB = BigInt(String(pB?.q6_impact?.balance_after?.minor ?? '0'));
+  expect(beforeB, 'số dư trước của TK B khác 0 (TK cũ có 0 ₫)').not.toBe(0n);
+  await expect
+    .poll(async () => ((await row('Số dư trước giao dịch').innerText()) ?? '').replace(/\D/g, ''), { timeout: 8_000, message: 'số dư trước giao dịch của TK vừa chọn' })
+    .toContain(beforeB.toString());
+  console.log('[ĐỔI TK pack sau khi chọn B]', JSON.stringify({ before: beforeB.toString(), after: afterB.toString(), bName }));
+
+  // "Sau giao dịch" = số dư TK B − số tiền chi; khoản vay về TK A không cộng vào TK B (§8, §11.5)
+  await expect
+    .poll(async () => ((await row('Sau giao dịch').innerText()) ?? '').replace(/\D/g, ''), { timeout: 8_000, message: 'sau giao dịch của TK vừa chọn' })
+    .toContain(afterB.toString());
+  expect(afterB, 'Sau giao dịch = số dư TK B − 6 tr (không cộng khoản vay về TK A)').toBe(beforeB - 6_000_000n);
+  // cảnh báo ngưỡng theo TK B (không theo TK cũ): cờ server khớp ngưỡng của TK B, và modal hiện/ẩn cảnh báo đúng như vậy
+  const breachB = afterB < BigInt(String(pB?.q6_impact?.min_balance?.minor ?? '0'));
+  expect(Boolean(pB?.q6_impact?.breach), 'cờ ngưỡng của server tính theo TK B').toBe(breachB);
+  const belowMin = dlg.getByText('Sau giao dịch sẽ dưới ngưỡng tối thiểu');
+  if (breachB) await expect(belowMin, 'cảnh báo ngưỡng theo TK B').toBeVisible();
+  else await expect(belowMin, 'không báo ngưỡng theo TK cũ').toHaveCount(0);
+
+  // KTT duyệt chốt với TK B: phiếu ghi TK nguồn = B; duyệt không ghi bút toán nào (chỉ khi thực thi), R3 vẫn chạy
+  const code = String((await getDoc(w.staff, w.CTA, created.id)).code);
+  await dlg.getByRole('button', { name: /^Duyệt khoản/ }).click();
+  await waitApproveDialogClosed(w.chief, code);
+  const approved = await getDoc(w.staff, w.CTA, created.id);
+  expect(approved.status, 'duyệt chốt xong').toBe('approved');
+  expect(String(approved.source?.account_id), 'TK nguồn sau duyệt chốt = TK B vừa chọn').toBe(bId);
+  expect(await entriesOfDoc(w.chairman, w.CTA, bId, code), 'duyệt chưa chi: TK B không có bút toán của phiếu').toEqual([]);
+  await waitForRun(w.staff, w.CTA, created.id, 'R3', 'done');
 });

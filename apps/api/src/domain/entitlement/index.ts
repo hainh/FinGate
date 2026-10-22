@@ -299,13 +299,13 @@ export function documentPermissions(
   const current = doc.steps.find((s) => s.state === 'current') ?? null;
 
   const inScope = doc.actor_companies.includes(doc.company_id) || actor.permissions.includes('doc:read');
-  // Người lập được tự duyệt tại mọi cấp mà chính họ phụ trách (yêu cầu nghiệp vụ).
-  const approveAllowed =
-    has('approval:act') &&
-    iAmStep.length > 0 &&
-    !overLimit &&
-    (doc.evidence_missing.length === 0 || has('approval:override')) &&
-    !['paid', 'rejected', 'cancelled', 'expired'].includes(doc.status);
+  const evidenceOk = doc.evidence_missing.length === 0 || has('approval:override');
+  // Quyết định duyệt / từ chối / yêu cầu bổ sung chỉ có ở bước đang chờ (`pending.*`) — đúng cạnh của máy trạng thái
+  // (state-machine TRANSITIONS). Người lập được tự duyệt tại mọi cấp mà chính họ phụ trách (yêu cầu nghiệp vụ).
+  const approveAllowed = doc.status.startsWith('pending.') && has('approval:act') && iAmStep.length > 0 && !overLimit && evidenceOk;
+  // v2 §7.1 — DangThanhToan → YeuCauBoSung: phiếu đang trong hàng thanh toán không còn bước chờ nên không dùng `iAmStep`;
+  // người có quyền duyệt, trong hạn mức thì đưa về bổ sung. Khớp nhánh recall của workflow.transition.
+  const recallAllowed = doc.status === 'processing' && has('approval:act') && !overLimit && evidenceOk;
 
   return {
     read: inScope && has('doc:read'),
@@ -318,7 +318,7 @@ export function documentPermissions(
     // v2 §7.2 — duyệt thường chỉ khi ĐẾN LƯỢT (bước `current` của mình); bước `waiting` chỉ duyệt vượt cấp
     approve: approveAllowed && iAmStep.some((s) => s.state === 'current'),
     reject: approveAllowed,
-    request_changes: approveAllowed,
+    request_changes: approveAllowed || recallAllowed,
     // fast-track (blueprint §IV, v2 §7.2): bước của mình còn `waiting` trong khi cấp thấp hơn đang `current`
     // → chỉ "Duyệt trước" (approve_with_reason, có lý do) mới được; server (workflow.transition) cũng chặn `approve` thường
     fast_track:

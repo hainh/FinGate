@@ -8,8 +8,16 @@
  *  - Vòng retest 2: ĐÃ BỎ phản hồi giả (`patchLoanDetailChain`). Màn chi tiết đọc chuỗi thật
  *    (`chain.funded_by` / `chain.disbursements` / `chain.repayments` đều là mảng).
  *  - Các lỗi đã báo có assertion riêng, đánh dấu "[lỗi đã báo]" trong code, để chạy lại thấy ngay nếu tái diễn.
+ *  - Vòng retest 4: thêm kiểm tra cho (a) danh sách không cắt 2.000 dòng — cả tổng và "Dư nợ theo ngân hàng";
+ *    (b) lãi suất chỉ 2 chữ số thập phân ở mọi đường nhập (API + form + nhập lô + kết quả đảo hạn);
+ *    (c) phương án đảo hạn nhận "abc" bị chặn ở API và ở form; (d) hiệu năng danh sách / đáo hạn (ngân sách ghi trong test).
+ *  - Vòng retest 5: (e) lãi suất cũ trong CSDL đã làm sạch (kiểm đếm trực tiếp, migration 0006 đã ghi nhận);
+ *    (f) danh sách có phân trang phía máy chủ (trang 2 khác trang 1; tìm theo mã khi ở trang 2 ⇒ về trang 1);
+ *    (g) nhập theo lô tra mã đúng công ty (partners/options?codes= trả 200, dòng hợp lệ hiện "Hợp lệ" với tên ngân hàng);
+ *    (h) mọi trang của file này ghim phạm vi về CTA (tài khoản kt@/ktt@ dùng chung; tiến trình khác có thể đổi default_scope).
  *  - Tên dữ liệu đều dùng uniq(...) (các tiến trình khác dùng chung DB test).
  */
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { Page } from '@playwright/test';
 import { test, expect as baseExpect, uniq } from './fixtures';
@@ -34,6 +42,7 @@ import {
   LONG_REASON,
   listLoansApi,
   payVoucherApi,
+  scopeOf,
   spendBody,
   transitionApi,
   tsv,
@@ -42,6 +51,7 @@ import {
   unwrap,
   vnToday,
   waitForLoan,
+  type Cta,
   type LoanApi,
 } from './helpers-loans';
 import { DEADLINE_UI, fieldOf, gotoCta, pickPartner, pickSelect } from './helpers-vouchers';
@@ -56,6 +66,14 @@ const expect = baseExpect.configure({ timeout: 30_000 });
 
 /** Ô khối "Dư nợ theo ngân hàng" (bảng ngay sau tiêu đề h2). */
 const bankTotalsTable = (page: Page) => page.locator('h2', { hasText: 'Dư nợ theo ngân hàng' }).locator('xpath=following::table[1]');
+/**
+ * Dòng của một ngân hàng trong "Dư nợ theo ngân hàng". Bảng có hàng nghìn ngân hàng (DB test) và phân trang 20 dòng
+ * ⇒ không nằm chắc ở trang đầu: lọc theo tên (ô tìm trong bảng) trước khi kiểm.
+ */
+const bankTotalsRow = async (page: Page, name: string) => {
+  await page.getByPlaceholder('Tìm ngân hàng trong bảng').fill(name);
+  return bankTotalsTable(page).locator('tr', { hasText: name });
+};
 /** Bảng "Sắp giải ngân" (bảng ngay sau tiêu đề h2). */
 const pendingTable = (page: Page) => page.locator('h2', { hasText: 'Sắp giải ngân' }).locator('xpath=following::table[1]');
 
@@ -64,12 +82,89 @@ const openDialog = (page: Page) => page.locator('.ant-modal-wrap:visible, [role=
 /** Thẻ "Lịch sử thay đổi" trên màn chi tiết khoản vay (khối chứa bảng lịch sử). */
 const historyCardOf = (page: Page) => page.getByText('Lịch sử thay đổi', { exact: true }).first().locator('xpath=ancestor::*[.//table][1]');
 
+/**
+ * Ghim phạm vi của TRANG về CTA (cùng cách với v2-debts.spec.ts / v2-partner-picker.spec.ts). Tài khoản kt@/ktt@ dùng
+ * chung giữa các tiến trình e2e; tiến trình khác có thể đặt prefs.default_scope sang MAYOGU/CTB giữa lúc trang mở.
+ * Khi đó ô tra mã nhập lô tra đúng nhưng trong công ty sai ⇒ báo "Không có ngân hàng đang hoạt động với mã này" giả
+ * (đã thấy ở vòng 5). Chỉ đổi phản hồi GET /me gửi TỚI TRANG NÀY; không ghi gì vào DB.
+ */
+async function pinCtaScope(page: Page, cta: Cta): Promise<void> {
+  await page.route('**/api/v1/me', async (route) => {
+    try {
+      const res = await route.fetch();
+      if (!res.ok()) {
+        await route.fulfill({ response: res });
+        return;
+      }
+      const body = (await res.json()) as Record<string, any>;
+      const d = body.data ?? body;
+      if (d.prefs) d.prefs.default_scope = cta.id;
+      if (d.scope) d.scope.active_company_id = cta.id;
+      await route.fulfill({ response: res, json: body });
+    } catch {
+      // [ổn định] lỗi trong route (máy chủ chậm quá thời gian chờ của route.fetch, hoặc context đóng lúc test kết thúc
+      // khi còn yêu cầu /me đang chạy) được Playwright ghi thành lỗi của TEST dù nghiệp vụ đúng ("Request context
+      // disposed" / "Response has been disposed"). Khi đó để yêu cầu đi thẳng tới máy chủ (không ghim phạm vi) và bỏ
+      // qua lỗi nếu trang/context đã đóng.
+      await route.continue().catch(() => undefined);
+    }
+  });
+}
+
+/** Tìm công ty CTA rồi ghim phạm vi của trang về CTA (xem pinCtaScope). */
+async function ctaPinned(page: Page): Promise<Cta> {
+  const cta = await findCta(page);
+  await pinCtaScope(page, cta);
+  return cta;
+}
+
+/**
+ * Lãi suất vi phạm quy tắc 2 chữ số thập phân trong CSDL test (đọc-only, qua container fingate-mongo).
+ * Cùng regex với migration db/migrations/0006-clean-interest-rates.js (RATE_RE). Kiểm toàn bộ công ty: nguồn
+ * sự thật của "dữ liệu cũ" — API chỉ trả một phần (trang) nên không đủ để khẳng định không còn bản ghi vi phạm.
+ */
+const LEGACY_RATE_SCRIPT = String.raw`
+const re = /^\d+([.,]\d{1,2})?$/;
+const bad = (v) => v !== undefined && v !== null && !re.test(String(v));
+const loans = db.bank_debts.find({}, { interest_rate: 1 }).toArray();
+const docs = db.documents.find({}, { rollover: 1, options: 1 }).toArray();
+const out = {
+  bank_debts_total: loans.length,
+  bank_debts_bad: loans.filter((d) => bad(d.interest_rate)).length,
+  rollover_new_rate_bad: docs.filter((d) => d.rollover && bad(d.rollover.new_rate)).length,
+  rollover_result_rate_bad: docs.filter((d) => d.rollover && d.rollover.result && bad(d.rollover.result.new_rate)).length,
+  loan_terms_rate_bad: docs.filter((d) => d.options && d.options.loan && d.options.loan.terms && bad(d.options.loan.terms.interest_rate)).length,
+  migrations_applied: ((db.settings.findOne({ key: 'migrations.applied' }) || {}).value || {}).applied || [],
+};
+print(JSON.stringify(out));
+`;
+
+interface LegacyRateReport {
+  bank_debts_total: number;
+  bank_debts_bad: number;
+  rollover_new_rate_bad: number;
+  rollover_result_rate_bad: number;
+  loan_terms_rate_bad: number;
+  migrations_applied: string[];
+}
+
+function legacyRateReport(): LegacyRateReport {
+  const raw = execFileSync('docker', ['exec', 'fingate-mongo', 'mongosh', '--quiet', 'fingate', '--eval', LEGACY_RATE_SCRIPT], {
+    encoding: 'utf8',
+    timeout: 120_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const line = raw.split(/\r?\n/).reverse().find((l) => l.trim().startsWith('{'));
+  if (!line) throw new Error(`Không đọc được kết quả kiểm lãi suất cũ từ CSDL: ${raw.slice(0, 300)}`);
+  return JSON.parse(line) as LegacyRateReport;
+}
+
 test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
   /* ------------------------------ LOAN-01 · tạo khoản vay ------------------------------ */
 
   test('US-LOAN-01 · ô "Ngân hàng cho vay" chỉ liệt kê đối tác loại Ngân hàng', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Chon');
     const customer = await createCustomer(staff, cta, 'KH Khong Chon');
 
@@ -96,7 +191,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
 
   test('US-LOAN-01 · ô "Ngân hàng cho vay": khi tải danh sách đối tác bị lỗi, không báo "Không có đối tác phù hợp" (dễ hiểu nhầm là chưa có ngân hàng)', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Tai Lai');
     // giả lập lỗi máy chủ cho danh sách đối tác của ô chọn (chỉ trong test này)
     const optionsRoute = /\/api\/v1\/partners\/options/;
@@ -123,7 +218,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
 
   test('US-LOAN-01 · KTV tạo khoản vay (chọn ngân hàng, gốc, hạn mức, lãi, kỳ hạn, hạn) → lưu, trạng thái "Đang vay"', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Tao Vay');
     const today = vnToday();
     const maturity = addDays(today, 365);
@@ -185,7 +280,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
 
   test('US-LOAN-01 · kiểm tra bắt buộc (form) và chặn ở máy chủ (đối tác không phải ngân hàng, hạn không sau giải ngân)', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Kiem Tra');
     const customer = await createCustomer(staff, cta, 'KH Kiem Tra');
 
@@ -230,7 +325,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
 
   test('US-LOAN-02 · [chi tiết] màn chi tiết khoản vay mở được và hiển thị chỉ tiêu (trạng thái, dư nợ, đã trả)', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Chi Tiet');
     const loan = await createLoanApi(staff, cta, {
       partner_id: bank.id,
@@ -277,7 +372,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     const chief = await as('chief');
     const director = await as('director');
     const chairman = await as('chairman');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Cho Giai Ngan');
     const account = await ctaBankAccount(staff, cta);
 
@@ -344,13 +439,13 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     expect(active.outstanding.minor).toBe('30000000');
 
     await staff.goto('/ngan-hang/dao-han');
-    await expect(bankTotalsTable(staff).locator('tr', { hasText: bank.name })).toContainText('30.000.000', { timeout: 30_000 });
+    await expect(await bankTotalsRow(staff, bank.name)).toContainText('30.000.000', { timeout: 30_000 });
     await expect(pendingTable(staff).locator('tr', { hasText: pending.code })).toHaveCount(0);
   });
 
   test('[lỗi đã báo · đường phiếu thu] R2 · phiếu thu đi vay nhập lãi suất "9,5" trên FORM ⇒ khoản vay lưu "9,5" và ô lãi suất khi mở lại vẫn "9,5" (không thành "9.5")', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Lai Phieu Thu');
     await gotoCta(staff, '/thu/moi');
     await expect(staff.getByRole('button', { name: 'Lưu nháp', exact: true })).toBeVisible({ timeout: 20_000 });
@@ -393,7 +488,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     const chief = await as('chief');
     const director = await as('director');
     const chairman = await as('chairman');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const lender = await createBank(staff, cta, 'NH Lai Phieu Chi');
     const supplier = await createSupplier(staff, cta, 'NCC Lai Phieu Chi');
 
@@ -445,7 +540,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
 
   test('R2 · "gắn vào khoản vay đã có" khi khoản đã kín sức chứa (gốc đã gán hết) ⇒ lưu phiếu bị chặn ngay, không để lượt R2 lỗi sau khi thực thi', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Suc Chua R2');
     const account = await ctaBankAccount(staff, cta);
     // Phiếu A (R2, 30 triệu, còn nháp) đã gán hết gốc của khoản LA ⇒ LA không còn sức chứa
@@ -481,7 +576,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
 
   test('R6 · hủy phiếu thu đi vay còn nháp → khoản chờ giải ngân chuyển "Đã huỷ"', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Huy Phieu');
     const account = await ctaBankAccount(staff, cta);
 
@@ -504,7 +599,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
   test('R6 · phiếu thu đi vay bị TỪ CHỐI khi đang duyệt → khoản chờ giải ngân chuyển "Đã huỷ"', async ({ as }) => {
     const staff = await as('staff');
     const chief = await as('chief');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Tu Choi');
     const account = await ctaBankAccount(staff, cta);
     const receipt = await createVoucherApi(
@@ -530,8 +625,8 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
   test('US-LOAN-02 · [đáo hạn] mức cảnh báo theo số ngày và dư nợ theo ngân hàng 7 / 30 ngày (góc nhìn Giám đốc)', async ({ as }) => {
     const staff = await as('staff');
     const director = await as('director');
-    const cta = await findCta(staff);
-    await findCta(director);
+    const cta = await ctaPinned(staff);
+    await ctaPinned(director);
     const bank = await createBank(staff, cta, 'NH Dao Han');
     const today = vnToday();
     // hạn tính từ hôm nay; ngày giải ngân lùi 30 ngày để hạn hôm nay vẫn hợp lệ
@@ -574,7 +669,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     await director.goto('/ngan-hang/dao-han');
     // trang nặng (nhiều ngân hàng, dev server có thể chậm ở lần tải đầu của phiên): chờ tiêu đề rồi mới kiểm tra dòng
     await expect(director.getByRole('heading', { name: 'Bảng đáo hạn' })).toBeVisible({ timeout: 30_000 });
-    const totals = bankTotalsTable(director).locator('tr', { hasText: bank.name });
+    const totals = await bankTotalsRow(director, bank.name);
     await expect(totals).toBeVisible({ timeout: 30_000 });
     const cells = totals.locator('td');
     await expect(cells.nth(1)).toHaveText('6');
@@ -615,8 +710,8 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
   test('US-LOAN-02 · mức cảnh báo tại biên (§10.1): 3/4 ngày, 7/8 ngày, 30/31 ngày', async ({ as }) => {
     const staff = await as('staff');
     const director = await as('director');
-    const cta = await findCta(staff);
-    await findCta(director);
+    const cta = await ctaPinned(staff);
+    await ctaPinned(director);
     const bank = await createBank(staff, cta, 'NH Bien Dao Han');
     const today = vnToday();
     // hôm nay / ≤3 ngày: đỏ (3); 4–7 ngày: cam (2); 8–30 ngày: vàng (1); quá 30 ngày: không cảnh báo (0)
@@ -657,7 +752,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     const chief = await as('chief');
     const director = await as('director');
     const chairman = await as('chairman');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Tra No');
     const account = await ctaBankAccount(staff, cta);
     const loan = await createLoanApi(staff, cta, {
@@ -709,7 +804,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     await expect(row).toContainText('7.250.000');
     await staff.goto('/ngan-hang/dao-han');
     // trang đáo hạn dựng cả bảng dư nợ (mọi ngân hàng trong DB test, >1.000 dòng khi đầy dữ liệu) ⇒ chờ lâu hơn mặc định 10 s
-    await expect(bankTotalsTable(staff).locator('tr', { hasText: bank.name })).toContainText('7.250.000', { timeout: 30_000 });
+    await expect(await bankTotalsRow(staff, bank.name)).toContainText('7.250.000', { timeout: 30_000 });
   });
 
   test('US-LOAN-03 · màn chi tiết: gán phiếu chi trả nợ (tách lãi/phí) rồi thực thi → "Đã trừ dư nợ"', async ({ as }) => {
@@ -717,7 +812,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     const chief = await as('chief');
     const director = await as('director');
     const chairman = await as('chairman');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Tra No UI');
     const account = await ctaBankAccount(staff, cta);
     const loan = await createLoanApi(staff, cta, {
@@ -756,7 +851,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     const chief = await as('chief');
     const director = await as('director');
     const chairman = await as('chairman');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Tat Toan');
     const account = await ctaBankAccount(staff, cta);
     const loan = await createLoanApi(staff, cta, {
@@ -785,6 +880,8 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     const after = await getLoanApi(staff, cta, loan._id);
     expect(after.status).toBe('archived');
     await staff.reload();
+    // danh sách phân trang (trang đầu 50 khoản) và ô tìm không lưu trên URL: tìm lại theo mã sau khi tải lại
+    await staff.getByPlaceholder(SEARCH_PLACEHOLDER).fill(loan.code as string);
     await expect(staff.locator('tr', { hasText: loan.code as string })).toContainText('Lưu trữ');
   });
 
@@ -795,7 +892,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     const chief = await as('chief');
     const director = await as('director');
     const chairman = await as('chairman');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Gan Giai Ngan');
     const otherBank = await createBank(staff, cta, 'NH Khac');
     const account = await ctaBankAccount(staff, cta);
@@ -837,7 +934,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     const chief = await as('chief');
     const director = await as('director');
     const chairman = await as('chairman');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const lender = await createBank(staff, cta, 'NH Vay De Chi');
     const supplier = await createSupplier(staff, cta, 'NCC Vay De Chi');
     const account = await ctaBankAccount(staff, cta);
@@ -921,7 +1018,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     const chief = await as('chief');
     const director = await as('director');
     const chairman = await as('chairman');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Dao Han');
     const account = await ctaBankAccount(staff, cta);
     const today = vnToday();
@@ -979,7 +1076,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
 
     // 4) Giám đốc ghi kết quả thực hiện (RENEW-04)
     const newContract = uniq('HDTD-MOI').slice(0, 60);
-    await findCta(director);
+    await ctaPinned(director);
     await director.goto(`/ho-so/dao-han/${docId}`);
     await expect(director.getByText('Phương án đảo hạn', { exact: true }).first()).toBeVisible();
     // [lỗi mới] ô ngày của kết quả đảo hạn: DS §7.8 — ô ngày theo DD/MM/YYYY, không bắt gõ định dạng kỹ thuật YYYY-MM-DD
@@ -994,6 +1091,25 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     await typeDate(director, 'Ngày đáo hạn mới', newMaturity);
     await fieldInput(director, 'Số hợp đồng mới').fill(newContract);
     await fieldInput(director, 'Hạn mức mới').fill('40000000');
+    // [lỗi đã báo · vòng 4] "9,555" (3 chữ số thập phân) bị chặn: form báo lỗi ngay, không ghi kết quả
+    await fieldInput(director, 'Lãi suất mới (%/năm) *').fill('9,555');
+    await director.getByRole('button', { name: 'Lưu kết quả thực hiện' }).click();
+    await expect(director.getByText('Lãi suất mới không hợp lệ'), '[lỗi đã báo · vòng 4] ô kết quả đảo hạn báo lỗi khi nhập "9,555"').toBeVisible();
+    await expect(director.getByText('Đã cập nhật kết quả đảo hạn'), 'không được báo đã ghi kết quả khi lãi suất sai').toHaveCount(0);
+    // máy chủ cũng từ chối (422) — kiểm trước khi ghi, không đổi trạng thái phiếu
+    const curDoc = await getVoucherApi(director, cta, docId);
+    const badResult = await apiPostRaw(director, cta, `documents/${docId}/rollover-result`, {
+      done_at: today,
+      new_maturity_date: newMaturity,
+      new_contract_code: 'HD-SAI-4SO',
+      new_limit: { amount_minor: '40000000', currency: 'VND' },
+      new_rate: '9,555',
+      actual_fee: { amount_minor: '0', currency: 'VND' },
+      if_match: curDoc.version,
+      request_id: randomUUID(),
+    });
+    expect(badResult.status, '[lỗi đã báo · vòng 4] máy chủ từ chối kết quả đảo hạn "9,555" (422)').toBe(422);
+    expect(String(badResult.body?.detail ?? ''), 'thông báo nêu quy tắc 2 chữ số thập phân').toContain('2 chữ số thập phân');
     // [lỗi đã báo] lãi suất nhập "9,5" phải được gửi và lưu đúng dạng dấu phẩy
     await fieldInput(director, 'Lãi suất mới (%/năm) *').fill('9,5');
     await fieldInput(director, 'Phí thực tế').fill('500000');
@@ -1031,7 +1147,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     // [lỗi đã báo] lãi suất trong dòng kết quả theo quy ước VN: "LS 9,5%/năm"
     await expect.soft(resultLine, '[lỗi đã báo] dòng kết quả (KTV): lãi suất "LS 9,5%/năm"').toContainText('LS 9,5%/năm');
     // Chủ tịch có rollover:act (ma trận quyền) ⇒ thấy form ghi kết quả, không thấy dòng tóm tắt
-    await findCta(chairman);
+    await ctaPinned(chairman);
     await chairman.goto(`/ho-so/dao-han/${docId}`);
     await expect.soft(chairman.getByRole('button', { name: 'Lưu kết quả thực hiện' }), '[đúng quyền] Chủ tịch thấy form ghi kết quả đảo hạn').toBeVisible({ timeout: 20_000 });
     await expect.soft(chairman.getByText(/Đã thực hiện.*đáo hạn mới/), '[đúng quyền] Chủ tịch không thấy dòng tóm tắt khi có quyền ghi').toHaveCount(0);
@@ -1059,7 +1175,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
 
   test('LOAN-05 · nhập theo lô (.tsv): dòng hợp lệ được nhập, dòng lỗi báo rõ lý do', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Nhap Lo');
     const customer = await createCustomer(staff, cta, 'KH Nhap Lo');
     const maturity = addDays(vnToday(), 200);
@@ -1121,9 +1237,33 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     expect(failed.find((f) => f.row === 2)?.error).toContain('Trùng khoản');
   });
 
+  test('LOAN-05 · nhập theo lô: ngân hàng hợp lệ nằm NGOÀI 1.000 đối tác đầu (tên xếp cuối) vẫn được nhận, không báo "Không có ngân hàng đang hoạt động"', async ({ as }) => {
+    const staff = await as('staff');
+    const cta = await ctaPinned(staff);
+    // tên bắt đầu bằng "ZZZ" ⇒ xếp cuối theo name_key, sau 1.000 ngân hàng đầu của công ty có nhiều ngân hàng
+    const bank = await createBank(staff, cta, 'ZZZ NH Xep Cuoi');
+    const maturity = addDays(vnToday(), 200);
+    const rows = [
+      ['Mã đối tác', 'Số tiền vay', 'Hạn mức', 'Lãi suất', 'Hạn thanh toán', 'Kỳ hạn', 'Ghi chú'],
+      [bank.code, '1000000', '', '8', toDdmmyyyy(maturity), '', 'Dòng hợp lệ ngoài 1.000 đầu'],
+    ];
+
+    await staff.goto('/ngan-hang/khoan-vay');
+    await staff.getByRole('button', { name: 'Nhập theo lô (.tsv)' }).click();
+    const dlg = openDialog(staff);
+    await staff.locator('input[type="file"]').setInputFiles({
+      name: 'khoan-vay-xep-cuoi.tsv',
+      mimeType: 'text/tab-separated-values',
+      buffer: Buffer.from(tsv(rows), 'utf-8'),
+    });
+    await expect(dlg.getByRole('button', { name: 'Nhập 1 dòng' }), 'dòng có mã ngân hàng hợp lệ phải được nhận (nút nhập bật)').toBeEnabled({ timeout: 20_000 });
+    await expect(dlg).not.toContainText('Không có ngân hàng đang hoạt động với mã này');
+    await expect(dlg).not.toContainText('dòng không hợp lệ');
+  });
+
   test('LOAN-05 · xem trước: ngày hạn không hợp lệ (31/13) phải báo lỗi, không được coi là "Hợp lệ"', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Ngay Sai');
     await staff.goto('/ngan-hang/khoan-vay');
     await staff.getByRole('button', { name: 'Nhập theo lô (.tsv)' }).click();
@@ -1156,7 +1296,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
 
   test('§10.3 · lịch trả nợ: tổng gốc theo kỳ khớp gốc khoản vay (trả góp đều gốc)', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Lich Tra');
     const loan = await createLoanApi(staff, cta, {
       partner_id: bank.id,
@@ -1181,7 +1321,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
 
   test('RENEW-05 · tiền cần chuẩn bị 30 ngày = đáo hạn + chi định kỳ; báo thiếu / đủ so với số dư sổ cái', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const prep = await apiGet(staff, cta, 'rollovers/preparation');
     const m = (w: { minor: string }) => BigInt(w.minor);
     expect(m(prep.need)).toBe(m(prep.maturity) + m(prep.planned_spend));
@@ -1197,7 +1337,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
 
   test('§10.3 · sức chứa: không gán trả nợ / giải ngân vượt gốc; không gán phiếu của ngân hàng khác', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bankA = await createBank(staff, cta, 'NH Suc Chua A');
     const bankB = await createBank(staff, cta, 'NH Suc Chua B');
     const account = await ctaBankAccount(staff, cta);
@@ -1230,7 +1370,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
 
   test('US-LOAN-02 · tổng "Chờ giải ngân" của ngân hàng gồm cả khoản đã gán phiếu thu (chưa về tiền)', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH KPI Cho GN');
     const account = await ctaBankAccount(staff, cta);
     await createVoucherApi(
@@ -1269,7 +1409,7 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
 
   test('[lỗi mới · đảo hạn] phương án đảo hạn nhận "lãi suất mới" là chữ "abc" — phải bị từ chối như ô kết quả đảo hạn (lãi suất dạng số)', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Plan Rate');
     const account = await ctaBankAccount(staff, cta);
     const loan = await createLoanApi(staff, cta, {
@@ -1296,16 +1436,62 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
         new_maturity_date: addDays(vnToday(), 385),
       },
     });
-    // [lỗi mới] máy chủ đang nhận và lưu "abc" (HTTP 201): ô "Lãi suất mới (%/năm)" của phương án không kiểm tra số,
-    // trong khi ô kết quả đảo hạn chỉ nhận số (regex 2 chữ số thập phân). Kỳ vọng: 422 như mọi lãi suất không hợp lệ.
-    expect.soft(res.status, '[lỗi mới] phương án có lãi suất mới "abc" phải bị từ chối (422), không được lưu').toBe(422);
+    // [lỗi đã báo] máy chủ phải trả 422 (trước đây lưu "abc" với HTTP 201): cùng quy tắc ô kết quả đảo hạn (số, tối đa 2 chữ số thập phân)
+    expect.soft(res.status, '[lỗi đã báo] phương án có lãi suất mới "abc" phải bị từ chối (422), không được lưu').toBe(422);
+    expect.soft(String(res.body?.detail ?? ''), '[lỗi đã báo] thông báo lỗi nêu "Lãi suất dạng số" (không lưu "abc")').toContain('Lãi suất dạng số');
+    // đối chứng: "9,5" (đúng quy tắc) vẫn được nhận và lưu
+    const valid = await apiPostRaw(staff, cta, 'documents', {
+      company_id: cta.id,
+      kind: 'rollover',
+      title: uniq('Phuong an lai dung'),
+      purpose: 'E2E: đối chứng lãi suất mới hợp lệ',
+      partner_id: bank.id,
+      amount: { amount_minor: '30000000', currency: 'VND', decimals: 0 },
+      source: { fund: 'bank', account_id: account, group_managed: false },
+      planned_date: `${vnToday()}T09:00`,
+      loan_id: loan._id,
+      rollover: {
+        plan: 'E2E lãi suất hợp lệ',
+        new_rate: '9,5',
+        need_amount: { amount_minor: '30000000', currency: 'VND', decimals: 0 },
+        new_maturity_date: addDays(vnToday(), 385),
+      },
+    });
+    expect(valid.status, 'lãi suất mới "9,5" vẫn được nhận (201)').toBe(201);
   });
 
-  test('[lỗi mới · khoản vay] danh sách khoản vay cắt âm thầm ở 2.000 dòng: khoản đáo hạn muộn vẫn phải tìm được theo mã', async ({ as }) => {
+  test('[lỗi đã báo · đảo hạn · form] "Lãi suất mới (%/năm)" của phương án nhập "abc" hoặc "9,555" ⇒ báo lỗi ngay tại ô, không gửi phương án lên máy chủ', async ({ as }) => {
     const staff = await as('staff');
-    const cta = await findCta(staff);
+    await ctaPinned(staff);
+    await gotoCta(staff, '/ngan-hang/dao-han/phuong-an/moi');
+    await expect(staff.getByRole('button', { name: 'Lưu nháp', exact: true })).toBeVisible({ timeout: 20_000 });
+    const rate = fieldInput(staff, 'Lãi suất mới (%/năm)');
+    const msg = 'Lãi suất dạng số, tối đa 2 chữ số thập phân';
+    let posts = 0;
+    const onRequest = (r: { method(): string; url(): string }) => {
+      if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/v1/documents') posts++;
+    };
+    staff.on('request', onRequest);
+    // lượt 1: "abc"
+    await rate.fill('abc');
+    await staff.getByRole('button', { name: 'Lưu nháp', exact: true }).click();
+    await expect(staff.getByText(msg).first(), '[lỗi đã báo · form] "abc" báo lỗi tại ô "Lãi suất mới (%/năm)"').toBeVisible();
+    // lượt 2: làm mới form rồi thử "9,555" (để thông báo lượt 1 không che kết quả lượt 2)
+    await staff.reload();
+    await expect(staff.getByRole('button', { name: 'Lưu nháp', exact: true })).toBeVisible({ timeout: 20_000 });
+    await fieldInput(staff, 'Lãi suất mới (%/năm)').fill('9,555');
+    await staff.getByRole('button', { name: 'Lưu nháp', exact: true }).click();
+    await expect(staff.getByText(msg).first(), '[lỗi đã báo · form] "9,555" báo lỗi tại ô "Lãi suất mới (%/năm)"').toBeVisible();
+    await staff.waitForTimeout(1000);
+    staff.off('request', onRequest);
+    expect(posts, 'không gửi phương án lên máy chủ khi lãi suất sai').toBe(0);
+  });
+
+  test('[lỗi đã báo · khoản vay] danh sách cắt âm thầm ở 2.000 dòng: khoản đáo hạn muộn phải tìm được theo mã, nằm trong danh sách không lọc, trong tổng và "Dư nợ theo ngân hàng"', async ({ as }) => {
+    const staff = await as('staff');
+    const cta = await ctaPinned(staff);
     const bank = await createBank(staff, cta, 'NH Gioi Han Danh Sach');
-    // đáo hạn muộn nhất có thể: máy chủ sắp theo hạn tăng dần rồi mới cắt LOAN_MAX_ROWS = 2000 (đang có >2.000 khoản trong công ty)
+    // đáo hạn muộn nhất có thể: máy chủ sắp theo hạn tăng dần ⇒ khoản này nằm cuối (trước đây bị cắt ở 2.000 dòng, ~2.500 khoản trong DB test)
     const loan = await createLoanApi(staff, cta, {
       partner_id: bank.id,
       amount: { amount_minor: '1000000', currency: 'VND' },
@@ -1315,8 +1501,332 @@ test.describe('v2 · Nợ ngân hàng & đáo hạn', () => {
     });
     const code = (await getLoanApi(staff, cta, loan._id)).code;
     const found = await listLoansApi(staff, cta, { q: code });
-    // [lỗi mới] tìm theo mã trả về 0 khoản dù khoản tồn tại và đang hoạt động: danh sách và tổng (dư nợ, số khoản)
-    // của công ty bị thiếu âm thầm, không có cảnh báo "có nhiều hơn danh sách hiển thị"
-    expect.soft(found.items.map((l) => l.code), '[lỗi mới] tìm theo mã phải thấy khoản vừa tạo (không bị cắt ở 2.000 dòng)').toContain(code);
+    expect.soft(found.items.map((l) => l.code), '[lỗi đã báo] tìm theo mã phải thấy khoản vừa tạo (không bị cắt ở 2.000 dòng)').toContain(code);
+
+    // [lỗi đã báo] danh sách KHÔNG lọc phân trang (không tải cả danh sách mỗi lần, xem perf bên dưới): không cắt âm thầm —
+    // tổng khớp mọi trang và khoản đáo hạn muộn nhất nằm ở TRANG CUỐI
+    const first = await apiGet(staff, cta, 'bank-debts', {});
+    const total = Number(first.total);
+    const limit = Number(first.limit);
+    expect.soft(total, '[lỗi đã báo] "total" của danh sách không lọc = số khoản khớp (mọi trang)').toBeGreaterThanOrEqual(1);
+    expect.soft(first.items.length, '[lỗi đã báo] một trang không vượt cỡ trang').toBeLessThanOrEqual(limit);
+    expect.soft(first.totals.count, '[lỗi đã báo] tổng số khoản = "total" (không tính theo trang)').toBe(total);
+    const lastPage = Math.max(1, Math.ceil(total / limit));
+    const last = await apiGet(staff, cta, 'bank-debts', { page: String(lastPage) });
+    expect.soft((last.items as { _id: string }[]).map((l) => l._id), '[lỗi đã báo] danh sách không lọc phải chứa khoản đáo hạn 2099 (ở trang cuối)').toContain(loan._id);
+
+    // [lỗi đã báo] tổng theo ngân hàng (tính trên mọi khoản, không chỉ phần đã nạp) có khoản này; Σ dư nợ theo ngân hàng = tổng dư nợ
+    const summary = await apiGet(staff, cta, 'bank-debts', { summary: 'true' });
+    const byBank = summary.by_bank as { partner_id: string | null; outstanding: { minor: string }; count: number }[];
+    const row = byBank.find((r) => r.partner_id === bank.id);
+    expect.soft(row, '[lỗi đã báo] "Dư nợ theo ngân hàng" có dòng cho ngân hàng vừa tạo').toBeTruthy();
+    expect.soft(row?.outstanding.minor, '[lỗi đã báo] dư nợ ngân hàng gồm khoản đáo hạn 2099 (1.000.000)').toBe('1000000');
+    const sumByBank = byBank.reduce((a, r) => a + BigInt(r.outstanding.minor), 0n);
+    expect.soft(sumByBank.toString(), '[lỗi đã báo] Σ "Dư nợ theo ngân hàng" = tổng dư nợ của công ty').toBe(String(summary.totals.outstanding.minor));
+
+    // UI: bảng "Dư nợ theo ngân hàng" trên màn đáo hạn hiện dòng ngân hàng này với 1.000.000
+    await staff.goto('/ngan-hang/dao-han');
+    await expect(await bankTotalsRow(staff, bank.name), '[lỗi đã báo] bảng dư nợ theo ngân hàng hiện ngân hàng vừa tạo').toContainText('1.000.000', { timeout: 30_000 });
+  });
+
+  /* ------------------------------ lỗi đã báo (vòng 4): lãi suất 2 chữ số thập phân ------------------------------ */
+
+  test('[lỗi đã báo · vòng 4] lãi suất "9,555" (3 chữ số thập phân) bị chặn ở mọi đường: API (phiếu thu/chi vay, sửa phiếu nháp, khoản tạo tay, sửa khoản, nhập lô, phương án đảo hạn) và form/nhập lô trên UI', async ({ as }) => {
+    const staff = await as('staff');
+    const cta = await ctaPinned(staff);
+    const bank = await createBank(staff, cta, 'NH Lai 4 So');
+    const supplier = await createSupplier(staff, cta, 'NCC Lai 4 So');
+    const account = await ctaBankAccount(staff, cta);
+    const bad = '9,555';
+    const RATE_MSG = '2 chữ số thập phân';
+
+    // API — phiếu thu đi vay (R2)
+    const receipt = await apiPostRaw(staff, cta, 'documents', {
+      company_id: cta.id,
+      ...incomeBody({ partnerId: bank.id, accountId: account, amountMinor: '5000000', options: { loan: { kind: 'borrow', mode: 'new', lender_partner_id: bank.id, terms: { interest_rate: bad } } } }),
+    });
+    expect(receipt.status, '[lỗi đã báo · vòng 4] phiếu thu đi vay lãi suất "9,555" phải bị từ chối (422)').toBe(422);
+    expect(String(receipt.body?.detail ?? ''), 'phiếu thu: thông báo nêu 2 chữ số thập phân').toContain(RATE_MSG);
+
+    // API — phiếu chi vay để chi (R3)
+    const fund = await apiPostRaw(staff, cta, 'documents', {
+      company_id: cta.id,
+      ...spendBody({ partnerId: supplier.id, accountId: account, amountMinor: '4000000', options: { loan: { kind: 'fund', mode: 'new', lender_partner_id: bank.id, receive_account_id: account, terms: { interest_rate: bad } } } }),
+    });
+    expect(fund.status, '[lỗi đã báo · vòng 4] phiếu chi vay để chi lãi suất "9,555" phải bị từ chối (422)').toBe(422);
+    expect(String(fund.body?.detail ?? ''), 'phiếu chi: thông báo nêu 2 chữ số thập phân').toContain(RATE_MSG);
+
+    // API — sửa phiếu nháp sang "9,555"
+    const draft = await createVoucherApi(
+      staff,
+      cta,
+      incomeBody({ partnerId: bank.id, accountId: account, amountMinor: '5000000', options: { loan: { kind: 'borrow', mode: 'new', lender_partner_id: bank.id, terms: { interest_rate: '8,5' } } } }),
+    );
+    const draftVersion = (await getVoucherApi(staff, cta, draft._id)).version;
+    const patched = await staff.request.patch(`/api/v1/documents/${draft._id}`, {
+      headers: scopeOf(cta),
+      data: {
+        if_match: draftVersion,
+        request_id: randomUUID(),
+        options: { loan: { kind: 'borrow', mode: 'new', lender_partner_id: bank.id, terms: { interest_rate: bad } } },
+      },
+    });
+    expect(patched.status(), '[lỗi đã báo · vòng 4] sửa phiếu nháp sang lãi suất "9,555" phải bị từ chối (422)').toBe(422);
+
+    // API — khoản vay tạo tay và sửa khoản vay
+    const manual = await apiPostRaw(staff, cta, 'bank-debts', {
+      partner_id: bank.id,
+      amount: { amount_minor: '1000000', currency: 'VND' },
+      maturity_date: addDays(vnToday(), 200),
+      interest_rate: bad,
+    });
+    expect(manual.status, '[lỗi đã báo · vòng 4] khoản vay tạo tay lãi suất "9,555" → 422').toBe(422);
+    expect(String(manual.body?.detail ?? ''), 'khoản vay tạo tay: thông báo nêu 2 chữ số thập phân').toContain(RATE_MSG);
+    const okLoan = await createLoanApi(staff, cta, {
+      partner_id: bank.id,
+      amount: { amount_minor: '1000000', currency: 'VND' },
+      disbursed_date: addDays(vnToday(), -1),
+      maturity_date: addDays(vnToday(), 200),
+      interest_rate: '8,5',
+    });
+    const patchLoan = await staff.request.patch(`/api/v1/bank-debts/${okLoan._id}`, { headers: scopeOf(cta), data: { interest_rate: bad } });
+    expect(patchLoan.status(), '[lỗi đã báo · vòng 4] sửa khoản vay sang lãi suất "9,555" → 422').toBe(422);
+
+    // API — nhập lô: dòng "9,555" bị báo lỗi riêng, không tạo khoản
+    const imp = await apiPostRaw(staff, cta, 'bank-debts/import', {
+      rows: [{ partner_code: bank.code, amount: { amount_minor: '1000000', currency: 'VND' }, maturity_date: addDays(vnToday(), 200), interest_rate: bad }],
+    });
+    expect(imp.status, 'nhập lô vẫn trả 201 với danh sách dòng lỗi').toBe(201);
+    const impFailed = unwrap<any>(imp.body).failed as { row: number; error: string }[];
+    expect(impFailed.find((f) => f.row === 1)?.error, '[lỗi đã báo · vòng 4] nhập lô: dòng "9,555" bị báo lỗi lãi suất').toContain(RATE_MSG);
+    expect(unwrap<any>(imp.body).inserted, 'nhập lô: dòng lỗi không được tạo khoản').toBe(0);
+
+    // API — phương án đảo hạn có lãi suất mới "9,555"
+    const plan = await apiPostRaw(staff, cta, 'documents', {
+      company_id: cta.id,
+      kind: 'rollover',
+      title: uniq('Phuong an 4 so'),
+      purpose: 'E2E: lãi suất 4 chữ số của phương án đảo hạn',
+      partner_id: bank.id,
+      amount: { amount_minor: '1000000', currency: 'VND', decimals: 0 },
+      source: { fund: 'bank', account_id: account, group_managed: false },
+      planned_date: `${vnToday()}T09:00`,
+      loan_id: okLoan._id,
+      rollover: {
+        plan: 'E2E lãi suất 4 số',
+        new_rate: bad,
+        need_amount: { amount_minor: '1000000', currency: 'VND', decimals: 0 },
+        new_maturity_date: addDays(vnToday(), 400),
+      },
+    });
+    expect(plan.status, '[lỗi đã báo · vòng 4] phương án đảo hạn "9,555" → 422').toBe(422);
+
+    // UI — phiếu thu đi vay: ô "Lãi suất (%/năm)" báo lỗi, không gửi phiếu
+    await gotoCta(staff, '/thu/moi');
+    await expect(staff.getByRole('button', { name: 'Lưu nháp', exact: true })).toBeVisible({ timeout: 20_000 });
+    await fieldOf(staff, 'Tiêu đề').locator('input').fill(uniq('Thu lai 4 so E2E'));
+    await fieldOf(staff, 'Nội dung / mục đích').locator('textarea').fill('E2E: phiếu thu đi vay, kiểm tra lãi suất 4 chữ số');
+    await pickPartner(staff, fieldOf(staff, 'Bên nộp tiền'), bank.name);
+    await staff.getByLabel('Số tiền', { exact: true }).first().fill('5000000');
+    const receiptDeadline = fieldOf(staff, 'Hạn thanh toán').locator('input').first();
+    await receiptDeadline.click();
+    await receiptDeadline.fill(DEADLINE_UI);
+    await receiptDeadline.press('Enter');
+    await pickSelect(staff, fieldOf(staff, 'Tài khoản đích'), /./);
+    await staff.getByRole('checkbox', { name: /Đây là khoản vay ngân hàng/ }).check();
+    await fieldOf(staff, 'Lãi suất (%/năm)').locator('input').first().fill(bad);
+    let receiptPosts = 0;
+    const onReceiptReq = (r: { method(): string; url(): string }) => {
+      if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/v1/documents') receiptPosts++;
+    };
+    staff.on('request', onReceiptReq);
+    await staff.getByRole('button', { name: 'Lưu nháp', exact: true }).click();
+    await expect(staff.getByText('Lãi suất dạng số, tối đa 2 chữ số thập phân').first(), '[lỗi đã báo · vòng 4] form phiếu thu: "9,555" báo lỗi tại ô lãi suất').toBeVisible();
+    await staff.waitForTimeout(1000);
+    staff.off('request', onReceiptReq);
+    expect(receiptPosts, '[lỗi đã báo · vòng 4] phiếu thu lãi suất sai không được gửi lên máy chủ').toBe(0);
+
+    // UI — phiếu chi "Vay ngân hàng để chi": cùng quy tắc
+    await gotoCta(staff, '/chi/moi');
+    await expect(staff.getByRole('button', { name: 'Lưu nháp', exact: true })).toBeVisible({ timeout: 20_000 });
+    await fieldOf(staff, 'Tiêu đề').locator('input').fill(uniq('Chi vay lai 4 so E2E'));
+    await fieldOf(staff, 'Nội dung / mục đích').locator('textarea').fill('E2E: chi bằng vốn vay, kiểm tra lãi suất 4 chữ số');
+    await pickPartner(staff, fieldOf(staff, 'Bên nhận tiền'), supplier.name);
+    await staff.getByLabel('Số tiền', { exact: true }).first().fill('4000000');
+    const spendDeadline = fieldOf(staff, 'Hạn thanh toán').locator('input').first();
+    await spendDeadline.click();
+    await spendDeadline.fill(DEADLINE_UI);
+    await spendDeadline.press('Enter');
+    await staff.getByRole('checkbox', { name: /Vay ngân hàng để chi/ }).check();
+    await pickPartner(staff, fieldOf(staff, 'Ngân hàng cho vay'), bank.name);
+    await expect(staff.locator('.ant-select-dropdown:visible'), 'dropdown ô đối tác đã đóng').toHaveCount(0, { timeout: 10_000 });
+    await pickSelect(staff, fieldOf(staff, 'Tài khoản nhận giải ngân'), /./);
+    await fieldOf(staff, 'Lãi suất (%/năm)').locator('input').first().fill(bad);
+    let spendPosts = 0;
+    const onSpendReq = (r: { method(): string; url(): string }) => {
+      if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/v1/documents') spendPosts++;
+    };
+    staff.on('request', onSpendReq);
+    await staff.getByRole('button', { name: 'Lưu nháp', exact: true }).click();
+    await expect(staff.getByText('Lãi suất dạng số, tối đa 2 chữ số thập phân').first(), '[lỗi đã báo · vòng 4] form phiếu chi vay: "9,555" báo lỗi tại ô lãi suất').toBeVisible();
+    await staff.waitForTimeout(1000);
+    staff.off('request', onSpendReq);
+    expect(spendPosts, '[lỗi đã báo · vòng 4] phiếu chi vay lãi suất sai không được gửi lên máy chủ').toBe(0);
+
+    // UI — nhập lô (.tsv): xem trước báo "Lãi suất không hợp lệ", không cho nhập
+    await staff.goto('/ngan-hang/khoan-vay');
+    await staff.getByRole('button', { name: 'Nhập theo lô (.tsv)' }).click();
+    const dlg = openDialog(staff);
+    await staff.locator('input[type="file"]').setInputFiles({
+      name: 'lai-4-so.tsv',
+      mimeType: 'text/tab-separated-values',
+      buffer: Buffer.from(
+        tsv([
+          ['Mã', 'Số tiền', 'Hạn mức', 'Lãi', 'Hạn', 'Kỳ hạn', 'Ghi chú'],
+          [bank.code, '1000000', '', bad, toDdmmyyyy(addDays(vnToday(), 200)), '', 'Lãi 4 số'],
+        ]),
+        'utf-8',
+      ),
+    });
+    await expect(dlg, '[lỗi đã báo · vòng 4] xem trước nhập lô: "9,555" báo "Lãi suất không hợp lệ"').toContainText('Lãi suất không hợp lệ');
+    await expect(dlg.getByRole('button', { name: /^Nhập/ }), 'không cho nhập khi dòng lãi suất sai').toBeDisabled();
+  });
+
+  test('[lỗi đã báo · vòng 4] nhập lô: mã ngân hàng HỢP LỆ không bị báo "Không có ngân hàng đang hoạt động với mã này" khi công ty có nhiều hơn 1.000 ngân hàng', async ({ as }) => {
+    const staff = await as('staff');
+    const cta = await ctaPinned(staff);
+    // partners/options sắp theo tên (name_key) và chỉ trả tối đa `limit` dòng; tên bắt đầu bằng "ZZZ" xếp cuối,
+    // nên khi công ty có >1.000 ngân hàng (DB test hiện ~3.500) mã này nằm NGOÀI danh sách xem trước nạp về.
+    const bank = await createBank(staff, cta, 'ZZZ NH Nhap Lo Cuoi');
+    await gotoCta(staff, '/ngan-hang/khoan-vay');
+    await staff.getByRole('button', { name: 'Nhập theo lô (.tsv)' }).click();
+    const dlg = openDialog(staff);
+    // mã trong file được tra đúng trên máy chủ (partners/options?codes=…) sau khi chọn file
+    const codesChecked = staff.waitForResponse((r) => r.url().includes('/api/v1/partners/options') && r.url().includes('codes='), { timeout: 60_000 });
+    await staff.locator('input[type="file"]').setInputFiles({
+      name: 'nhap-lo-ma-hop-le.tsv',
+      mimeType: 'text/tab-separated-values',
+      buffer: Buffer.from(
+        tsv([
+          ['Mã', 'Số tiền', 'Hạn mức', 'Lãi', 'Hạn', 'Kỳ hạn', 'Ghi chú'],
+          [bank.code, '1000000', '', '8', toDdmmyyyy(addDays(vnToday(), 200)), '', 'Mã hợp lệ'],
+        ]),
+        'utf-8',
+      ),
+    });
+    // [vòng 5] lượt tra mã phải thành công (200) — không phải lỗi 422 do giới hạn `limit`
+    const codesRes = await codesChecked;
+    expect(codesRes.status(), '[vòng 5] tra mã đối tác (partners/options?codes=) trả 200').toBe(200);
+    await expect(dlg, '[lỗi đã báo · vòng 4] mã ngân hàng hợp lệ không được báo "Không có ngân hàng đang hoạt động với mã này"').not.toContainText('Không có ngân hàng đang hoạt động với mã này');
+    // [vòng 5] dòng hiện "Hợp lệ" kèm tên ngân hàng tra được trên máy chủ
+    await expect(dlg.locator('tr', { hasText: bank.code }), '[vòng 5] dòng có mã hợp lệ hiện tên ngân hàng và "Hợp lệ"').toContainText(bank.name, { timeout: 30_000 });
+    await expect(dlg.locator('tr', { hasText: bank.code })).toContainText('Hợp lệ');
+    await expect(dlg.getByRole('button', { name: 'Nhập 1 dòng' }), '[lỗi đã báo · vòng 4] dòng có mã hợp lệ nhập được ("Nhập 1 dòng" bật)').toBeEnabled({ timeout: 30_000 });
+  });
+
+  /* ------------------------------ lỗi đã báo (vòng 4): hiệu năng danh sách & đáo hạn ------------------------------ */
+
+  test('[lỗi đã báo · vòng 4 · hiệu năng] danh sách & đáo hạn: không tải cả danh sách mỗi lần (≤ 1 MB, không lọc) và hiện dữ liệu trong ngân sách 5 s', async ({ as }) => {
+    test.setTimeout(180_000);
+    const staff = await as('staff');
+    const cta = await ctaPinned(staff);
+    // Ngân sách đề xuất (đo trên DB test hiện tại, ~2.600 khoản): phản hồi danh sách không lọc ≤ 1.000.000 byte;
+    // hàng đầu tiên của danh sách và bảng "Dư nợ theo ngân hàng" hiện trong ≤ 5 s. Số đo in ra console để đối chiếu.
+    const LIST_BYTES_BUDGET = 1_000_000;
+    const UI_BUDGET_MS = 5_000;
+
+    const listRes = await staff.request.get('/api/v1/bank-debts', { headers: scopeOf(cta) });
+    expect(listRes.status(), 'GET /bank-debts (không lọc) trả 200').toBe(200);
+    const listBuf = await listRes.body();
+    const listBytes = listBuf.length;
+    const listBody = JSON.parse(listBuf.toString('utf8')) as { items: unknown[]; by_bank: unknown[] };
+    // [vòng 5] mỗi lượt tải trang kèm "by_bank" (tổng theo MỌI ngân hàng có khoản, không phân trang): đo để theo dõi
+    const byBankBytes = JSON.stringify(listBody.by_bank).length;
+    console.log(`[perf] GET /bank-debts (không lọc): ${listBytes} byte · ${listBody.items.length} khoản trong trang · by_bank ${listBody.by_bank.length} ngân hàng (${byBankBytes} byte)`);
+    expect.soft(listBody.items.length, '[vòng 5] một trang danh sách ≤ 50 khoản').toBeLessThanOrEqual(50);
+    expect.soft(listBytes, `[lỗi đã báo · hiệu năng] danh sách không lọc tải ${listBytes} byte cho toàn bộ khoản vay (ngân sách ≤ ${LIST_BYTES_BUDGET}): cần phân trang hoặc tổng hợp trên DB`).toBeLessThan(LIST_BYTES_BUDGET);
+
+    const t0 = Date.now();
+    await gotoCta(staff, '/ngan-hang/khoan-vay');
+    await staff.locator('tbody tr').first().waitFor({ timeout: 60_000 });
+    const firstRowMs = Date.now() - t0;
+    console.log(`[perf] danh sách khoản vay: hàng đầu tiên sau ${firstRowMs} ms`);
+    expect.soft(firstRowMs, `[lỗi đã báo · hiệu năng] danh sách hiện hàng đầu tiên sau ${firstRowMs} ms (ngân sách ≤ ${UI_BUDGET_MS} ms)`).toBeLessThan(UI_BUDGET_MS);
+
+    const t1 = Date.now();
+    await gotoCta(staff, '/ngan-hang/dao-han');
+    await expect(staff.locator('h2', { hasText: 'Dư nợ theo ngân hàng' })).toBeVisible({ timeout: 60_000 });
+    const boardMs = Date.now() - t1;
+    console.log(`[perf] bảng đáo hạn: "Dư nợ theo ngân hàng" hiện sau ${boardMs} ms`);
+    expect.soft(boardMs, `[lỗi đã báo · hiệu năng] bảng đáo hạn hiện dư nợ theo ngân hàng sau ${boardMs} ms (ngân sách ≤ ${UI_BUDGET_MS} ms)`).toBeLessThan(UI_BUDGET_MS);
+
+    // Form phương án đảo hạn khi CHƯA chọn ngân hàng: ô "Khoản vay đang đảo hạn" không được tải toàn bộ khoản vay của công ty
+    const loanReqs: string[] = [];
+    const onLoanReq = (r: { url(): string }) => {
+      if (new URL(r.url()).pathname === '/api/v1/bank-debts') loanReqs.push(r.url());
+    };
+    staff.on('request', onLoanReq);
+    await gotoCta(staff, '/ngan-hang/dao-han/phuong-an/moi');
+    await expect(staff.getByRole('button', { name: 'Lưu nháp', exact: true })).toBeVisible({ timeout: 30_000 });
+    await staff.waitForTimeout(1500);
+    staff.off('request', onLoanReq);
+    const unfiltered = loanReqs.filter((u) => !new URL(u).searchParams.has('partner_id'));
+    console.log(`[perf] form phương án đảo hạn (chưa chọn ngân hàng): ${loanReqs.length} lượt GET /bank-debts, ${unfiltered.length} lượt không lọc`);
+    expect.soft(unfiltered, '[lỗi đã báo · vòng 4 · hiệu năng] form phương án đảo hạn chưa chọn ngân hàng vẫn tải TOÀN BỘ khoản vay (ô "Khoản vay đang đảo hạn" lọc ở trình duyệt)').toEqual([]);
+  });
+
+  /* ------------------------------ lỗi đã báo (vòng 4) · dữ liệu cũ; vòng 5 · phân trang ------------------------------ */
+
+  test('[lỗi đã báo · dữ liệu cũ] không còn khoản vay / phương án / điều khoản vay nào có lãi suất vi phạm 2 chữ số thập phân (3–4 chữ số, "abc"); migration 0006 đã ghi nhận', async () => {
+    const r = legacyRateReport();
+    expect(r.migrations_applied, 'migration 0006-clean-interest-rates.js đã được ghi nhận (chạy `pnpm db:migrate` nếu thiếu)').toContain('0006-clean-interest-rates.js');
+    expect(r.bank_debts_total, 'CSDL có khoản vay để kiểm (kết quả không rỗng)').toBeGreaterThan(0);
+    expect.soft(r.bank_debts_bad, '[lỗi đã báo · dữ liệu cũ] khoản vay còn lãi suất vi phạm quy tắc 2 chữ số thập phân').toBe(0);
+    expect.soft(r.rollover_new_rate_bad, '[lỗi đã báo · dữ liệu cũ] phương án đảo hạn còn "lãi suất mới" vi phạm').toBe(0);
+    expect.soft(r.rollover_result_rate_bad, '[lỗi đã báo · dữ liệu cũ] kết quả đảo hạn còn lãi suất vi phạm').toBe(0);
+    expect.soft(r.loan_terms_rate_bad, '[lỗi đã báo · dữ liệu cũ] điều khoản vay trên phiếu còn lãi suất vi phạm').toBe(0);
+  });
+
+  test('[vòng 5 · danh sách] phân trang phía máy chủ: "Hiển thị 1–50", trang 2 hiện dòng khác; tìm theo mã khi đang ở trang 2 ⇒ về trang 1 và thấy đúng khoản', async ({ as }) => {
+    const staff = await as('staff');
+    const cta = await ctaPinned(staff);
+    const bank = await createBank(staff, cta, 'NH Phan Trang');
+    // cần hơn 50 khoản trong CTA để có trang 2 (DB test có sẵn hàng nghìn khoản; chỉ bổ sung khi thiếu)
+    const probe = await apiGet(staff, cta, 'bank-debts', { limit: '1' });
+    for (let n = Number(probe.total); n <= 50; n++) {
+      await createLoanApi(staff, cta, {
+        partner_id: bank.id,
+        amount: { amount_minor: '1000000', currency: 'VND' },
+        disbursed_date: addDays(vnToday(), -1),
+        maturity_date: addDays(vnToday(), 300),
+        interest_rate: '0',
+      });
+    }
+    // hạn rất xa ⇒ sắp xếp theo hạn đưa khoản này về cuối danh sách (trang sau)
+    const target = await createLoanApi(staff, cta, {
+      partner_id: bank.id,
+      amount: { amount_minor: '1000000', currency: 'VND' },
+      disbursed_date: addDays(vnToday(), -1),
+      maturity_date: '2099-06-30',
+      interest_rate: '0',
+    });
+
+    await gotoCta(staff, '/ngan-hang/khoan-vay');
+    await expect(staff.getByText(/Hiển thị 1.+50 \/ \d+ khoản/), 'trang 1 hiện khoảng "Hiển thị 1–50 / N khoản"').toBeVisible({ timeout: 30_000 });
+    const firstPageRow = await staff.locator('tbody tr.ant-table-row').first().innerText();
+
+    await staff.locator('li.ant-pagination-item[title="2"]').click();
+    await expect(staff.getByText(/Hiển thị 51.+ \/ \d+ khoản/), 'trang 2 hiện "Hiển thị 51–…"').toBeVisible({ timeout: 30_000 });
+    // nhãn đổi ngay khi bấm, còn bảng giữ dữ liệu trang 1 đến khi trang 2 tải xong ⇒ chờ dòng đầu THAY ĐỔI
+    await expect
+      .poll(async () => staff.locator('tbody tr.ant-table-row').first().innerText(), { timeout: 30_000, message: 'dòng đầu của trang 2 khác trang 1 (phân trang thật)' })
+      .not.toBe(firstPageRow);
+    const secondPageRow = await staff.locator('tbody tr.ant-table-row').first().innerText();
+    expect(secondPageRow, 'trang 2 có dòng khác trang 1').not.toBe(firstPageRow);
+
+    // đang ở trang 2 ⇒ tìm theo mã: phải quay về trang 1 và thấy đúng khoản (không hiện "Trang này không còn khoản nào")
+    await staff.getByPlaceholder(SEARCH_PLACEHOLDER).fill(target.code);
+    await expect(staff.locator('tr', { hasText: target.code }), 'tìm theo mã khi đang ở trang 2 thấy đúng khoản').toHaveCount(1, { timeout: 30_000 });
+    await expect(staff.getByText('Trang này không còn khoản nào')).toHaveCount(0);
   });
 });

@@ -8,6 +8,7 @@ import {
   assertTagSelection,
   assertTransferTargetAccount,
   assertTransferTargetFits,
+  assertTransferTargetSubmittable,
   assertVoucherPartner,
   diffIds,
   dedupeIds,
@@ -208,6 +209,29 @@ describe('chuyển tiền nội bộ theo ID (§11.6)', () => {
     expect(codeOf(() => assertTransferTargetAccount({ account_id: null }))).toBe('FG-VAL-001');
     expect(codeOf(() => assertTransferTargetAccount({ account_id: undefined }))).toBe('FG-VAL-001');
     expect(codeOf(() => assertTransferTargetAccount({ account_id: ACC }))).toBe('');
+  });
+
+  it('gửi duyệt: nháp chuyển nội bộ thiếu TK đích (lưu trước khi có kiểm tra khi lưu) ⇒ FG-VAL-001, không để lọt vào duyệt', () => {
+    expect(codeOf(() => assertTransferTargetSubmittable('spend', CO, { company_id: CO2, account_id: null }))).toBe('FG-VAL-001');
+    expect(codeOf(() => assertTransferTargetSubmittable('spend', CO, { company_id: CO2 }))).toBe('FG-VAL-001');
+    expect(codeOf(() => assertTransferTargetSubmittable('spend', CO, { company_id: CO2, account_id: ACC }))).toBe('');
+  });
+
+  it('gửi duyệt: đích không có công ty nhận ⇒ không kiểm; công ty nhận trùng công ty phiếu / phiếu thu có đích ⇒ FG-VAL-001', () => {
+    expect(codeOf(() => assertTransferTargetSubmittable('spend', CO, null))).toBe('');
+    expect(codeOf(() => assertTransferTargetSubmittable('spend', CO, { company_id: null, account_id: null }))).toBe('');
+    expect(codeOf(() => assertTransferTargetSubmittable('spend', CO, { company_id: CO, account_id: ACC }))).toBe('FG-VAL-001');
+    expect(codeOf(() => assertTransferTargetSubmittable('income', CO, { company_id: CO2, account_id: ACC }))).toBe('FG-VAL-001');
+  });
+
+  it('thông báo lỗi nêu đúng việc cần làm: "Chọn tài khoản nhận của công ty đích" (khớp kiểm tra khi lưu)', () => {
+    try {
+      assertTransferTargetSubmittable('spend', CO, { company_id: CO2, account_id: null });
+      throw new Error('không ném lỗi');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).detail).toBe('Chọn tài khoản nhận của công ty đích');
+    }
   });
 });
 

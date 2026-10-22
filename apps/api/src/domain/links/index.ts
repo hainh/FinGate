@@ -687,10 +687,16 @@ const PARTNER_MATCH_RELATIONS = (Object.keys(RELATION_SPECS) as LinkRelation[]).
  * Đổi đối tác của phiếu (sửa hồ sơ): mọi liên kết theo quan hệ khớp đối tác phải còn khớp đối tác MỚI, nếu không
  * phải gỡ trước (v2 §9.2, §11.2 — FG-LINK-001). Liên kết Tự động (quy tắc R2) được đồng bộ theo đối tác mới nên không chặn.
  */
-export async function assertPartnerChangeKeepsLinks(input: { documentId: string; nextPartnerId: string | null }): Promise<void> {
+export async function assertPartnerChangeKeepsLinks(input: {
+  documentId: string;
+  nextPartnerId: string | null;
+  /** liên kết mà chính lần lưu này sẽ gỡ (đổi lựa chọn khoản vay trên phiếu): không chặn (v2 §11.2, §11.4 (b)). */
+  willRelease?: (link: LinkRecord) => boolean;
+}): Promise<void> {
   const links = await activeLinksWhere({ from_type: 'document', from_id: input.documentId, relation: { $in: PARTNER_MATCH_RELATIONS } });
   for (const link of links) {
     if (link.origin === 'automation') continue;
+    if (input.willRelease?.(link)) continue;
     const other = await loadEndpoint(link.to_type, link.to_id);
     if (input.nextPartnerId && other.partner_id === input.nextPartnerId) continue;
     throw new ApiError({

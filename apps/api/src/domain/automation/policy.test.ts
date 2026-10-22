@@ -152,19 +152,28 @@ describe('policy › R6: huỷ phiếu nguồn', () => {
     expect(moneyMoved({ status: 'cancelled' })).toBe(false);
   });
 
-  it('chưa có tiền, khoản do quy tắc sinh ⇒ HUỶ; khoản tạo tay ⇒ chỉ GỠ liên kết', () => {
-    expect(decideOnSourceFinal({ loanStatus: 'pending_disbursement', origin: 'automation' })).toBe('cancel');
-    expect(decideOnSourceFinal({ loanStatus: 'pending_disbursement', origin: 'manual' })).toBe('unlink');
+  it('chưa có tiền, khoản do quy tắc sinh từ phiếu này (hoặc gắn bằng liên kết tự động) ⇒ HUỶ', () => {
+    expect(decideOnSourceFinal({ loanStatus: 'pending_disbursement', generated: true, linkOrigin: 'automation' })).toBe('cancel');
+    expect(decideOnSourceFinal({ loanStatus: 'pending_disbursement', generated: true, linkOrigin: null })).toBe('cancel');
+    expect(decideOnSourceFinal({ loanStatus: 'pending_disbursement', generated: false, linkOrigin: 'automation' })).toBe('cancel');
   });
 
-  it('đã có tiền ⇒ chỉ CẢNH BÁO (không tự huỷ), dù khoản do quy tắc sinh', () => {
-    expect(decideOnSourceFinal({ loanStatus: 'active', origin: 'automation' })).toBe('alert');
-    expect(decideOnSourceFinal({ loanStatus: 'settled', origin: 'manual' })).toBe('alert');
-    expect(decideOnSourceFinal({ loanStatus: 'pending_disbursement', origin: 'automation', disbursedAt: new Date() })).toBe('alert');
+  it('khoản chỉ gắn THỦ CÔNG vào phiếu (không do phiếu sinh ra) ⇒ chỉ GỠ liên kết, dù chưa có tiền hay đã có tiền', () => {
+    expect(decideOnSourceFinal({ loanStatus: 'pending_disbursement', generated: false, linkOrigin: 'manual' })).toBe('unlink');
+    expect(decideOnSourceFinal({ loanStatus: 'active', generated: false, linkOrigin: 'manual', disbursedAt: new Date() })).toBe('unlink');
+    expect(decideOnSourceFinal({ loanStatus: 'settled', generated: false, linkOrigin: 'manual' })).toBe('unlink');
+    expect(decideOnSourceFinal({ loanStatus: 'cancelled', generated: false, linkOrigin: 'manual' })).toBe('unlink');
   });
 
-  it('đã huỷ rồi ⇒ không làm gì', () => {
-    expect(decideOnSourceFinal({ loanStatus: 'cancelled', origin: 'automation' })).toBe('none');
+  it('đã có tiền ⇒ chỉ CẢNH BÁO (không tự huỷ), dù khoản do quy tắc sinh; giữ nguyên liên kết', () => {
+    expect(decideOnSourceFinal({ loanStatus: 'active', generated: true, linkOrigin: 'automation' })).toBe('alert');
+    expect(decideOnSourceFinal({ loanStatus: 'settled', generated: true, linkOrigin: 'manual' })).toBe('alert');
+    expect(decideOnSourceFinal({ loanStatus: 'pending_disbursement', generated: true, linkOrigin: 'automation', disbursedAt: new Date() })).toBe('alert');
+  });
+
+  it('đã huỷ rồi, hoặc không liên quan đến phiếu (không do phiếu sinh, không có liên kết) ⇒ không làm gì', () => {
+    expect(decideOnSourceFinal({ loanStatus: 'cancelled', generated: true, linkOrigin: 'automation' })).toBe('none');
+    expect(decideOnSourceFinal({ loanStatus: 'pending_disbursement', generated: false, linkOrigin: null })).toBe('none');
   });
 });
 

@@ -44,6 +44,7 @@ import {
   documentCreateBody,
   documentDeleteBody,
   documentListQuery,
+  queueProcessedQuery,
   documentUpdateBody,
   documentTagsBody,
   documentLinkCreateBody,
@@ -54,6 +55,7 @@ import {
   attachmentPrepareBody,
   attachmentConfirmBody,
   attachmentRemoveBody,
+  decisionPackQuery,
   toJsonSchema,
 } from '@fingate/shared';
 import { loadDoc, transition, assertStepUp } from '../domain/workflow/index.ts';
@@ -87,6 +89,7 @@ import { reverseLedgerForDocument } from '../domain/vouchers/reversal.ts';
 import {
   assertApprovalAmountEditable,
   buildVoucherRefView,
+  disbursementReleasedByLoanChoice,
   linkChosenLoanOnSave,
   planToLoanInput,
   planToStoredLoan,
@@ -140,8 +143,9 @@ export function documentRoutes(app: FastifyInstance): void {
           missingEvidenceOnly: q.missing_evidence === 'true',
           sort: q.sort,
           limit: q.limit,
+          page: q.page,
         });
-        return ok(reply, { items, total, limit: q.limit }, { maxAge: 15 });
+        return ok(reply, { items, total, limit: q.limit, page: q.page }, { maxAge: 15 });
       },
     }),
   );
@@ -182,6 +186,7 @@ export function documentRoutes(app: FastifyInstance): void {
             overdueOnly: q.overdue_only === 'true',
             sort: q.sort ?? '-waiting',
             limit: q.limit,
+            page: q.page,
           }),
           awaitingBadge(scope, actor.user_id, actor.role, canPay),
         ]);
@@ -196,6 +201,7 @@ export function documentRoutes(app: FastifyInstance): void {
               compact: formatMoney(money(badge.total_minor), { mode: 'compact' }),
             },
             limit: q.limit,
+            page: q.page,
           },
           { maxAge: 15 },
         );
@@ -212,10 +218,18 @@ export function documentRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const actor = requireActor(req);
         const scope = requireScope(req);
-        // ô tìm (q) của "Tôi đã duyệt": cùng cách khớp với hàng chờ (mã, tiêu đề, đối tác, STK/MST, tag)
-        const q = typeof (req.query as { q?: unknown }).q === 'string' ? String((req.query as { q: string }).q).trim().slice(0, 200) : '';
-        const { items, total } = await queryQueue({ scope, userId: actor.user_id, mine: 'approved_by_me', q: q || undefined, limit: 50, sort: '-created_at' });
-        return ok(reply, { items, total }, { maxAge: 15 });
+        // ô tìm (q) của "Tôi đã duyệt": cùng cách khớp với hàng chờ (mã, tiêu đề, đối tác, STK/MST, tag); có phân trang
+        const q = validate(queueProcessedQuery, req.query);
+        const { items, total } = await queryQueue({
+          scope,
+          userId: actor.user_id,
+          mine: 'approved_by_me',
+          q: q.q?.trim() || undefined,
+          limit: q.limit,
+          page: q.page,
+          sort: '-created_at',
+        });
+        return ok(reply, { items, total, limit: q.limit, page: q.page }, { maxAge: 15 });
       },
     }),
   );
@@ -481,8 +495,14 @@ export function documentRoutes(app: FastifyInstance): void {
           previous: partnerChanged ? null : previousLoan,
           voucherId: params.id,
         });
-        // đổi đối tác: liên kết cấn trừ / trả nợ / giải ngân đang có phải còn khớp đối tác mới (v2 §9.2, §11.2)
-        if (partnerChanged) await assertPartnerChangeKeepsLinks({ documentId: params.id, nextPartnerId });
+        // đổi đối tác: liên kết cấn trừ / trả nợ / giải ngân đang có phải còn khớp đối tác mới (v2 §9.2, §11.2).
+        // Giải ngân tới khoản đã chọn trước đó sẽ được gỡ khi lưu này (linkChosenLoanOnSave) ⇒ không chặn.
+        if (partnerChanged)
+          await assertPartnerChangeKeepsLinks({
+            documentId: params.id,
+            nextPartnerId,
+            willRelease: (l) => disbursementReleasedByLoanChoice(l, previousLoan, loan),
+          });
         // đổi số tiền: tổng phân bổ còn lại không được vượt số tiền mới (v2 §9.2). Giải ngân theo khoản vay đã chọn
         // và liên kết tự động của R2 được đồng bộ theo số tiền mới (linkChosenLoanOnSave / R2), nên không tính ở đây.
         if (amountMinorNext !== BigInt(String(doc.amount.minor))) {
@@ -813,11 +833,15 @@ export function documentRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const actor = requireActor(req);
         const params = req.params as { id: string };
+        const query = validate(decisionPackQuery, req.query);
         const doc = await Models.Document.findById(params.id).lean<Record<string, unknown> | null>();
         if (!doc) throw new ApiError({ code: 'FG-WF-001', status: 404 });
         await assertVisible(req, String(doc.company_id));
-        const pack = await decisionPack(doc, actor.permissions.includes('doc:read'));
-        return ok(reply, { data: pack }, { etag: `dp-${doc.version}`, maxAge: 15 });
+        // TK đang chọn ở cấp duyệt: phải là TK của công ty phiếu (hoặc TK Tập đoàn cho phiếu Tập đoàn) — như khi duyệt
+        if (query.source_account_id) await assertAccountAllowedForCompany(String(doc.company_id), query.source_account_id);
+        const pack = await decisionPack(doc, actor.permissions.includes('doc:read'), { sourceAccountId: query.source_account_id ?? null });
+        const etagTag = query.source_account_id ? `-${query.source_account_id}` : '';
+        return ok(reply, { data: pack }, { etag: `dp-${doc.version}${etagTag}`, maxAge: 15 });
       },
     }),
   );

@@ -232,6 +232,35 @@ export function usePartnerOptions(params: PartnerOptionsParams, enabled = true) 
   });
 }
 
+/** Mỗi yêu cầu tra tối đa 100 mã (URL ngắn). */
+const CODE_LOOKUP_CHUNK = 100;
+
+/**
+ * Kiểm mã ngân hàng đang hoạt động của một lô nhập (LOAN-05): tra ĐÚNG các mã được hỏi trên máy chủ.
+ * Không dựa vào danh sách ngân hàng tải về (bị trần số dòng) — công ty có nhiều ngân hàng thì mã hợp lệ
+ * ngoài danh sách đầu vẫn được nhận diện. Chỉ gọi khi có mã (`enabled`).
+ */
+export function useActiveBankCodes(codes: string[], companyId: string | null | undefined, enabled = true) {
+  const { scope } = useAuth();
+  return useQuery({
+    queryKey: ['partner-codes', scope, companyId ?? '', codes.join(',')],
+    enabled: enabled && codes.length > 0,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const requests: string[][] = [];
+      for (let i = 0; i < codes.length; i += CODE_LOOKUP_CHUNK) requests.push(codes.slice(i, i + CODE_LOOKUP_CHUNK));
+      const parts = await Promise.all(
+        requests.map((chunk) =>
+          apiCall<{ items: PartnerRef[] }>('/partners/options', {
+            query: { scope, type: ['bank'], status: 'active', company_id: companyId ?? undefined, codes: chunk.join(',') },
+          }),
+        ),
+      );
+      return parts.flatMap((p) => p.items);
+    },
+  });
+}
+
 /** Một đối tác (tóm tắt + lịch sử). Dùng cho phần chỉ đọc dưới ô chọn và màn chi tiết. */
 export function usePartner(id: string | null | undefined) {
   const { scope } = useAuth();

@@ -7,7 +7,17 @@
  * - `notifyNextApprover` → notifications (web) + email (K-13)
  */
 
-import { STATUS_REGISTRY, formatMoney, money, type DocKind, type Role, type StatusKey } from '@fingate/shared';
+import {
+  GROUP_ONLY_ROLES,
+  STATUS_REGISTRY,
+  effectivePermissions,
+  formatMoney,
+  money,
+  type DocKind,
+  type Permission,
+  type Role,
+  type StatusKey,
+} from '@fingate/shared';
 import { Models } from '../db/models.ts';
 import { entriesForPayment, postCashEntries, recomputeAccountBalances, sourceAccountOf } from './ledger/index.ts';
 import { cacheInvalidate } from '../lib/cache.ts';
@@ -143,13 +153,108 @@ export function invalidateFor(companyId?: string | null, userId?: string | null)
 }
 
 /* ------------------------------------------------------------------ *
- * Notifications (web) + email (best-effort) cho cấp kế tiếp
+ * Notifications (web) + email (best-effort) cho cấp kế tiếp (v2 §7.2)
  * ------------------------------------------------------------------ */
 
-export async function notifyNextApprover(input: {
+/** Bước tối thiểu để tính người nhận: thứ tự, chức danh, người phụ trách, trạng thái. */
+interface LevelStep {
+  order: number;
+  role: Role;
+  user_id?: unknown;
+  state: string;
+}
+
+/** Phân công đang hiệu lực — chỉ các trường cần để tính quyền thanh toán. */
+interface ActiveAssignment {
+  user_id: unknown;
+  role: string;
+  extra_permissions?: string[] | null;
+  denied_permissions?: string[] | null;
+}
+
+/**
+ * Phân công đang hiệu lực trong công ty (kể cả chức danh cấp Tập đoàn — có quyền với mọi công ty con,
+ * cùng quy tắc với `assignUsers`). `role` lọc thêm theo chức danh.
+ */
+async function activeAssignmentsIn(companyId: string, role?: Role): Promise<ActiveAssignment[]> {
+  const rows = await Models.Assignment.find({
+    status: 'active',
+    ...(role ? { role } : {}),
+    $or: [{ company_id: companyId }, { role: { $in: [...GROUP_ONLY_ROLES] } }],
+  } as never)
+    .select({ user_id: 1, role: 1, extra_permissions: 1, denied_permissions: 1 })
+    .lean();
+  return rows as unknown as ActiveAssignment[];
+}
+
+/** Người có quyền thực thi thanh toán (`payment:mark`) trong công ty — tính cả quyền cấp thêm / thu hồi riêng (ADM-03). */
+async function paymentUserIdsIn(companyId: string): Promise<string[]> {
+  const rows = await activeAssignmentsIn(companyId);
+  return rows
+    .filter((a) => {
+      const extra = (a.extra_permissions ?? []) as Permission[];
+      const denied = (a.denied_permissions ?? []) as Permission[];
+      return effectivePermissions(a.role as Role, extra, denied).includes('payment:mark');
+    })
+    .map((a) => String(a.user_id));
+}
+
+/**
+ * Người nhận "cấp kế tiếp" theo trạng thái SAU khi ghi (v2 §7.2):
+ *  - gửi / duyệt tới một cấp → người phụ trách bước đang xử lý (bước thấp nhất còn chờ), KHÔNG gửi cho các cấp phía trên;
+ *  - từ chối / yêu cầu bổ sung → người lập (KTV) — người phải xử lý tiếp;
+ *  - duyệt xong → người có quyền thực thi thanh toán trong công ty (phương án đảo hạn không thanh toán nên không gửi).
+ * Người vừa thao tác không nhận lại thông báo về chính thao tác đó (từ chối / bổ sung / duyệt xong).
+ * Đưa vào hàng thanh toán, thực thi, huỷ… không có cấp kế tiếp để báo.
+ */
+export async function nextLevelRecipients(input: {
   doc: DomainDoc;
+  status: StatusKey;
+  actorId: string | null;
+}): Promise<string[]> {
+  const { doc, status, actorId } = input;
+  const companyId = String(doc.company_id);
+  const exceptActor = (ids: string[]): string[] => [...new Set(ids)].filter((id) => id !== actorId);
+
+  if (status === 'rejected' || status === 'changes_requested') return exceptActor([String(doc.created_by)]);
+  if (status === 'approved') return doc.kind === 'rollover' ? [] : exceptActor(await paymentUserIdsIn(companyId));
+  if (status.startsWith('pending.')) {
+    const steps = (doc.approval?.steps ?? []) as unknown as LevelStep[];
+    const next = steps.filter((s) => s.state === 'current' || s.state === 'waiting').sort((a, b) => a.order - b.order)[0];
+    if (!next) return [];
+    if (next.user_id) return [String(next.user_id)];
+    // bước chưa gán người: ai đúng chức danh trong công ty đều xử lý được (xem `myStep` trong transition)
+    return [...new Set((await activeAssignmentsIn(companyId, next.role)).map((a) => String(a.user_id)))];
+  }
+  return [];
+}
+
+/** Cụm "… bởi <người thao tác>" trong nội dung thông báo, và ghi chú email — cho các trạng thái không phải "đang chờ bạn duyệt". */
+const STATUS_VERB: Partial<Record<StatusKey, string>> = {
+  rejected: 'từ chối bởi',
+  changes_requested: 'yêu cầu bổ sung bởi',
+  approved: 'duyệt xong bởi',
+};
+const STATUS_NOTE: Partial<Record<StatusKey, string>> = {
+  rejected: 'Phiếu đã bị từ chối. Mở hồ sơ để xem lý do và xử lý lại.',
+  changes_requested: 'Phiếu được trả về để bổ sung. Mở hồ sơ để xem yêu cầu, bổ sung rồi gửi lại.',
+  approved: 'Phiếu đã duyệt xong. Mở hồ sơ để thực hiện thanh toán.',
+};
+
+/** Tên người lập hồ sơ (hiển thị trong thông báo và email). */
+async function creatorNameOf(doc: DomainDoc): Promise<string> {
+  const u = await Models.User.findById(doc.created_by).select({ display_name: 1, email: 1 }).lean<{ display_name?: string; email?: string } | null>();
+  return String(u?.display_name ?? u?.email ?? 'Người lập');
+}
+
+export async function notifyNextApprover(input: {
+  /** hồ sơ SAU khi ghi (CAS): trạng thái và chuỗi bước đã cập nhật — không phải bản nạp trước khi ghi */
+  doc: DomainDoc;
+  /** người vừa thao tác: không nhận lại thông báo "từ chối / bổ sung / duyệt xong" về chính mình */
+  actorId?: string | null;
   actorName: string;
-  stepRole: Role | null;
+  /** chức danh của bước đang chờ — chỉ dùng trong email khi hồ sơ đang chờ duyệt */
+  stepRole?: Role | null;
   amountMinor: bigint;
   compact: string;
   status?: StatusKey;
@@ -160,28 +265,38 @@ export async function notifyNextApprover(input: {
     // Badge "Chờ tôi duyệt" đổi ngay khi bước duyệt đổi. Xoá TRƯỚC nhánh không có người nhận bên dưới:
     // duyệt xong (không còn bước) phiếu chuyển sang hàng thực thi của kế toán — badge của họ cũng phải đổi.
     invalidateFor(String(doc.company_id));
-    const steps = (doc.approval?.steps ?? []) as { order: number; role: Role; user_id: string | null; state: string }[];
-    const recipients = [...new Set(steps.filter((s) => (s.state === 'current' || s.state === 'waiting') && s.user_id).map((s) => s.user_id as string))];
-    if (!recipients.length) return;
+    const status = input.status ?? doc.status;
+    const recipientIds = await nextLevelRecipients({ doc, status, actorId: input.actorId ?? null });
+    if (!recipientIds.length) return;
 
-    const users = await Models.User.find({ _id: { $in: recipients }, status: 'active' }).select({ email: 1, display_name: 1, prefs: 1 }).lean();
+    const users = await Models.User.find({ _id: { $in: recipientIds }, status: 'active' }).select({ email: 1, display_name: 1, prefs: 1 }).lean();
+    if (!users.length) return;
     const href = docHref(doc.kind, String(doc._id));
-    const kind = 'approval';
+    const awaitingApproval = status.startsWith('pending.');
     const title =
-      input.status === 'rejected'
+      status === 'rejected'
         ? `${doc.code} bị từ chối`
-        : input.status === 'approved'
-          ? `${doc.code} đã duyệt xong — cần thực hiện thanh toán`
-          : `${input.compact} đang chờ bạn duyệt`;
+        : status === 'changes_requested'
+          ? `${doc.code} bị yêu cầu bổ sung`
+          : status === 'approved'
+            ? `${doc.code} đã duyệt xong — cần thực hiện thanh toán`
+            : `${input.compact} đang chờ bạn duyệt`;
+    const verb = STATUS_VERB[status];
+    const body = [doc.code, input.amountMinor > 0n ? input.compact : null, verb ? `${verb} ${input.actorName}` : null]
+      .filter(Boolean)
+      .join(' · ');
+    const [company, creator] = await Promise.all([companyName(String(doc.company_id)), creatorNameOf(doc)]);
+    const statusLabel = input.statusLabel ?? STATUS_REGISTRY[status]?.labelVi ?? '';
 
     for (const u of users) {
+      const name = String(u.display_name ?? u.email);
       await Models.Notification.create({
         user_id: u._id,
         company_id: doc.company_id,
-        kind,
+        kind: 'approval',
         severity: 2,
         title,
-        body: `${doc.code} · ${input.amountMinor > 0n ? input.compact : ''} · người lập ${input.actorName}`,
+        body,
         href,
         document_id: doc._id,
         channels_sent: [],
@@ -191,17 +306,29 @@ export async function notifyNextApprover(input: {
         void sendMail({
           to: String(u.email),
           subject: `${title} · ${doc.code}`,
-          html: mailTemplates.approvalRequest({
-            name: String(u.display_name ?? u.email),
-            roleLabel: input.stepRole ? roleLabel(input.stepRole) : 'bạn',
-            code: doc.code,
-            amount: input.compact,
-            company: await companyName(String(doc.company_id)),
-            href,
-            actorName: input.actorName,
-            statusLabel: input.statusLabel ?? STATUS_REGISTRY[input.status ?? 'draft']?.labelVi ?? '',
-            urgent: false,
-          }),
+          html: awaitingApproval
+            ? mailTemplates.approvalRequest({
+                name,
+                roleLabel: input.stepRole ? roleLabel(input.stepRole) : 'bạn',
+                code: doc.code,
+                amount: input.compact,
+                company,
+                href,
+                actorName: creator,
+                statusLabel,
+                urgent: false,
+              })
+            : mailTemplates.docStatus({
+                name,
+                headline: title,
+                note: STATUS_NOTE[status] ?? '',
+                code: doc.code,
+                amount: input.compact,
+                company,
+                href,
+                actorName: creator,
+                statusLabel,
+              }),
         });
       }
     }

@@ -5,21 +5,23 @@
  * Kích hoạt: `voucher.cancelled` (+ `voucher.rejected`), điều kiện: phiếu có cờ vay (`loan_kind` khác rỗng).
  * Chỉ xử lý khi phiếu THẬT SỰ bị huỷ / từ chối hẳn (trạng thái hiện tại; phiếu đã gửi lại thì bỏ qua).
  *
- * Khoản vay của phiếu (giải ngân từ phiếu thu, vay để chi từ phiếu chi) — gồm cả khoản tự sinh đã gỡ liên kết:
- *  - chưa có tiền, do quy tắc sinh  ⇒ HUỶ khoản vay (`cancel_unpaid`);
- *  - chưa có tiền, tạo tay           ⇒ chỉ GỠ liên kết, khoản vay còn dùng được;
- *  - đã có tiền về                   ⇒ KHÔNG tự huỷ; cảnh báo KTT (`alert`).
+ * Khoản vay của phiếu (giải ngân từ phiếu thu, vay để chi từ phiếu chi) — gồm cả khoản tự sinh đã gỡ liên kết
+ * (`decideOnSourceFinal`):
+ *  - do quy tắc sinh từ phiếu này, chưa có tiền ⇒ HUỶ khoản vay (`cancel_unpaid`);
+ *  - do quy tắc sinh từ phiếu này, đã có tiền về ⇒ KHÔNG tự huỷ; cảnh báo KTT (`alert`), giữ liên kết;
+ *  - gắn THỦ CÔNG (người dùng chọn trên phiếu, không do phiếu sinh ra) ⇒ chỉ GỠ liên kết (phiếu đã huỷ / từ chối thì
+ *    liên kết không còn hiệu lực); khoản vay còn dùng được, KHÔNG cảnh báo — R6 chỉ xử lý đối tượng tự sinh.
  * Phiếu thu do phiếu nguồn sinh ra (liên kết `generated`, VD R3) mà CHƯA thực thi (`approved`) ⇒ HUỶ theo đường
  * chuẩn (`transition` cancel). Không huỷ được ⇒ bước lỗi, lượt `Lỗi` (KTT chạy lại, không tạo trùng).
  */
 
 import { docHref } from '@fingate/shared';
 import { registerRule, type StepContext, type StepOutput } from '../engine.ts';
-import { FINAL_CANCEL_VOUCHER_STATUSES, moneyMoved } from '../policy.ts';
+import { FINAL_CANCEL_VOUCHER_STATUSES } from '../policy.ts';
 import { actorOfEvent, automationActor, type AutoActor } from '../actions/common.ts';
 import { loadVoucher, type VoucherRow } from '../actions/lookup.ts';
 import { generatedDocumentIds } from '../actions/link.ts';
-import { loansFromSource, releaseLoansOfSource } from '../actions/source.ts';
+import { alertLoansOfSource, releaseLoansOfSource } from '../actions/source.ts';
 import { raiseAlert } from '../../alerts/index.ts';
 import { loadDoc, transition } from '../../workflow/index.ts';
 
@@ -77,8 +79,7 @@ async function alertStep(ctx: StepContext): Promise<StepOutput> {
   if (!doc) return { skipped: true };
   const sourceId = String(doc._id);
   let raisedFor: string | null = null;
-  for (const { loan } of await loansFromSource(sourceId)) {
-    if (!moneyMoved({ status: loan.status, disbursed_at: loan.disbursed_at })) continue;
+  for (const { loan } of await alertLoansOfSource(sourceId)) {
     const verb = verbOf(doc.status);
     const text =
       doc.kind === 'spend'

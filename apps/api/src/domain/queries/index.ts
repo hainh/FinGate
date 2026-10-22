@@ -339,8 +339,15 @@ export async function queryQueue(input: QueueQuery): Promise<{ items: QueueRow[]
   const search = input.q ? await searchRefIds(input.q, scope) : {};
   const f = withScope(scope, queueFilter({ ...input, ...search }));
   const skip = ((input.page ?? 1) - 1) * input.limit;
+  // `_id` là khoá tie-break: các khoá sắp xếp (hạn SLA, số tiền, ngày) không duy nhất, nếu không thì
+  // phân trang skip/limit có thể trả trùng hoặc sót hồ sơ giữa các trang.
   const [rows, total] = await Promise.all([
-    Models.Document.find(f as never).select(LIST_PROJECTION as never).sort(sortForQueue(input.sort)).skip(skip).limit(input.limit).lean(),
+    Models.Document.find(f as never)
+      .select(LIST_PROJECTION as never)
+      .sort({ ...sortForQueue(input.sort), _id: 1 })
+      .skip(skip)
+      .limit(input.limit)
+      .lean(),
     Models.Document.countDocuments(f as never),
   ]);
   const items = await decorateRows(rows as unknown as Record<string, unknown>[]);
@@ -463,6 +470,15 @@ export function docHref(kind: string, id: string): string {
  * 2. Badge & số dư
  * ================================================================== */
 
+/** Cộng `amount.minor` của các hồ sơ (đồng bộ hoặc bất đồng bộ, không nạp hết vào bộ nhớ). */
+export async function sumDocumentMinor(
+  rows: AsyncIterable<{ amount?: { minor?: unknown } | null }> | Iterable<{ amount?: { minor?: unknown } | null }>,
+): Promise<bigint> {
+  let total = 0n;
+  for await (const r of rows) total += asBigInt(r.amount?.minor ?? 0n);
+  return total;
+}
+
 export async function awaitingBadge(
   scope: ScopeLike,
   userId: string,
@@ -479,11 +495,10 @@ export async function awaitingBadge(
       status: { $in: [...DECISION_STATUSES, ...(canPay ? EXECUTION_STATUSES : [])] },
       ...(tagIds.length ? { tag_ids: { $in: tagIds } } : {}),
     });
-    const [count, rows] = await Promise.all([
-      Models.Document.countDocuments(f as never),
-      Models.Document.find(f as never).select({ 'amount.minor': 1, 'amount.currency': 1 }).limit(500).lean(),
-    ]);
-    const total = (rows as { amount?: { minor?: unknown } }[]).reduce((a, r) => a + asBigInt(r.amount?.minor ?? 0n), 0n);
+    const count = await Models.Document.countDocuments(f as never);
+    // Tổng cộng trên MỌI hồ sơ khớp bộ lọc (cùng điều kiện với số đếm): đọc qua cursor chỉ trường số tiền,
+    // không giới hạn số dòng (trước đây `limit(500)` làm tổng thiếu khi có nhiều hơn 500 hồ sơ chờ).
+    const total = await sumDocumentMinor(Models.Document.find(f as never).select({ 'amount.minor': 1 }).lean().cursor());
     return { count, total_minor: total };
   });
 }
@@ -690,13 +705,21 @@ export async function maturityLadder(
     };
   });
 
+  const positive = rows.filter((r) => asBigInt(r.outstanding.minor) > 0n);
+  return filterMaturityRows(positive, opts);
+}
+
+/**
+ * Lọc bảng đáo hạn theo ngân hàng (chứa chuỗi, không phân biệt hoa thường) và mức đáo hạn (bucket).
+ * Tách riêng để một lần `maturityLadder(scope, {})` phục vụ cả bảng lọc lẫn KPI (không dựng lại hai lần).
+ */
+export function filterMaturityRows(rows: MaturityRow[], opts: { bucket?: string; bankName?: string } = {}): MaturityRow[] {
   const byBank = opts.bankName ? rows.filter((r) => r.bank_name.toLowerCase().includes(opts.bankName!.toLowerCase())) : rows;
-  const positive = byBank.filter((r) => asBigInt(r.outstanding.minor) > 0n);
-  if (!opts.bucket) return positive;
+  if (!opts.bucket) return byBank;
   const range: Record<string, [number, number]> = { today: [-99_999, 0], '3d': [1, 3], '7d': [4, 7], '30d': [8, 30], later: [31, 99_999] };
   const bounds = range[opts.bucket];
-  if (!bounds) return positive;
-  return positive.filter((r) => r.days_to_due >= bounds[0] && r.days_to_due <= bounds[1]);
+  if (!bounds) return byBank;
+  return byBank.filter((r) => r.days_to_due >= bounds[0] && r.days_to_due <= bounds[1]);
 }
 
 /* ================================================================== *
@@ -799,18 +822,28 @@ export async function pendingFundingInflowFor(doc: Record<string, unknown>, sour
   return (await fundingReceiptExists(String(doc._id))) ? 0n : amount;
 }
 
-export async function decisionPack(doc: Record<string, unknown>, canReadTax: boolean): Promise<Record<string, unknown>> {
+/**
+ * Gói quyết định (7 câu hỏi, §9.2). `sourceAccountId`: TK đang chọn ở cấp duyệt (đổi TK khi duyệt) — q5/q6 tính theo
+ * TK này, không theo TK đã lưu trên phiếu. Phiếu đã thực thi (paid) luôn dùng TK đã ghi sổ.
+ * Người gọi phải đã kiểm TK thuộc công ty của phiếu (route decision-pack).
+ */
+export async function decisionPack(
+  doc: Record<string, unknown>,
+  canReadTax: boolean,
+  opts: { sourceAccountId?: string | null } = {},
+): Promise<Record<string, unknown>> {
   const amount = wireOf(doc.amount) ?? wire(0n);
   const minor = asBigInt(amount.minor);
   const evidence = (doc.evidence ?? {}) as { required?: string[]; present?: string[]; missing?: string[] };
   const source = (doc.source ?? {}) as { fund?: string; account_id?: string | null; group_account_id?: string | null; group_managed?: boolean };
+  const accountId = opts.sourceAccountId && doc.status !== 'paid' ? String(opts.sourceAccountId) : source.account_id ? String(source.account_id) : null;
 
   const [account, balanceNow, category, department, budget, partner] = await Promise.all([
-    source.account_id
-      ? Models.BankAccount.findById(String(source.account_id)).select({ bank_name: 1, account_number: 1, account_name: 1, min_balance_minor: 1 }).lean()
+    accountId
+      ? Models.BankAccount.findById(accountId).select({ bank_name: 1, account_number: 1, account_name: 1, min_balance_minor: 1 }).lean()
       : Promise.resolve(null),
-    source.account_id
-      ? bookedBalance(String(source.account_id), today())
+    accountId
+      ? bookedBalance(accountId, today())
       : Promise.resolve(0n),
     doc.category_id ? Models.Category.findById(String(doc.category_id)).select({ name: 1 }).lean() : Promise.resolve(null),
     doc.department_id ? Models.Department.findById(String(doc.department_id)).select({ name: 1 }).lean() : Promise.resolve(null),
@@ -832,11 +865,11 @@ export async function decisionPack(doc: Record<string, unknown>, canReadTax: boo
   // Số dư tại thời điểm TRƯỚC và SAU thực thi: phiếu đã ghi sổ (`paid`) → lấy đúng
   // bút toán trong sổ cái; còn lại → số dư sổ hiện tại + giải ngân vay để chi sắp về TK nguồn
   // (chưa vào sổ tới duyệt cuối — §11.5) + dự kiến sau thực thi.
-  const pendingIn = await pendingFundingInflowFor(doc, source.account_id ? String(source.account_id) : null);
+  const pendingIn = await pendingFundingInflowFor(doc, accountId);
   let balanceBefore = balanceNow;
   let after = balanceNow + pendingIn + delta;
-  if (doc.status === 'paid' && source.account_id) {
-    const around = await balanceAroundExecution(String(source.account_id), String(doc._id));
+  if (doc.status === 'paid' && accountId) {
+    const around = await balanceAroundExecution(accountId, String(doc._id));
     if (around) {
       balanceBefore = around.before;
       after = around.after;

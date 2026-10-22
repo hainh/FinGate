@@ -12,10 +12,25 @@ import { objectId } from './common.js';
 /** Màu tag dạng #RRGGBB (DS: token trung tính, không nhúng màu ngữ nghĩa). Mặc định: `TAG_COLOR_DEFAULT` (status/). */
 export const TAG_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
-/** Tên tag: bỏ khoảng trắng đầu/cuối, tối đa 40 ký tự. */
+/** Ký tự vô hình hay dính khi copy/paste (ZWSP, ZWNJ, ZWJ, BOM) — bỏ trước khi chuẩn hoá. */
+const TAG_INVISIBLE_RE = /[\u200B-\u200D\uFEFF]/g;
+
+/**
+ * Chuẩn hoá tên tag hiển thị (v2 §6.2): bỏ ký tự vô hình, NFC, gộp mọi khoảng trắng (kể cả NBSP, tab)
+ * còn một, bỏ đầu/cuối. Không đổi hoa/thường, không bỏ dấu. Contract (`tagName`) và domain API dùng chung hàm này.
+ */
+export function normalizeTagDisplayName(raw: string): string {
+  return raw.replace(TAG_INVISIBLE_RE, '').normalize('NFC').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Tên tag: CHUẨN HOÁ trước, rồi mới kiểm không rỗng và tối đa 40 ký tự — chuỗi thô dài nhưng rút gọn
+ * được (nhiều khoảng trắng liên tiếp) vẫn hợp lệ, đúng như domain. `overwrite` là check đổi giá trị
+ * không đổi kiểu nên `min`/`max` đọc tên đã chuẩn hoá.
+ */
 export const tagName = z
   .string()
-  .trim()
+  .overwrite(normalizeTagDisplayName)
   .min(1, 'Tên tag không được để trống')
   .max(40, 'Tên tag tối đa 40 ký tự');
 

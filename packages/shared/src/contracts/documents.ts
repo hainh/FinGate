@@ -51,7 +51,8 @@ export const budgetField = z.object({
 /** Thông tin khoản vay dự kiến gắn trên phiếu (R2 phiếu thu đi vay / R3 phiếu chi vay để chi). */
 export const loanTerms = z.object({
   contract_no: z.string().max(80).nullable().optional().describe('Số HĐ tín dụng'),
-  interest_rate: z.string().regex(/^\d+([.,]\d{1,4})?$/, 'Lãi suất dạng số').nullable().optional(),
+  /** Cùng quy tắc mọi lãi suất khoản vay (docs/02_design_system.md): số, tối đa 2 chữ số thập phân. */
+  interest_rate: z.string().regex(/^\d+([.,]\d{1,2})?$/, 'Lãi suất dạng số, tối đa 2 chữ số thập phân').nullable().optional(),
   term_months: z.coerce.number().int().min(1).max(600).nullable().optional().describe('Kỳ hạn (tháng) — mặc định 12'),
   due_date: businessDate.nullable().optional().describe('Hạn thanh toán — mặc định giải ngân + 11 tháng'),
   repayment_period: z.enum(['monthly', 'quarterly', 'semiannual', 'maturity']).nullable().optional(),
@@ -186,7 +187,8 @@ const documentFields = z.object({
         /** v2 §7.3/§10.3: ngày đáo hạn mới đề xuất (YYYY-MM-DD). */
         new_maturity_date: businessDate,
         fee_estimate: moneyField.optional(),
-        new_rate: z.string().max(20).optional(),
+        /** Lãi suất mới (%/năm): chỉ nhận số, tối đa 2 chữ số thập phân — cùng quy tắc ô kết quả đảo hạn (finance.ts). */
+        new_rate: z.string().max(20).regex(/^\d+([.,]\d{1,2})?$/, 'Lãi suất dạng số, tối đa 2 chữ số thập phân').optional(),
         collateral: z.string().max(1000).optional(),
         proposal: z.string().max(2000).optional(),
       })
@@ -238,6 +240,11 @@ export const documentUpdateBody = documentFields
   .partial()
   .extend({ if_match: docVersion, request_id: uuid });
 
+/** GET /documents/:id/decision-pack — TK đang chọn ở cấp duyệt (đổi TK khi duyệt); bỏ trống = TK đã lưu trên phiếu. */
+export const decisionPackQuery = z.object({
+  source_account_id: objectId.optional(),
+});
+
 /** Lọc danh sách — URL là state của danh sách (architecture §5). */
 export const documentListQuery = z.object({
   kind: docKind.optional(),
@@ -265,10 +272,23 @@ export const documentListQuery = z.object({
     .default('-waiting')
     .describe('-waiting | -planned_date | -amount | -created_at | +created_at'),
   limit: z.coerce.number().int().min(1).max(200).default(50),
-  cursor: z.string().max(200).optional(),
+  /**
+   * Trang (đánh số từ 1) — FgPagination (docs/03_screens.md, docs/02_design_system.md §7.21: 20/50/100).
+   * Phản hồi trả `total` để client tính số trang; không dùng cursor (không có điều khiển "trang kế" cho bảng tài chính).
+   */
+  page: z.coerce.number().int().min(1).max(10_000).default(1),
 });
 
 export type DocumentListQuery = z.infer<typeof documentListQuery>;
+
+/** GET /queue/processed — "Tôi đã duyệt": ô tìm + phân trang như danh sách phiếu. */
+export const queueProcessedQuery = z.object({
+  q: z.string().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  page: z.coerce.number().int().min(1).max(10_000).default(1),
+});
+
+export type QueueProcessedQuery = z.infer<typeof queueProcessedQuery>;
 
 /** POST /documents/{id}/transition (architecture §9.1). */
 export const transitionBody = z

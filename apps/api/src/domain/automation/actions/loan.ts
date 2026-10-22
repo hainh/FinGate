@@ -46,6 +46,9 @@ interface LoanRow {
   maturity_date?: string | null;
   interest_rate?: string | null;
   term_months?: number | null;
+  payment_frequency?: string | null;
+  repayment_method?: string | null;
+  next_due_date?: string | null;
   contract_no?: string | null;
   collateral?: string | null;
   origin?: { kind?: string | null; run_id?: unknown; rule_code?: string | null; source_document_id?: unknown } | null;
@@ -202,7 +205,7 @@ export async function createAutoLoan(input: CreateAutoLoanInput): Promise<{ id: 
  * Tìm khoản vay đã sinh cho một phiếu nguồn (idempotency)
  * ------------------------------------------------------------------ */
 
-/** Liên kết hiệu lực từ phiếu nguồn tới khoản vay theo quan hệ (`funded_by` | `disbursement`). */
+/** Liên kết hiệu lực từ phiếu nguồn tới khoản vay theo quan hệ (`funded_by` | `disbursement`), kèm nguồn gán (Thủ công / Tự động). */
 export async function activeLoanLinks(sourceDocId: string, relation: 'funded_by' | 'disbursement') {
   const rows = await Models.BusinessLink.find({
     from_type: 'document',
@@ -211,9 +214,15 @@ export async function activeLoanLinks(sourceDocId: string, relation: 'funded_by'
     relation,
     status: 'active',
   } as never)
-    .select({ _id: 1, to_id: 1, amount_minor: 1 })
-    .lean<{ _id: unknown; to_id: unknown; amount_minor?: unknown }[]>();
-  return rows.map((r) => ({ linkId: String(r._id), loanId: String(r.to_id), amountMinor: r.amount_minor === null || r.amount_minor === undefined ? null : big(r.amount_minor) }));
+    .select({ _id: 1, to_id: 1, amount_minor: 1, origin: 1 })
+    .lean<{ _id: unknown; to_id: unknown; amount_minor?: unknown; origin?: unknown }[]>();
+  return rows.map((r) => ({
+    linkId: String(r._id),
+    loanId: String(r.to_id),
+    amountMinor: r.amount_minor === null || r.amount_minor === undefined ? null : big(r.amount_minor),
+    // liên kết cũ không ghi nguồn ⇒ coi là Thủ công (mặc định của bảng liên kết)
+    origin: r.origin === 'automation' ? ('automation' as const) : ('manual' as const),
+  }));
 }
 
 /**
@@ -262,14 +271,19 @@ export interface SyncAutoLoanInput {
 }
 
 /**
- * Cập nhật thông tin khoản vay chờ giải ngân theo phiếu thu (gốc, đối tác, số HĐ, TSĐB, điều khoản).
- * Ghi chú không đồng bộ lại: người dùng có thể đã sửa trên khoản vay. Trả về true nếu có thay đổi thật.
+ * Cập nhật thông tin khoản vay chờ giải ngân theo phiếu thu (gốc, đối tác, số HĐ, TSĐB, lãi suất, kỳ hạn, kỳ trả
+ * lãi/gốc, phương thức trả nợ gốc, hạn thanh toán — v2 §10.1, §11.4). Ghi chú không đồng bộ lại: người dùng có thể
+ * đã sửa trên khoản vay. Trả về true nếu có thay đổi thật.
+ *
+ * So sánh trên ĐÚNG các trường sẽ ghi (`termFields` + đối tác, ngân hàng, gốc): mọi trường được ghi đều được so sánh,
+ * nên thay đổi chỉ ở kỳ trả lãi/gốc hay phương thức trả nợ cũng được ghi và có lịch sử `auto_sync`.
  */
 export async function syncAutoLoan(input: SyncAutoLoanInput): Promise<boolean> {
   const loan = await Models.BankDebt.findById(input.loanId).lean<LoanRow & { history?: unknown[] } | null>();
   if (!loan || loan.status !== 'pending_disbursement') return false;
 
-  const before = {
+  // Giá trị đang lưu theo cùng khoá với trạng thái mới (thiếu trường ⇒ mặc định của schema).
+  const before: Record<string, unknown> = {
     partner_id: idOf(loan.partner_id),
     bank_name: loan.bank_name,
     principal_minor: big(loan.principal_minor).toString(),
@@ -277,17 +291,16 @@ export async function syncAutoLoan(input: SyncAutoLoanInput): Promise<boolean> {
     collateral: loan.collateral ?? null,
     interest_rate: loan.interest_rate ?? '0',
     term_months: loan.term_months ?? null,
+    payment_frequency: loan.payment_frequency ?? 'maturity',
+    repayment_method: loan.repayment_method ?? 'interest_only',
     maturity_date: loan.maturity_date ?? null,
+    next_due_date: loan.next_due_date ?? null,
   };
-  const after = {
+  const after: Record<string, unknown> = {
     partner_id: input.partnerId,
     bank_name: input.bankName,
     principal_minor: input.principalMinor.toString(),
-    contract_no: input.terms.contract_no,
-    collateral: input.terms.collateral,
-    interest_rate: input.terms.interest_rate,
-    term_months: input.terms.term_months,
-    maturity_date: input.terms.due_date,
+    ...termFields(input.terms),
   };
   const changed = changedFieldsOf(before, after);
   if (!Object.keys(changed).length) return false;

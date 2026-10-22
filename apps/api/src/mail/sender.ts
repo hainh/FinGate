@@ -152,6 +152,18 @@ Người lập: ${input.actorName} · Trạng thái: ${input.statusLabel}</p>
       ctaHref: input.href,
     });
   },
+  /** Thông báo trạng thái cho người lập / người thanh toán: từ chối, yêu cầu bổ sung, duyệt xong (không phải "đang chờ bạn duyệt"). */
+  docStatus(input: { name: string; headline: string; note: string; code: string; amount: string; company: string; href: string; actorName: string; statusLabel: string }) {
+    return layout({
+      title: input.headline,
+      body: `<p>Xin chào ${input.name},</p>
+<p><strong>${input.amount}</strong> — ${input.code} · ${input.company}<br>
+Người lập: ${input.actorName} · Trạng thái: ${input.statusLabel}</p>
+<p>${input.note}</p>`,
+      ctaLabel: 'Mở hồ sơ',
+      ctaHref: input.href,
+    });
+  },
   digest(input: { name: string; body: string; href: string }) {
     return layout({ title: `Bản tin tài chính ngày ${new Date().toLocaleDateString('vi-VN')}`, body: input.body, ctaLabel: 'Đọc bản tin', ctaHref: input.href });
   },

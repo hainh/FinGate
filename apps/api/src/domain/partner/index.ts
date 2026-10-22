@@ -672,9 +672,13 @@ export async function partnerOptions(input: {
   status?: 'active' | 'inactive';
   q?: string;
   limit: number;
+  /** Tra đúng các mã (khớp chính xác) — không áp trần `limit`: số bản ghi tối đa = số mã. */
+  codes?: string[];
 }): Promise<PartnerRefView[]> {
   const filter = partnerFilter({ ...input, status: input.status ?? 'active' });
-  const rows = await Models.Partner.find(filter as never).sort({ name_key: 1 }).limit(input.limit).lean<PartnerLean[]>();
+  if (input.codes) filter.code = { $in: input.codes };
+  const limit = input.codes ? Math.max(1, input.codes.length) : input.limit;
+  const rows = await Models.Partner.find(filter as never).sort({ name_key: 1 }).limit(limit).lean<PartnerLean[]>();
   return rows.map(partnerRefOf);
 }
 

@@ -30,7 +30,7 @@ import {
 } from '@fingate/shared';
 import { ApiRequestError } from '../app/api.ts';
 import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
-import { usePartnerOptions } from '../app/v2/partners.ts';
+import { useActiveBankCodes } from '../app/v2/partners.ts';
 import {
   canArchiveLoan,
   canAssignDisbursement,
@@ -68,7 +68,7 @@ import { PartnerPicker } from '../components/partner-picker.tsx';
 import { FgMaturityCell } from '../components/finance.tsx';
 import { FgAlert, FgButton, FgField, FgInput, FgMoneyInput, FgMoneyStack, FgSelect, FgText, FgTextarea, FgToneChip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
-import { FgDescriptions, FgEmptyState, FgModal, FgSkeletonTable, FgTable, FgTag } from '../components/uitk.tsx';
+import { FgDescriptions, FgEmptyState, FgModal, FgPagination, FgSkeletonTable, FgTable, FgTag } from '../components/uitk.tsx';
 import { ChangeHistoryCard } from '../components/change-history.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useDebounced, useToast } from '../components/pagekit.tsx';
@@ -222,11 +222,21 @@ function decodeTsvBuffer(buf: ArrayBuffer): string {
   return new TextDecoder('utf-8').decode(bytes).replace(/^\uFEFF/, '');
 }
 
+/** Mã đối tác (cột 1, DT-…) của các dòng trong file — để tra đúng các mã này trên máy chủ. */
+function bankCodesOf(text: string): string[] {
+  const codes = new Set<string>();
+  for (const line of text.split(/\r\n|\r|\n/)) {
+    const code = (line.split('\t')[0] ?? '').trim().toUpperCase();
+    if (/^DT-/.test(code)) codes.add(code);
+  }
+  return [...codes];
+}
+
 /**
- * Phân tích .tsv: cột 1 = mã đối tác ngân hàng (DT-…); mã được đối chiếu với danh sách ngân hàng đang hoạt
- * động (nếu đã tải). Không khớp theo tên — server cũng chỉ nhận mã.
+ * Phân tích .tsv: cột 1 = mã đối tác ngân hàng (DT-…). `bankByCode` = kết quả tra mã trên máy chủ (null = chưa
+ * kiểm mã, không báo lỗi "sai mã"). Không khớp theo tên — server cũng chỉ nhận mã.
  */
-function parseImportTsv(text: string, bankByCode: Map<string, string>): ImportPreviewRow[] {
+function parseImportTsv(text: string, bankByCode: Map<string, string> | null): ImportPreviewRow[] {
   const lines = text.split(/\r\n|\r|\n/).filter((l) => l.trim().length > 0);
   const rows: ImportPreviewRow[] = [];
   if (!lines.length) return rows;
@@ -238,7 +248,7 @@ function parseImportTsv(text: string, bankByCode: Map<string, string>): ImportPr
 
     const partner_code = (cells[0] ?? '').trim().toUpperCase();
     if (!/^DT-/.test(partner_code)) errors.push('Cột 1 phải là mã đối tác ngân hàng (DT-…)');
-    else if (bankByCode.size && !bankByCode.has(partner_code)) errors.push('Không có ngân hàng đang hoạt động với mã này');
+    else if (bankByCode && !bankByCode.has(partner_code)) errors.push('Không có ngân hàng đang hoạt động với mã này');
 
     const amountRaw = (cells[1] ?? '').trim();
     const amount = amountRaw ? parseMoneyInput(amountRaw).minor : 0n;
@@ -261,7 +271,7 @@ function parseImportTsv(text: string, bankByCode: Map<string, string>): ImportPr
     rows.push({
       line: i + 1,
       partner_code,
-      bank_name: bankByCode.get(partner_code) ?? '',
+      bank_name: bankByCode?.get(partner_code) ?? '',
       amount_minor: amount.toString(),
       credit_limit_minor: limit > 0n ? limit.toString() : '',
       interest_rate,
@@ -277,18 +287,22 @@ function parseImportTsv(text: string, bankByCode: Map<string, string>): ImportPr
 function BankDebtImportModal({ open, onClose, onImported }: { open: boolean; onClose: () => void; onImported: () => void }): ReactNode {
   const company = useCurrentCompanyId();
   const imp = useImportLoans();
-  // mọi ngân hàng đang hoạt động (không chỉ 200 đầu) — mã dòng lô không khớp danh sách bị báo sai "không có ngân hàng"
-  const banks = usePartnerOptions({ type: ['bank'], status: 'active', company_id: company ?? undefined, limit: 1000 }, open);
   const { message } = useToast();
   const [fileName, setFileName] = useState('');
   const [fileText, setFileText] = useState<string | null>(null);
   const [parseError, setParseError] = useState('');
   const [result, setResult] = useState<{ inserted: number; failed: { row: number; error: string }[] } | null>(null);
 
-  // Ngân hàng đang hoạt động theo mã: khi đã tải, dòng có mã lạ bị báo ngay ở bước xem trước.
-  const bankByCode = useMemo(() => new Map<string, string>((banks.data?.items ?? []).map((b) => [b.code.toUpperCase(), b.name])), [banks.data]);
-  // Xem trước tính lại khi đổi file hoặc khi danh sách ngân hàng tải xong.
-  const rows = useMemo(() => (fileText === null ? [] : parseImportTsv(fileText, bankByCode)), [fileText, bankByCode]);
+  // Mã ngân hàng trong file được TRA ĐÚNG trên máy chủ (không qua danh sách ngân hàng đã tải — danh sách bị trần
+  // số dòng, nên mã hợp lệ ngoài phần đầu bị báo sai "không có ngân hàng").
+  const fileCodes = useMemo(() => (fileText === null ? [] : bankCodesOf(fileText)), [fileText]);
+  const lookup = useActiveBankCodes(fileCodes, company, open);
+  // chưa tra xong thì không nút nhập (tránh nhập mã chưa kiểm); lỗi tra cứu ⇒ vẫn cho nhập, máy chủ kiểm từng dòng
+  const lookupDone = fileCodes.length === 0 || lookup.isSuccess || lookup.isError;
+  const bankByCode = useMemo(() => new Map<string, string>((lookup.data ?? []).map((b) => [b.code.toUpperCase(), b.name])), [lookup.data]);
+  // Xem trước tính lại khi đổi file hoặc khi mã đã được tra xong (khi chưa tra xong không kết luận "sai mã").
+  const bankCheck = lookup.isSuccess ? bankByCode : null;
+  const rows = useMemo(() => (fileText === null ? [] : parseImportTsv(fileText, bankCheck)), [fileText, bankCheck]);
 
   const validRows = rows.filter((r) => !r.errors.length);
   const invalidCount = rows.length - validRows.length;
@@ -301,7 +315,7 @@ function BankDebtImportModal({ open, onClose, onImported }: { open: boolean; onC
     if (!file) return;
     setFileName(file.name);
     const text = decodeTsvBuffer(await file.arrayBuffer());
-    if (!parseImportTsv(text, new Map()).length) {
+    if (!parseImportTsv(text, null).length) {
       setParseError('File không có dòng dữ liệu nào — dòng 1 là tiêu đề, từ dòng 2 trở đi là dữ liệu.');
       return;
     }
@@ -346,7 +360,7 @@ function BankDebtImportModal({ open, onClose, onImported }: { open: boolean; onC
             {result ? 'Đóng' : 'Hủy'}
           </FgButton>
           {!result ? (
-            <FgButton variant="primary" loading={imp.isPending} disabled={!validRows.length} onClick={() => void submit()}>
+            <FgButton variant="primary" loading={imp.isPending} disabled={!validRows.length || !lookupDone} onClick={() => void submit()}>
               Nhập{validRows.length ? ` ${validRows.length} dòng` : ''}
             </FgButton>
           ) : null}
@@ -429,16 +443,21 @@ function BankDebtImportModal({ open, onClose, onImported }: { open: boolean; onC
   );
 }
 
+/** Cỡ trang danh sách khoản vay (phân trang phía máy chủ — `items` chỉ gồm một trang). */
+const LOAN_PAGE_SIZE = 50;
+
 export function BankDebtListScreen(): ReactNode {
   const [searchParams, setSearchParams] = useSearchParams();
   const { can } = useAuth();
   const status = searchParams.get('status') || undefined;
   const [search, setSearch] = useState('');
   const q = useDebounced(search.trim(), 300);
-  const query = useLoanList({ status, q: q || undefined });
+  const [page, setPage] = useState(1);
+  const query = useLoanList({ status, q: q || undefined, page, limit: LOAN_PAGE_SIZE });
   const [importOpen, setImportOpen] = useState(false);
 
   const setStatus = (v?: string): void => {
+    setPage(1);
     const next = new URLSearchParams(searchParams);
     if (v) next.set('status', v);
     else next.delete('status');
@@ -465,7 +484,16 @@ export function BankDebtListScreen(): ReactNode {
 
       <div className="fg-filterbar">
         <FgSelect ariaLabel="Trạng thái" placeholder="Mọi trạng thái" allowClear options={STATUS_OPTIONS} value={status} onChange={(v) => setStatus(v)} style={{ width: 200 }} />
-        <FgInput allowClear placeholder="Tìm theo mã hoặc tên ngân hàng" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 260 }} />
+        <FgInput
+          allowClear
+          placeholder="Tìm theo mã hoặc tên ngân hàng"
+          value={search}
+          onChange={(e) => {
+            setPage(1);
+            setSearch(e.target.value);
+          }}
+          style={{ width: 260 }}
+        />
       </div>
 
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={5} cols={8} />}>
@@ -499,13 +527,25 @@ export function BankDebtListScreen(): ReactNode {
                 </FgText>
               </FgCard>
             </div>
-            {!data.items.length ? (
+            {!data.items.length && page > 1 ? (
+              <div className="fg-card">
+                <FgEmptyState glyph="◇" title="Trang này không còn khoản nào" action={<FgButton onClick={() => setPage(1)}>Về trang 1</FgButton>} />
+              </div>
+            ) : !data.items.length ? (
               <div className="fg-card">
                 <FgEmptyState glyph="◇" title="Chưa có khoản nợ ngân hàng nào" description="Tạo khoản vay tay, nhập theo lô, hoặc lập phiếu thu đi vay để tự sinh khoản chờ giải ngân." />
               </div>
             ) : (
               <div className="fg-card" style={{ padding: 0 }}>
                 <FgTable rowKey="_id" dataSource={data.items} columns={loanColumns()} />
+                {data.total > LOAN_PAGE_SIZE ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--fg-space-2)', padding: 'var(--fg-space-4) 0' }}>
+                    <FgText style="caption" color="muted">
+                      {`Hiển thị ${(page - 1) * LOAN_PAGE_SIZE + 1}–${Math.min(page * LOAN_PAGE_SIZE, data.total)} / ${data.total} khoản`}
+                    </FgText>
+                    <FgPagination current={page} pageSize={LOAN_PAGE_SIZE} total={data.total} showSizeChanger={false} onChange={(p) => setPage(p)} />
+                  </div>
+                ) : null}
               </div>
             )}
           </>

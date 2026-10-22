@@ -97,6 +97,11 @@ export const partnerSearchQuery = z.object({
   q: z.string().max(200).optional(),
   // trần 1000: màn nhập lô khoản vay cần đủ mọi ngân hàng đang hoạt động để kiểm mã (không chỉ 200 đầu)
   limit: z.coerce.number().int().min(1).max(1000).default(20),
+  /**
+   * Tra ĐÚNG các mã đối tác (CSV, khớp mã chính xác): kiểm mã của một lô nhập mà không phụ thuộc trần `limit`
+   * (công ty có hơn 1.000 ngân hàng thì mã ngoài 1.000 đầu vẫn tra được). Tối đa 1.000 mã.
+   */
+  codes: z.string().max(12_000).optional(),
 });
 export type PartnerSearchQuery = z.infer<typeof partnerSearchQuery>;
 

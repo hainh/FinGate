@@ -26,6 +26,11 @@ describe('nợ NH › chỉ tiêu giải ngân (disbursementFigures)', () => {
     expect(f).toEqual({ disbursed: 60n, undisbursed: 0n });
   });
 
+  it('khoản tạo tay đang vay mà chỉ gắn phiếu giải ngân CHƯA thực thi ⇒ vẫn đã giải ngân = gốc (linkCount chỉ đếm phiếu đã thực thi)', () => {
+    const f = disbursementFigures({ principal: 200n, status: 'active', paid: 0n, planned: 50n, linkCount: 0 });
+    expect(f).toEqual({ disbursed: 200n, undisbursed: 0n });
+  });
+
   it('khoản chờ giải ngân ⇒ chưa giải ngân = gốc − đã gán; đã giải ngân = đã thực thi', () => {
     const f = disbursementFigures({ principal: 100n, status: 'pending_disbursement', paid: 0n, planned: 40n, linkCount: 1 });
     expect(f).toEqual({ disbursed: 0n, undisbursed: 60n });

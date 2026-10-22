@@ -57,7 +57,7 @@ import { FgAlert, FgButton, FgField, FgInput, FgMoneyInput, FgNumber, FgSelect, 
 import { FgCard } from '../components/cards.tsx';
 import { FgSegmented } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
-import { useToast } from '../components/pagekit.tsx';
+import { FgQuery, useToast } from '../components/pagekit.tsx';
 import { PartnerPicker, partnerTypesFor } from '../components/partner-picker.tsx';
 import { TagInput } from '../components/tag-input.tsx';
 
@@ -86,7 +86,7 @@ interface LoanState {
   collateral: string;
 }
 
-interface FormState {
+export interface FormState {
   title: string;
   purpose: string;
   partnerId: string | null;
@@ -231,6 +231,24 @@ function formFromDocument(doc: DocumentDetail, kind: PageKind): FormState {
   };
 }
 
+/** Lãi suất nhập tay: số, dấu phẩy hoặc chấm, tối đa 2 chữ số thập phân — cùng quy tắc server (documents.ts, finance.ts). */
+const RATE_TEXT_RE = /^\d+([.,]\d{1,2})?$/;
+
+/** Lỗi của ô lãi suất nhập tay (trống = không có lỗi). */
+export function rateTextError(raw: string): string | null {
+  const s = raw.trim();
+  return !s || RATE_TEXT_RE.test(s) ? null : 'Lãi suất dạng số, tối đa 2 chữ số thập phân';
+}
+
+/**
+ * Đổi đối tác trên form (kể cả bỏ chọn). Khoản vay đã chọn — gắn có sẵn (R2) hoặc đảo hạn — thuộc ngân hàng cũ
+ * ⇒ bỏ theo, để ô khoản vay không còn giữ khoản của ngân hàng khác (v2 §5.2, §10.3, §11.4). Chọn lại đúng đối tác đó ⇒ giữ nguyên.
+ */
+export function withPartner(f: FormState, partnerId: string | null): FormState {
+  if (f.partnerId === partnerId) return f;
+  return { ...f, partnerId, loan: { ...f.loan, existingLoanId: '' }, rolloverLoanId: '' };
+}
+
 export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
   const { id } = useParams<{ id?: string }>();
   const [query] = useSearchParams();
@@ -290,7 +308,8 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
   // tham số vay mặc định của công ty đang lập phiếu (US-AUTO-07): hiển thị và tính hạn xem trước
   const loanDefaults = useLoanDefaults(currentCompany);
   // Khoản vay cho phương án đảo hạn: cùng ngân hàng (đối tác đã chọn), cùng công ty, đang vay / quá hạn (v2 §10.3).
-  const rolloverLoans = useLoanList({ partner_id: f.partnerId || undefined }, { enabled: kind === 'rollover' });
+  // chỉ tải khi ĐÃ chọn ngân hàng (không tải toàn bộ khoản vay của công ty rồi lọc trên trình duyệt)
+  const rolloverLoans = useLoanList({ partner_id: f.partnerId || undefined, limit: 1000 }, { enabled: kind === 'rollover' && !!f.partnerId });
   const rolloverLoanOptions = (rolloverLoans.data?.items ?? []).filter(
     (l) => (l.status === 'active' || l.status === 'overdue') && l.company_id === currentCompany && (!f.partnerId || l.partner_id === f.partnerId),
   );
@@ -347,7 +366,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
   useEffect(() => {
     if (kind !== 'income' || !f.loan.on || !f.partnerId || !partnerType || partnerType === 'bank') return;
     message.info('Phiếu thu đi vay: bên nộp tiền phải là Ngân hàng — chọn lại đối tác');
-    setF((s) => ({ ...s, partnerId: null }));
+    setF((s) => withPartner(s, null));
   }, [kind, f.loan.on, f.partnerId, partnerType, message]);
 
   /**
@@ -420,7 +439,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
         need_amount: f.amount ? { amount_minor: f.amount.minor.toString(), currency: f.amount.currency } : undefined,
         plan: f.plan,
         new_maturity_date: f.rolloverMaturity || undefined,
-        new_rate: f.newRate || undefined,
+        new_rate: f.newRate.trim() || undefined,
         collateral: f.rolloverCollateral || undefined,
       };
     }
@@ -432,6 +451,12 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
       message.error('Chưa chọn công ty — chọn công ty ở bộ chuyển phạm vi (góc trên) trước khi lưu phiếu');
       return;
     }
+    // Sửa phiếu: chỉ lưu khi đã tải được hồ sơ (phiên bản để kiểm xung đột lấy từ hồ sơ đó, không đoán).
+    const loadedVersion = id ? existing.data?.version : undefined;
+    if (id && typeof loadedVersion !== 'number') {
+      message.error('Chưa tải xong hồ sơ — chưa thể lưu');
+      return;
+    }
     // Kiểm tra nhanh các trường v2 bắt buộc; server vẫn kiểm lần cuối và trả lỗi theo field.
     const clientErrors: Record<string, string> = {};
     if (!f.amount) clientErrors.amount = 'Nhập số tiền';
@@ -439,8 +464,14 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
     if (kind === 'rollover') {
       if (!f.rolloverLoanId) clientErrors.loan_id = 'Chọn khoản vay đang đảo hạn (cùng ngân hàng)';
       if (!f.rolloverMaturity) clientErrors['rollover.new_maturity_date'] = 'Chọn ngày đáo hạn mới';
+      const newRateErr = rateTextError(f.newRate);
+      if (newRateErr) clientErrors['rollover.new_rate'] = newRateErr;
     }
     if (isBorrow && f.loan.mode === 'existing' && !f.loan.existingLoanId) clientErrors['options.loan.existing_loan_id'] = 'Chọn khoản vay đã có';
+    // điều khoản vay hiện trên form (vay để chi, hoặc thu đi vay tạo mới): lãi suất cùng quy tắc 2 chữ số thập phân
+    if ((isFund || (isBorrow && f.loan.mode === 'new')) && rateTextError(f.loan.interestRate)) {
+      clientErrors['options.loan.terms.interest_rate'] = 'Lãi suất dạng số, tối đa 2 chữ số thập phân';
+    }
     if (isFund && !f.loan.lenderId) clientErrors['options.loan.lender_partner_id'] = 'Chọn ngân hàng cho vay';
     if (isFund && !f.loan.receiveAccountId) clientErrors['options.loan.receive_account_id'] = 'Chọn tài khoản nhận giải ngân';
     if (f.transferOn && !f.transferCompanyId) clientErrors['transfer_target.company_id'] = 'Chọn công ty nhận';
@@ -466,7 +497,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
       /** Chi tiết vừa lưu (PATCH trả về cùng dạng GET): đặt vào bản đệm để màn chi tiết không hiện bản trước khi sửa. */
       let saved: DocumentDetail | null = null;
       if (knownId) {
-        const ifMatch = id ? existing.data?.version ?? 1 : draftRef.current?.version ?? 1;
+        const ifMatch = typeof loadedVersion === 'number' ? loadedVersion : (draftRef.current?.version ?? 1);
         const res = await apiCall<{ version?: number; data?: DocumentDetail }>(`/documents/${knownId}`, { method: 'PATCH', body: { ...body, if_match: ifMatch } });
         docId = knownId;
         version = res.version ?? ifMatch;
@@ -503,9 +534,24 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
   };
 
   const loaded = id ? existing.data : null;
-  const canEdit = !id || loaded ? (loaded?.can.edit ?? true) : true;
+  // Sửa: chỉ sửa được khi đã tải hồ sơ và hồ sơ cho phép sửa (đang tải ⇒ khoá, không lưu theo phiên bản đoán).
+  const canEdit = id ? (loaded?.can.edit ?? false) : true;
+  const lockedAfterApproval = !!loaded && !loaded.can.edit;
   const titlePrefix = `${id ? 'Sửa' : 'Tạo mới'} ${DOC_KIND_LABEL[kind].toLowerCase()}`;
   const pageTitle = !scopeAll && companyName ? `${titlePrefix} cho ${companyName}` : titlePrefix;
+
+  // Không tải được hồ sơ (vd. 403 ngoài phạm vi): hiện trạng thái lỗi như màn chi tiết (ERR-01), không hiện form trống.
+  // Lỗi tải lại nền sau khi đã có hồ sơ không thay form đang sửa.
+  if (id && existing.isError && !existing.data) {
+    return (
+      <>
+        <FgPageHeader title={pageTitle} />
+        <FgQuery query={existing} skeleton={null}>
+          {() => null}
+        </FgQuery>
+      </>
+    );
+  }
 
   /** Chọn TK nhận giải ngân: mặc định cũng là TK nguồn của phiếu chi (sửa được) — §11.5. */
   const pickReceiveAccount = (accountId: string) =>
@@ -519,7 +565,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
   return (
     <>
       <FgPageHeader title={pageTitle} meta="Nháp tự lưu trên máy — gửi duyệt khi đủ chứng từ" />
-      {!canEdit ? (
+      {lockedAfterApproval ? (
         <FgAlert tone="warning" title="Hồ sơ đã qua cấp duyệt, không sửa được nữa" description="Chỉ người tạo có thể sửa khi còn Nháp / Yêu cầu bổ sung." style={{ marginBottom: 16 }} />
       ) : null}
       {scopeAll ? (
@@ -548,7 +594,8 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                   required={partnerRequired}
                   value={f.partnerId}
                   onChange={(id, p) => {
-                    set('partnerId', id);
+                    // đổi đối tác ⇒ bỏ khoản vay đã chọn của ngân hàng cũ (withPartner)
+                    setF((s) => withPartner(s, id));
                     setPickedPartner(id && p ? { id, type: p.type } : null);
                   }}
                   allowedTypes={partnerAllowed}
@@ -714,7 +761,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                     <FgTextarea value={f.plan} onChange={(e) => set('plan', e.target.value)} placeholder="VD: Gia hạn 12 tháng tại BIDV, tài sản đảm bảo giữ nguyên, phí 0,3%" disabled={!canEdit} />
                   </FgField>
                 </div>
-                <FgField label="Lãi suất mới (%/năm)">
+                <FgField label="Lãi suất mới (%/năm)" error={errors['rollover.new_rate'] ?? null}>
                   <FgInput value={f.newRate} onChange={(e) => set('newRate', e.target.value)} placeholder="9,50" disabled={!canEdit} />
                 </FgField>
                 <FgField label="Tài sản đảm bảo">
@@ -937,7 +984,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)' }}>
           <FgCard title="Trạng thái">
             <FgText style="bodyS" color="muted">
-              {id && loaded ? `Hồ sơ ${loaded.code} · ${statusLabel(loaded.status)}` : 'Phiếu mới — chưa gửi duyệt'}
+              {id && loaded ? `Hồ sơ ${loaded.code} · ${statusLabel(loaded.status)}` : id ? 'Đang tải hồ sơ…' : 'Phiếu mới — chưa gửi duyệt'}
             </FgText>
             {f.amount ? (
               <div className="fg-stat-row" style={{ marginTop: 8 }}>

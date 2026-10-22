@@ -26,7 +26,7 @@ import {
 import { useDocuments, useProcessed, useQueue, type DocListFilters, type QueueFilters } from '../app/queries.ts';
 import type { QueueRow } from '../app/types.ts';
 import { FgButton, FgMoneyStack, FgSelect, FgStatusChip, FgText } from '../components/primitives.tsx';
-import { FgEmptyState, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
+import { FgEmptyState, FgPagination, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useDebounced } from '../components/pagekit.tsx';
 import { SCOPE_ALL, useAuth } from '../app/store.tsx';
@@ -54,6 +54,10 @@ const MINE_OPTIONS = [
   { value: 'to_approve', label: 'Chờ tôi duyệt' },
   { value: 'approved_by_me', label: 'Tôi đã duyệt' },
 ];
+
+/** Cỡ trang bảng tài chính: 20/50/100 (docs/02_design_system.md §7.21), không cuộn vô hạn. */
+const PAGE_SIZES = [20, 50, 100];
+const DEFAULT_PAGE_SIZE = 50;
 
 /**
  * Mọi bước đang chờ duyệt (`pending.*`). Danh sách chờ duyệt phải gồm CẢ các bước: cấp cao hơn vẫn thấy
@@ -279,6 +283,20 @@ export function DocListScreen({
     setParams(next);
   };
 
+  // phân trang nằm trên URL (giữ trang khi tải lại / quay lại): ?page=2&size=50
+  const page = Math.max(1, Math.trunc(Number(get('page'))) || 1);
+  const sizeParam = Number(get('size'));
+  const pageSize = PAGE_SIZES.includes(sizeParam) ? sizeParam : DEFAULT_PAGE_SIZE;
+  /** Đổi trang / cỡ trang trong MỘT lần ghi URL — giữ nguyên bộ lọc. */
+  const onPageChange = (p: number, s: number) => {
+    const next = new URLSearchParams(params);
+    if (p > 1) next.set('page', String(p));
+    else next.delete('page');
+    if (s !== DEFAULT_PAGE_SIZE) next.set('size', String(s));
+    else next.delete('size');
+    setParams(next);
+  };
+
   const [qText, setQText] = useState(get('q'));
   const qDebounced = useDebounced(qText, 300);
   useEffect(() => {
@@ -308,27 +326,29 @@ export function DocListScreen({
       overdue_only: fixed.overdue_only,
       partner_id: partnerParam || undefined,
       tag_ids: tagIds.length ? tagIds : undefined,
-      limit: 100,
+      limit: pageSize,
+      page,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [qDebounced, get('status'), get('mine'), get('sort'), fixed, swimlanes, partnerParam, tagIds],
+    [qDebounced, get('status'), get('mine'), get('sort'), fixed, swimlanes, partnerParam, tagIds, pageSize, page],
   );
 
   // Hàng chờ nhận đủ bộ lọc của server (q, trạng thái, đối tác, tag) — trước đây bị bỏ, bảng không bao giờ được lọc.
   const queueFilters: QueueFilters = useMemo(
     () => ({
-      limit: 100,
+      limit: pageSize,
+      page,
       q: qDebounced || undefined,
       status: get('status') || undefined,
       partner_id: partnerParam || undefined,
       tag_ids: tagIds.length ? tagIds : undefined,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [qDebounced, get('status'), partnerParam, tagIds],
+    [qDebounced, get('status'), partnerParam, tagIds, pageSize, page],
   );
   const queue = useQueue(queueFilters, source === 'queue');
   const docs = useDocuments(filters, source === 'documents');
-  const processed = useProcessed(100, source === 'processed', qDebounced || undefined);
+  const processed = useProcessed(pageSize, source === 'processed', qDebounced || undefined, page);
   const query = source === 'queue' ? queue : source === 'processed' ? processed : docs;
 
   const [selected, setSelected] = useState<Record<string, QueueRow>>({});
@@ -397,6 +417,34 @@ export function DocListScreen({
       >
         {(data) => {
           const rows = data.items ?? [];
+          // FgPagination (docs/03_screens.md): hiện khi có hơn cỡ trang nhỏ nhất; trang vượt quá (URL cũ) → về trang 1
+          const pager =
+            data.total > PAGE_SIZES[0]! ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--fg-space-2)', padding: 'var(--fg-space-4) 0' }}>
+                <FgText style="caption" color="muted">
+                  {`Hiển thị ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, data.total)} / ${data.total} hồ sơ`}
+                </FgText>
+                <FgPagination
+                  current={page}
+                  pageSize={pageSize}
+                  total={data.total}
+                  showSizeChanger
+                  pageSizeOptions={PAGE_SIZES.map(String)}
+                  onChange={onPageChange}
+                />
+              </div>
+            ) : null;
+          if (!rows.length && page > 1 && data.total > 0)
+            return (
+              <div className="fg-card">
+                <FgEmptyState
+                  glyph="⌕"
+                  title="Trang này không còn hồ sơ"
+                  description="Danh sách đã thay đổi so với lần xem trước."
+                  action={<FgButton onClick={() => onPageChange(1, pageSize)}>Về trang 1</FgButton>}
+                />
+              </div>
+            );
           if (!rows.length)
             return anyFilter ? (
               <div className="fg-card">
@@ -490,6 +538,7 @@ export function DocListScreen({
                       {renderTable(g.items)}
                     </section>
                   ))}
+                {pager}
               </>
             );
           }
@@ -498,13 +547,16 @@ export function DocListScreen({
             <>
               {renderTable(
                 rows,
-                data.summary ? (
-                  <div style={{ padding: 'var(--fg-space-3) var(--fg-space-5)', borderTop: '1px solid var(--fg-border-subtle)' }}>
-                    <FgText style="bodyS" color="muted">
-                      {data.summary.count} hồ sơ · tổng <span className="fg-num">{data.summary.compact}</span> đang chờ
-                    </FgText>
-                  </div>
-                ) : null,
+                <>
+                  {data.summary ? (
+                    <div style={{ padding: 'var(--fg-space-3) var(--fg-space-5)', borderTop: '1px solid var(--fg-border-subtle)' }}>
+                      <FgText style="bodyS" color="muted">
+                        {data.summary.count} hồ sơ · tổng <span className="fg-num">{data.summary.compact}</span> đang chờ
+                      </FgText>
+                    </div>
+                  ) : null}
+                  {pager}
+                </>,
               )}
 
               {selectable && selectedList.length ? (

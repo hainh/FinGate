@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { dropVacantSteps, escalatedTopRole, pendingRolesForRerun, resolveApprovalAmount } from './state-machine.ts';
+import { canTransition, dropVacantSteps, escalatedTopRole, pendingRolesForRerun, resolveApprovalAmount } from './state-machine.ts';
+
+describe('canTransition — v2 §7.1 Đang thanh toán (processing)', () => {
+  it('DangThanhToan → Thực thi (paid) và → Yêu cầu bổ sung (changes_requested)', () => {
+    expect(canTransition('processing', 'pay')).toBe('paid');
+    expect(canTransition('processing', 'request_changes')).toBe('changes_requested');
+  });
+
+  it('không duyệt / từ chối / đưa vào hàng lần nữa từ Đang thanh toán', () => {
+    expect(canTransition('processing', 'approve')).toBeNull();
+    expect(canTransition('processing', 'reject')).toBeNull();
+    expect(canTransition('processing', 'queue_payment')).toBeNull();
+  });
+});
 
 describe('dropVacantSteps — khuyết chức danh thì bỏ bước, đẩy lên cấp cao hơn', () => {
   it('bỏ bước không có người phụ trách và đánh số lại liên tục', () => {

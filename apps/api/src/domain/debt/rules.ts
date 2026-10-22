@@ -200,8 +200,9 @@ export function escapeRegex(s: string): string {
 /**
  * Chỉ tiêu giải ngân của khoản vay (v2 §10.1–10.2), suy khi đọc:
  *  - Chờ giải ngân: đã giải ngân = tổng phiếu thu đã thực thi; chưa giải ngân = gốc − tổng đã gán.
- *  - Đang vay / quá hạn / tất toán / lưu trữ: không có liên kết giải ngân (khoản tạo tay, nhập lô) ⇒ đã giải ngân = gốc;
- *    có liên kết ⇒ đã giải ngân = tổng phiếu đã thực thi. Chưa giải ngân chỉ tính cho khoản chờ giải ngân.
+ *  - Đang vay / quá hạn / tất toán / lưu trữ: chưa có giải ngân đã thực thi (khoản tạo tay, nhập lô, hoặc chỉ gắn phiếu
+ *    CHƯA thực thi) ⇒ đã giải ngân = gốc; có phiếu đã thực thi ⇒ đã giải ngân = tổng phiếu đã thực thi.
+ *    Chưa giải ngân chỉ tính cho khoản chờ giải ngân.
  *  - Đã huỷ: không còn chỉ tiêu chưa giải ngân.
  */
 export function disbursementFigures(input: {
@@ -211,7 +212,7 @@ export function disbursementFigures(input: {
   paid: bigint;
   /** Σ giải ngân đã gán (mọi trạng thái phiếu, liên kết hiệu lực). */
   planned: bigint;
-  /** Số liên kết giải ngân hiệu lực. */
+  /** Số liên kết giải ngân hiệu lực của phiếu ĐÃ THỰC THI (phiếu chưa thực thi không tính). */
   linkCount: number;
 }): { disbursed: bigint; undisbursed: bigint } {
   const { principal, status, paid, planned, linkCount } = input;

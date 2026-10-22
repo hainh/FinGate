@@ -4,7 +4,16 @@
  */
 import { describe, expect, it } from 'vitest';
 import { TAG_COLOR_DEFAULT, type TagRow } from '@fingate/shared';
-import { collectAllTagPages, findTagByName, TAG_LIST_LIMIT, tagMatchesSearch, type TagPage } from './tags.ts';
+import {
+  clampTagPage,
+  collectAllTagPages,
+  compareTagsForList,
+  findTagByName,
+  TAG_LIST_LIMIT,
+  tagMatchesSearch,
+  tagPageCount,
+  type TagPage,
+} from './tags.ts';
 
 const COMPANY = 'c-cta';
 
@@ -82,5 +91,38 @@ describe('tra cứu trên danh bạ lớn — tag ngoài 500 dòng đầu vẫn 
 
   it('tìm theo tên thấy đúng tag ở vị trí 550', () => {
     expect(all.filter((t) => tagMatchesSearch(t, 'TAG  0550')).map((t) => t._id)).toEqual(['t0550']);
+  });
+});
+
+describe('bảng tag: thứ tự hiển thị và chia trang', () => {
+  it('tag dùng nhiều lên đầu; cùng số phiếu thì xếp theo tên tiếng Việt (Đ sau D, trước E…)', () => {
+    const rows = [
+      { name: 'Vay', usage_count: 0 },
+      { name: 'Đức', usage_count: 0 },
+      { name: 'Dung', usage_count: 0 },
+      { name: 'An', usage_count: 2 },
+      { name: 'Ân', usage_count: 0 },
+      { name: 'Bình', usage_count: 5 },
+    ];
+    expect([...rows].sort(compareTagsForList).map((t) => t.name)).toEqual(['Bình', 'An', 'Ân', 'Dung', 'Đức', 'Vay']);
+  });
+
+  it('cùng tên và cùng số phiếu thì coi là ngang nhau (không đổi thứ tự)', () => {
+    expect(compareTagsForList({ name: 'Tag A', usage_count: 1 }, { name: 'Tag A', usage_count: 1 })).toBe(0);
+  });
+
+  it('số trang: danh sách rỗng vẫn có một trang; 1725 tag chia 25 dòng/trang là 69 trang', () => {
+    expect(tagPageCount(0, 25)).toBe(1);
+    expect(tagPageCount(25, 25)).toBe(1);
+    expect(tagPageCount(26, 25)).toBe(2);
+    expect(tagPageCount(1725, 25)).toBe(69);
+  });
+
+  it('trang hiện tại được kẹp khi danh sách co lại (ẩn / lọc) hoặc khi trang không hợp lệ', () => {
+    expect(clampTagPage(3, 0, 25), 'danh sách rỗng → trang 1').toBe(1);
+    expect(clampTagPage(2, 25, 25), 'chỉ còn một trang → trang 1').toBe(1);
+    expect(clampTagPage(9, 26, 25), 'trang 9 nhưng còn 2 trang → trang 2').toBe(2);
+    expect(clampTagPage(0, 60, 25), 'trang 0 → trang 1').toBe(1);
+    expect(clampTagPage(2, 60, 25), 'trang hợp lệ giữ nguyên').toBe(2);
   });
 });

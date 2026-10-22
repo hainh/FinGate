@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError, normalizeNameKey } from '@fingate/shared';
+import { ApiError, normalizeNameKey, tagCreateBody } from '@fingate/shared';
 import { TAG_NAME_MAX, changedFields, normalizeTagName, replaceTagIds } from './normalize.ts';
 
 // Ký tự vô hình / khoảng trắng đặc biệt dựng bằng mã để file nguồn chỉ chứa ASCII.
@@ -69,6 +69,12 @@ describe('normalizeTagName — chuẩn hoá tên tag (v2 §6.2)', () => {
   it('độ dài tính sau khi gộp khoảng trắng: chuỗi dài nhưng rút gọn được vẫn hợp lệ', () => {
     const padded = `a${' '.repeat(60)}b`; // 62 ký tự thô, sau gộp còn "a b"
     expect(normalizeTagName(padded).name).toBe('a b');
+  });
+
+  it('contract tagCreateBody nhận đúng tên mà domain nhận (route không chặn trước khi gộp)', () => {
+    const padded = `wsprobe${' '.repeat(40)}ok`; // 49 ký tự thô → "wsprobe ok"
+    expect(tagCreateBody.parse({ name: padded }).name).toBe(normalizeTagName(padded).name);
+    expect(normalizeTagName(padded).name).toBe('wsprobe ok');
   });
 });
 

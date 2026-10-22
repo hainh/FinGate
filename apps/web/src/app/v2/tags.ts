@@ -58,6 +58,27 @@ export function tagColorOf(color: string | null | undefined): string {
   return color && TAG_COLOR_RE.test(color) ? color : TAG_COLOR_DEFAULT;
 }
 
+/**
+ * Bộ so sánh tiếng Việt dùng chung. `localeCompare(…, 'vi')` tạo bộ so sánh mới mỗi lần gọi, nên sắp
+ * một danh bạ hàng nghìn tag chậm rõ rệt; một `Intl.Collator` dựng sẵn cho cùng kết quả nhanh hơn nhiều.
+ */
+const VI_COLLATOR = new Intl.Collator('vi');
+
+/** Thứ tự hiển thị danh bạ: tag dùng nhiều lên đầu, cùng số phiếu thì theo tên (tiếng Việt). */
+export function compareTagsForList(a: Pick<TagRow, 'name' | 'usage_count'>, b: Pick<TagRow, 'name' | 'usage_count'>): number {
+  return b.usage_count - a.usage_count || VI_COLLATOR.compare(a.name, b.name);
+}
+
+/** Số trang của một danh sách (luôn ít nhất 1 trang, kể cả khi rỗng). */
+export function tagPageCount(total: number, pageSize: number): number {
+  return Math.max(1, Math.ceil(total / pageSize));
+}
+
+/** Trang hợp lệ sau khi danh sách đổi (lọc / ẩn làm ngắn đi): không nhỏ hơn 1, không vượt số trang. */
+export function clampTagPage(page: number, total: number, pageSize: number): number {
+  return Math.min(Math.max(1, page), tagPageCount(total, pageSize));
+}
+
 /* eslint-disable no-restricted-syntax -- bảng màu là DỮ LIỆU của tag (server lưu #RRGGBB), không phải token giao diện */
 /** Bảng màu gợi ý khi đổi màu tag. Màu đầu tiên là mặc định của hệ thống. */
 export const TAG_COLOR_PRESETS: readonly string[] = [

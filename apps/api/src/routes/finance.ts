@@ -26,7 +26,7 @@ import {
   statementImportBody,
 } from '@fingate/shared';
 import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, internalTransferBodySchema, statementImportBodySchema } from './schemas.ts';
-import { asBigInt, docHref, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
+import { asBigInt, docHref, filterMaturityRows, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
 import { bookedBalance } from '../domain/ledger/index.ts';
 import { ledgerAccountViews } from '../domain/accounts.ts';
 import { companyReachableByActor } from '../domain/entitlement/index.ts';
@@ -594,8 +594,9 @@ export function financeRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const scope = requireScope(req);
         const q = validate(rolloverListQuery, req.query);
-        const rows = await maturityLadder(scope, { bucket: q.bucket, bankName: q.bank_name });
+        // một lần dựng bảng (không gọi maturityLadder hai lần): KPI tính trên mọi dòng, bảng lọc theo mức / ngân hàng
         const all = await maturityLadder(scope, {});
+        const rows = filterMaturityRows(all, { bucket: q.bucket, bankName: q.bank_name });
         const sum = (list: typeof all) => list.reduce((a, r) => a + asBigInt(r.outstanding.minor), 0n);
         return ok(
           reply,

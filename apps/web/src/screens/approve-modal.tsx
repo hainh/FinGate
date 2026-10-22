@@ -292,7 +292,6 @@ export function ApprovalConfirmModal({
   onClose: () => void;
   onDone: () => void;
 }): ReactNode {
-  const pack = useDecisionPack(doc._id);
   const runner = useTransitionRunner();
   const [opinion, setOpinion] = useState('');
   const accounts = useBankAccounts(doc.company_id);
@@ -305,6 +304,9 @@ export function ApprovalConfirmModal({
     .map((a) => ({ value: a._id, label: bankAccountOptionLabel(a, true) }));
   const [accountId, setAccountId] = useState<string>(doc.source.account_id ?? '');
   const accountChanged = accountId !== (doc.source.account_id ?? '');
+  // gói quyết định tính theo TK ĐANG CHỌN (cùng quy tắc với source_account_id khi gửi duyệt): cấp duyệt thấy đúng TK sẽ chi/thu
+  const pickedAccountId = canChangeAccount && accountChanged && accountId ? accountId : undefined;
+  const pack = useDecisionPack(doc._id, pickedAccountId);
   const amount = moneyFromWire(doc.amount)!;
   // Cấp duyệt phiếu chi có thể đổi số tiền; TĂNG so với đề nghị ban đầu phải xác nhận lại.
   // §11.5: đã có lượt R3 (vay để chi) ⇒ số tiền đã khoá; server trả FG-WF-005 nếu vẫn đổi.
@@ -346,7 +348,7 @@ export function ApprovalConfirmModal({
       if_match: doc.version,
       opinion: opinion || undefined,
       // cấp duyệt đổi tài khoản đích/nguồn của phiếu ngay khi duyệt
-      source_account_id: canChangeAccount && accountChanged && accountId ? accountId : undefined,
+      source_account_id: pickedAccountId,
       // approve thường không bắt buộc ý kiến, nhưng khi thiếu chứng từ server
       // cần `reason` >=20 ký tự (FG-WF-004) → gửi kèm để user không phải làm lại.
       reason: needsReason ? opinion : opinion && opinion.trim().length >= 20 ? opinion : undefined,

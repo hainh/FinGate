@@ -24,7 +24,7 @@ vi.mock('../links/index.ts', () => ({
 }));
 vi.mock('../automation/actions/link.ts', () => ({ ensureManualLink: m.ensureManualLink }));
 
-import { linkChosenLoanOnSave, resolveLoanPlan } from './refs.ts';
+import { disbursementReleasedByLoanChoice, linkChosenLoanOnSave, resolveLoanPlan } from './refs.ts';
 
 const COMPANY = 'e'.repeat(24);
 const BANK = 'c'.repeat(24);
@@ -152,6 +152,26 @@ describe('linkChosenLoanOnSave — gắn khoản đã chọn được ghi NGAY k
       await linkChosenLoanOnSave({ documentId: DOC, previous: storedExisting(LOAN), plan: borrowPlan('new'), amountMinor: 5_000_000n, actor: ACTOR, requestId: null });
       expect(m.removeLink).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('disbursementReleasedByLoanChoice — liên kết giải ngân mà lần lưu đổi lựa chọn khoản vay sẽ gỡ (đổi đối tác + chọn khoản mới trong một lần lưu)', () => {
+  const manualTo = (loanId: string) => ({ relation: 'disbursement' as const, to_type: 'bank_debt' as const, to_id: loanId, origin: 'manual' as const });
+
+  it('chọn khoản có sẵn KHÁC ⇒ gỡ giải ngân tới khoản cũ (kể cả khoản do người dùng gán từ tab Liên kết)', () => {
+    expect(disbursementReleasedByLoanChoice(manualTo(LOAN), storedExisting(LOAN), borrowPlan('existing', OTHER_LOAN))).toBe(true);
+    expect(disbursementReleasedByLoanChoice({ ...manualTo(LOAN), origin: 'manual' }, null, borrowPlan('existing', OTHER_LOAN))).toBe(true);
+  });
+
+  it('không chọn khoản nữa (để sau / vay mới / bỏ cờ vay) ⇒ chỉ gỡ liên kết Thủ công tới khoản ĐÃ CHỌN trước đó', () => {
+    expect(disbursementReleasedByLoanChoice(manualTo(LOAN), storedExisting(LOAN), borrowPlan('later'))).toBe(true);
+    expect(disbursementReleasedByLoanChoice(manualTo(OTHER_LOAN), storedExisting(LOAN), borrowPlan('later'))).toBe(false);
+  });
+
+  it('chọn đúng khoản đang gắn ⇒ không gỡ; liên kết không phải giải ngân / không tới khoản vay ⇒ không gỡ', () => {
+    expect(disbursementReleasedByLoanChoice(manualTo(LOAN), storedExisting(LOAN), borrowPlan('existing', LOAN))).toBe(false);
+    expect(disbursementReleasedByLoanChoice({ ...manualTo(LOAN), relation: 'repayment' }, storedExisting(LOAN), borrowPlan('existing', OTHER_LOAN))).toBe(false);
+    expect(disbursementReleasedByLoanChoice({ ...manualTo(LOAN), to_type: 'debt_voucher' }, storedExisting(LOAN), borrowPlan('existing', OTHER_LOAN))).toBe(false);
   });
 });
 

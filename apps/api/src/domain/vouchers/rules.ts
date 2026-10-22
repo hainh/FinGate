@@ -308,6 +308,21 @@ export function assertTransferTargetAccount(target: { account_id?: string | null
   });
 }
 
+/**
+ * Đích chuyển nội bộ khi GỬI DUYỆT (§11.6): đúng loại phiếu, công ty nhận khác công ty phiếu và có TK đích theo ID.
+ * Chỉ kiểm lại điều đã kiểm khi lưu (`resolveTransferTarget`) — để nháp lưu trước đó không lọt vào duyệt/thực thi.
+ * Không có công ty nhận ⇒ không phải chuyển nội bộ ⇒ không kiểm.
+ */
+export function assertTransferTargetSubmittable(
+  kind: VoucherKind,
+  companyId: string,
+  target: { company_id?: string | null; account_id?: string | null } | null | undefined,
+): void {
+  if (!target?.company_id) return;
+  assertTransferTargetFits(kind, { company_id: String(target.company_id) }, companyId);
+  assertTransferTargetAccount(target);
+}
+
 /* ================================================================== *
  * Sửa số tiền sau khi đã sinh khoản vay tự động (§11.5 — ngoại lệ)
  * ================================================================== */

@@ -231,8 +231,24 @@ export interface LoanRow {
   updated_at: string | null;
 }
 
+/** Dư nợ một ngân hàng, tính trên mọi khoản khớp bộ lọc của server (không phụ thuộc số dòng `items`). */
+export interface LoanBankTotalWire {
+  key: string;
+  partner_id: string | null;
+  bank_name: string;
+  count: number;
+  outstanding: MoneyWire;
+  due7: MoneyWire;
+  due30: MoneyWire;
+}
+
 export interface LoanListResult {
+  /** Một trang khoản vay (rỗng khi gọi với `summary=true`). */
   items: LoanRow[];
+  /** Số khoản khớp bộ lọc (mọi trang). */
+  total: number;
+  page: number;
+  limit: number;
   totals: {
     /** Dư nợ — chỉ khoản đang vay / quá hạn (không gồm chờ giải ngân). */
     outstanding: MoneyWire;
@@ -240,6 +256,7 @@ export interface LoanListResult {
     pending_count: number;
     pending_amount: MoneyWire;
   };
+  by_bank: LoanBankTotalWire[];
 }
 
 /** Một liên kết của khoản nợ NH: giải ngân (disbursement), trả nợ (repayment) hoặc chi bằng vốn vay (funded_by). */
@@ -578,22 +595,17 @@ export interface BankTotalRow {
 
 /**
  * Tổng dư nợ theo từng ngân hàng (US-LOAN-02): số khoản, dư nợ, dư nợ đáo hạn trong 7 / 30 ngày.
- * Chỉ khoản đang vay / quá hạn; sắp theo dư nợ giảm dần. Hàm thuần — không gọi server.
+ * Server tính trên mọi khoản khớp bộ lọc (`by_bank`, không phụ thuộc số dòng `items`); đây chỉ đổi sang kiểu tiền của bảng.
  */
-export function bankTotalsOf(items: LoanRow[]): BankTotalRow[] {
-  const map = new Map<string, BankTotalRow>();
-  for (const l of items) {
-    if (!isLoanOnBoard(l.status)) continue;
-    const key = l.partner_id ?? `name:${l.bank_name}`;
-    const row = map.get(key) ?? { key, bank_name: l.partner?.name ?? l.bank_name, count: 0, outstanding: 0n, due7: 0n, due30: 0n };
-    const out = minorOf(l.outstanding);
-    row.count += 1;
-    row.outstanding += out;
-    if (l.days_to_due <= 7) row.due7 += out;
-    if (l.days_to_due <= 30) row.due30 += out;
-    map.set(key, row);
-  }
-  return [...map.values()].sort((a, b) => (a.outstanding === b.outstanding ? 0 : a.outstanding > b.outstanding ? -1 : 1));
+export function bankTotalsFromWire(rows: LoanBankTotalWire[]): BankTotalRow[] {
+  return rows.map((r) => ({
+    key: r.key,
+    bank_name: r.bank_name,
+    count: r.count,
+    outstanding: minorOf(r.outstanding),
+    due7: minorOf(r.due7),
+    due30: minorOf(r.due30),
+  }));
 }
 
 /**
@@ -748,6 +760,11 @@ export interface LoanListFilters {
   status?: string;
   partner_id?: string;
   q?: string;
+  /** `'true'` = chỉ tổng hợp (totals, by_bank), không tải `items`. */
+  summary?: 'true';
+  /** trang (đánh số từ 1) và cỡ trang — danh sách phân trang phía máy chủ. */
+  page?: number;
+  limit?: number;
 }
 
 /** Danh sách nợ ngân hàng (có mục chờ giải ngân trong `totals`). `enabled: false` để không tải khi không cần. */

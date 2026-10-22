@@ -11,7 +11,7 @@
 
 import { ApiError, daysUntil, today, vnDate } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
-import { scopedFind } from '../../lib/mongo.ts';
+import { scopeFilter, scopedFind } from '../../lib/mongo.ts';
 import { buildHistoryEntry, mirrorAudit } from '../audit/index.ts';
 import { emitDomainEvent } from '../events/index.ts';
 import { nextSequentialCode } from '../numbering/index.ts';
@@ -40,6 +40,8 @@ import {
   changesOf,
   defaultAllocation,
   disbursementFigures,
+  escapeRegex,
+  isLoanOnMaturityBoard,
   isoOf,
   loanStatusOf,
   loanWarningOf,
@@ -66,7 +68,6 @@ import {
 } from './loads.ts';
 import type { DebtActor, ReqMeta } from './debts.ts';
 
-const LOAN_MAX_ROWS = 2000;
 const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
 
 /** Người thực hiện: người dùng (ActorInfo) hoặc hệ thống/quy tắc tự động (user_id null). */
@@ -150,7 +151,8 @@ async function loanContext(rows: LoanRaw[]): Promise<LoanCtx> {
   const disbursements = links.filter((l) => l.relation === 'disbursement');
   const funded = links.filter((l) => l.relation === 'funded_by');
   const counts = sumBy(repayments, (l) => l.to_id, () => 1n);
-  const disbursementCounts = sumBy(disbursements, (l) => l.to_id, () => 1n);
+  // chỉ phiếu ĐÃ THỰC THI được tính là "có giải ngân": phiếu chưa thực thi / bị từ chối không làm "Đã giải ngân" về 0
+  const disbursementCounts = sumBy(disbursements, (l) => l.to_id, () => 1n, paid);
   return {
     partners,
     companies,
@@ -228,26 +230,102 @@ function buildLoan(b: LoanRaw, ctx: LoanCtx) {
     created_at: b.created_at ? isoOf(b.created_at) : null,
     updated_at: b.updated_at ? isoOf(b.updated_at) : null,
   };
-  return { item, status, outstanding, principal, disbursedPlanned, disbursedPaid: figures.disbursed };
+  return { item, status, outstanding, principal, disbursedPlanned, disbursedPaid: figures.disbursed, days };
 }
 
-/** Danh sách nợ ngân hàng. Khoản chờ giải ngân nằm trong danh sách ("Sắp giải ngân") nhưng KHÔNG vào dư nợ. */
-export async function listLoans(scope: ScopeLike, q: { status?: string; partner_id?: string; company_id?: string; q?: string }) {
+export interface LoanListQuery {
+  status?: string;
+  partner_id?: string;
+  company_id?: string;
+  q?: string;
+  summary?: 'true' | 'false';
+  page?: number;
+  limit?: number;
+}
+
+/** Trạng thái LƯU TRỰC TIẾP (không phụ thuộc dư nợ / hạn): lọc được ngay trong DB. Đang vay / quá hạn / tất toán suy ra khi đọc. */
+const STORED_LOAN_STATUSES: ReadonlySet<string> = new Set(['pending_disbursement', 'cancelled', 'archived']);
+
+/**
+ * Điều kiện DB của danh sách: công ty (phạm vi), đối tác, trạng thái lưu trực tiếp, ô tìm (mã khoản hoặc tên ngân hàng).
+ * Lọc TRƯỚC khi dựng khoản vay: tìm theo mã không còn phải dựng cả danh sách rồi mới lọc.
+ */
+async function loanListFilter(scope: ScopeLike, q: LoanListQuery): Promise<Record<string, unknown>> {
   const clauses: Record<string, unknown>[] = [];
   if (q.company_id) {
     assertInScope(scope.companyIds, q.company_id);
     clauses.push({ company_id: q.company_id });
   }
   if (q.partner_id) clauses.push({ partner_id: q.partner_id });
-  const filter = clauses.length ? { $and: clauses } : {};
-  const rows = await scopedFind<LoanRaw>(Models.BankDebt, { companyIds: scope.companyIds }, filter, { sort: { maturity_date: 1 }, limit: LOAN_MAX_ROWS });
+  if (q.status && STORED_LOAN_STATUSES.has(q.status)) clauses.push({ status: q.status });
+  const needle = q.q?.trim();
+  if (needle) {
+    const rx = { $regex: escapeRegex(needle), $options: 'i' };
+    // tên ngân hàng nằm ở đối tác (v2 §5.1): tìm đối tác trong phạm vi rồi khớp theo id
+    const partners = await Models.Partner.find({ name: rx, ...scopeFilter({ companyIds: scope.companyIds }) } as never)
+      .select({ _id: 1 })
+      .lean<{ _id: unknown }[]>();
+    clauses.push({ $or: [{ code: rx }, { partner_id: { $in: partners.map((p) => p._id) } }] });
+  }
+  return clauses.length ? { $and: clauses } : {};
+}
+
+/** Phần của một khoản cần cho tổng hợp dư nợ (kết quả của `buildLoan`). */
+export interface LoanTotalsRow {
+  item: Record<string, unknown>;
+  status: LoanStatus;
+  outstanding: bigint;
+  days: number;
+}
+
+/** Dư nợ theo ngân hàng (US-LOAN-02): chỉ khoản đang vay / quá hạn; sắp theo dư nợ giảm dần. Tính trên MỌI khoản khớp bộ lọc. */
+export function loanBankTotals(built: readonly LoanTotalsRow[]) {
+  const map = new Map<string, { key: string; partner_id: string | null; bank_name: string; count: number; outstanding: bigint; due7: bigint; due30: bigint }>();
+  for (const x of built) {
+    if (!isLoanOnMaturityBoard(x.status)) continue;
+    const partnerId = x.item.partner_id ? String(x.item.partner_id) : null;
+    const bankName = String(x.item.bank_name ?? '');
+    const key = partnerId ?? `name:${bankName}`;
+    const row = map.get(key) ?? { key, partner_id: partnerId, bank_name: bankName, count: 0, outstanding: 0n, due7: 0n, due30: 0n };
+    row.count += 1;
+    row.outstanding += x.outstanding;
+    if (x.days <= 7) row.due7 += x.outstanding;
+    if (x.days <= 30) row.due30 += x.outstanding;
+    map.set(key, row);
+  }
+  return [...map.values()]
+    .sort((a, b) => (a.outstanding === b.outstanding ? 0 : a.outstanding > b.outstanding ? -1 : 1))
+    .map((r) => ({
+      key: r.key,
+      partner_id: r.partner_id,
+      bank_name: r.bank_name,
+      count: r.count,
+      outstanding: wireMoney(r.outstanding),
+      due7: wireMoney(r.due7),
+      due30: wireMoney(r.due30),
+    }));
+}
+
+/** Cỡ trang mặc định của danh sách khoản vay (trần 1.000 — `loanListQuery`). */
+const LOAN_LIST_PAGE_SIZE = 50;
+
+/**
+ * Danh sách nợ ngân hàng. Khoản chờ giải ngân nằm trong danh sách ("Sắp giải ngân") nhưng KHÔNG vào dư nợ.
+ * Lọc trong DB; `items` chỉ gồm MỘT TRANG (`page`/`limit`) để phản hồi và bảng không phình theo số khoản;
+ * tổng, số khoản (`total`/`totals.count`) và `by_bank` luôn tính trên MỌI khoản khớp bộ lọc.
+ * `summary=true` bỏ `items` (chỉ tổng hợp) cho màn chỉ cần số liệu.
+ */
+export async function listLoans(scope: ScopeLike, q: LoanListQuery) {
+  const filter = await loanListFilter(scope, q);
+  // không kéo lịch sử thay đổi (có thể dài) — danh sách không dùng
+  const rows = await scopedFind<LoanRaw>(Models.BankDebt, { companyIds: scope.companyIds }, filter, {
+    sort: { maturity_date: 1, _id: 1 },
+    projection: { history: 0 },
+  });
   const ctx = await loanContext(rows);
   let built = rows.map((b) => buildLoan(b, ctx));
-  if (q.status) built = built.filter((x) => x.status === q.status);
-  const needle = q.q?.trim().toLowerCase();
-  if (needle) {
-    built = built.filter((x) => [String(x.item.code), String(x.item.bank_name)].some((s) => s.toLowerCase().includes(needle)));
-  }
+  // trạng thái suy ra (đang vay / quá hạn / tất toán) chỉ biết sau khi tính dư nợ ⇒ lọc ở đây
+  if (q.status && !STORED_LOAN_STATUSES.has(q.status)) built = built.filter((x) => x.status === q.status);
   let outstanding = 0n;
   let pendingCount = 0;
   let pendingAmount = 0n;
@@ -261,14 +339,20 @@ export async function listLoans(scope: ScopeLike, q: { status?: string; partner_
       pendingAmount += notYetReceived > 0n ? notYetReceived : 0n;
     }
   }
+  const page = q.page ?? 1;
+  const limit = q.limit ?? LOAN_LIST_PAGE_SIZE;
   return {
-    items: built.map((x) => x.item),
+    items: q.summary === 'true' ? [] : built.slice((page - 1) * limit, page * limit).map((x) => x.item),
+    total: built.length,
+    page,
+    limit,
     totals: {
       outstanding: wireMoney(outstanding),
       count: built.length,
       pending_count: pendingCount,
       pending_amount: wireMoney(pendingAmount),
     },
+    by_bank: loanBankTotals(built),
   };
 }
 

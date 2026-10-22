@@ -140,6 +140,57 @@ async function tickLoanForSpend(page: Page): Promise<void> {
   await tickCheckbox(page, LOAN_CHECKBOX);
 }
 
+/** Thân (postData) của mọi POST /api/v1/documents trong lúc chạy thao tác — kiểm "không gửi khoản của NH cũ". */
+function trackDocPosts(page: Page): string[] {
+  const bodies: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/v1/documents') bodies.push(r.postData() ?? '');
+  });
+  return bodies;
+}
+
+/** Khoản vay ngân hàng qua API (setup dữ liệu) của công ty CTA; trả về `_id` và mã khoản. */
+async function apiCreateLoan(page: Page, bankId: string): Promise<{ _id: string; code: string }> {
+  const maturity = new Date();
+  maturity.setFullYear(maturity.getFullYear() + 1);
+  const res = await page.request.post('/api/v1/bank-debts', {
+    data: {
+      company_id: CTA,
+      partner_id: bankId,
+      amount: { amount_minor: '1000000000', currency: 'VND' },
+      maturity_date: maturity.toISOString().slice(0, 10),
+      interest_rate: '9.5',
+      payment_frequency: 'maturity',
+      repayment_method: 'interest_only',
+    },
+    headers: { 'x-company-scope': CTA },
+  });
+  const text = await res.text();
+  expect(res.status(), `tạo khoản vay: ${text}`).toBe(201);
+  return (JSON.parse(text) as { data: { _id: string; code: string } }).data;
+}
+
+/** Mở ô khoản vay (FgSelect) và chọn khoản có mã `code`. */
+async function pickLoan(page: Page, loanField: Locator, code: string): Promise<void> {
+  await loanField.locator('.ant-select').first().click();
+  await dropdown(page).locator('.ant-select-item-option').filter({ hasText: code }).first().click();
+  await expect(loanField.locator('.ant-select')).toContainText(code);
+}
+
+/**
+ * Đổi NH của ô chọn đối tác khi đang có khoản vay đã chọn của NH cũ.
+ * `direct` = chọn NH khác ngay; `clear` = bỏ chọn (×) rồi chọn NH khác.
+ */
+async function switchBank(page: Page, picker: Locator, toName: string, mode: 'direct' | 'clear'): Promise<void> {
+  if (mode === 'clear') {
+    await picker.locator('.ant-select').first().hover();
+    await picker.locator('.ant-select-clear').click({ force: true });
+  }
+  await searchPicker(page, picker, toName);
+  await optionNamed(page, toName).first().click();
+  await expect(picker.locator('.ant-select')).toContainText(toName);
+}
+
 /** Thông tin bảng cấu hình một chỗ dùng ô chọn đối tác. */
 interface Context {
   id: string;
@@ -1721,28 +1772,44 @@ test.describe('Đổi loại đối tác đang được phiếu "đi vay" dùng 
     await expect(page.locator('label').filter({ hasText: BORROW_CHECKBOX }).locator('input[type="checkbox"]'), 'ô "đi vay" vẫn bật').toBeChecked();
   });
 
-  test('phiếu thu đi vay ("Gắn khoản vay đã có"): đổi ngân hàng cho vay sau khi đã chọn khoản ⇒ khoản của NH cũ không còn được giữ trong ô (§11.4 b)', async ({ as }) => {
-    const page = await as('staff');
-    const headers = { 'x-company-scope': CTA };
-    const bankA = await apiCreatePartner(page, { type: 'bank', name: uniq('PKR Khoan NH A'), bank_name: 'BIDV', account_number: uniqDigits(12) });
-    const bankB = await apiCreatePartner(page, { type: 'bank', name: uniq('PKR Khoan NH B'), bank_name: 'VCB', account_number: uniqDigits(12) });
-    const maturity = new Date();
-    maturity.setFullYear(maturity.getFullYear() + 1);
-    const loanRes = await page.request.post('/api/v1/bank-debts', {
-      data: {
-        company_id: CTA,
-        partner_id: bankA._id,
-        amount: { amount_minor: '1000000000', currency: 'VND' },
-        maturity_date: maturity.toISOString().slice(0, 10),
-        interest_rate: '9.5',
-        payment_frequency: 'maturity',
-        repayment_method: 'interest_only',
-      },
-      headers,
+  // Đổi NH cho vay khi đã chọn khoản của NH cũ: (direct) chọn NH khác ngay; (clear) bỏ chọn (×) rồi chọn NH khác.
+  for (const mode of ['direct', 'clear'] as const) {
+    test(`phiếu thu đi vay ("Gắn khoản vay đã có"), đổi NH ${mode === 'direct' ? 'trực tiếp sang NH khác' : 'sau khi bỏ chọn (×)'} ⇒ ô khoản vay về "Chọn khoản vay", lưu bị chặn ở ô khoản vay, không gửi khoản của NH cũ (§11.4 b)`, async ({ as }) => {
+      const page = await as('staff');
+      const posts = trackDocPosts(page);
+      const bankA = await apiCreatePartner(page, { type: 'bank', name: uniq('PKR Khoan NH A'), bank_name: 'BIDV', account_number: uniqDigits(12) });
+      const bankB = await apiCreatePartner(page, { type: 'bank', name: uniq('PKR Khoan NH B'), bank_name: 'VCB', account_number: uniqDigits(12) });
+      const loanA = await apiCreateLoan(page, bankA._id);
+
+      const picker = await openForm(page, ROUTES.receipt, REC_PICKER);
+      await tickBorrow(page);
+      await page.locator('.ant-segmented-item').filter({ hasText: 'Gắn khoản vay đã có' }).click();
+      const loanField = fieldOf(page, 'Khoản vay có sẵn');
+
+      await searchPicker(page, picker, bankA.name);
+      await optionNamed(page, bankA.name).first().click();
+      await expect(picker.locator('.ant-select')).toContainText(bankA.name);
+      await pickLoan(page, loanField, loanA.code);
+
+      await switchBank(page, picker, bankB.name, mode);
+      await expect(loanField.locator('.ant-select-placeholder'), 'ô khoản vay về placeholder "Chọn khoản vay"').toHaveText('Chọn khoản vay');
+      await expect(loanField.locator('.ant-select-selection-item'), 'không còn hiện khoản của NH cũ').toHaveCount(0);
+      await expect(loanField, 'dòng chú thích khớp với ô (NH mới chưa có khoản)').toContainText('Ngân hàng này chưa có khoản vay chờ giải ngân / đang vay');
+
+      await fieldOf(page, 'Nội dung / mục đích').locator('textarea').fill(`Đi vay khoản NH cũ ${uniq('PKR')}`);
+      await fillAmount(page, 'Số tiền', '1000000');
+      await page.getByRole('button', { name: 'Lưu nháp', exact: true }).click();
+      await expect(loanField.getByRole('alert'), 'lưu bị chặn: lỗi hiện ngay dưới ô khoản vay').toHaveText('Chọn khoản vay đã có');
+      expect(posts.filter((b) => b.includes(loanA._id) || b.includes(loanA.code)), 'không gửi khoản của NH cũ lên máy chủ').toEqual([]);
     });
-    const loanText = await loanRes.text();
-    expect(loanRes.status(), `tạo khoản vay của NH A: ${loanText}`).toBe(201);
-    const loan = (JSON.parse(loanText) as { data: { _id: string; code: string } }).data;
+  }
+
+  test('phiếu thu đi vay: đổi sang NH có khoản riêng ⇒ danh sách chỉ có khoản của NH đó; chọn khoản đó rồi lưu nháp được (§11.4 b)', async ({ as }) => {
+    const page = await as('staff');
+    const bankA = await apiCreatePartner(page, { type: 'bank', name: uniq('PKR Khoan NH A Ok'), bank_name: 'BIDV', account_number: uniqDigits(12) });
+    const bankB = await apiCreatePartner(page, { type: 'bank', name: uniq('PKR Khoan NH B Ok'), bank_name: 'VCB', account_number: uniqDigits(12) });
+    const loanA = await apiCreateLoan(page, bankA._id);
+    const loanB = await apiCreateLoan(page, bankB._id);
 
     const picker = await openForm(page, ROUTES.receipt, REC_PICKER);
     await tickBorrow(page);
@@ -1752,74 +1819,97 @@ test.describe('Đổi loại đối tác đang được phiếu "đi vay" dùng 
     await searchPicker(page, picker, bankA.name);
     await optionNamed(page, bankA.name).first().click();
     await expect(picker.locator('.ant-select')).toContainText(bankA.name);
+    await pickLoan(page, loanField, loanA.code);
+
+    await switchBank(page, picker, bankB.name, 'direct');
+    await expect(loanField.locator('.ant-select-placeholder')).toHaveText('Chọn khoản vay');
     await loanField.locator('.ant-select').first().click();
-    await dropdown(page).locator('.ant-select-item-option').filter({ hasText: loan.code }).first().click();
-    await expect(loanField.locator('.ant-select')).toContainText(loan.code);
+    await expect(dropdown(page).locator('.ant-select-item-option').filter({ hasText: loanB.code }), 'khoản của NH mới được liệt kê').toHaveCount(1, { timeout: 15000 });
+    await expect(dropdown(page).locator('.ant-select-item-option').filter({ hasText: loanA.code }), 'khoản của NH cũ không được liệt kê').toHaveCount(0);
+    await dropdown(page).locator('.ant-select-item-option').filter({ hasText: loanB.code }).first().click();
+    await expect(loanField.locator('.ant-select')).toContainText(loanB.code);
 
-    // đổi sang NH B (không có khoản vay nào): khoản của NH A không được giữ lại trong ô
-    await picker.locator('.ant-select').first().hover();
-    await picker.locator('.ant-select-clear').click({ force: true });
-    await searchPicker(page, picker, bankB.name);
-    await optionNamed(page, bankB.name).first().click();
-    await expect(picker.locator('.ant-select')).toContainText(bankB.name);
-
-    const shownLoan = (await loanField.innerText()).replace(/\s+/g, ' ').trim();
-    expect.soft(
-      shownLoan.includes(loan.code) || shownLoan.includes(loan._id),
-      `khoản vay của NH A không còn được giữ khi đã đổi sang NH B (ô khoản vay hiện: "${shownLoan}")`,
-    ).toBe(false);
-
-    // lưu nháp: khoản của NH A không được gửi đi với NH B (máy chủ kiểm "cùng ngân hàng"; form phải báo lỗi rõ ở ô khoản vay)
-    await fieldOf(page, 'Nội dung / mục đích').locator('textarea').fill(`Đi vay khoản NH cũ ${uniq('PKR')}`);
+    await fieldOf(page, 'Nội dung / mục đích').locator('textarea').fill(`Đi vay khoản NH B ${uniq('PKR')}`);
     await fillAmount(page, 'Số tiền', '1000000');
-    const saveRes = page.waitForResponse((r) => r.url().includes('/api/v1/documents') && r.request().method() === 'POST', { timeout: 15000 }).catch(() => null);
+    const posted = page.waitForResponse((r) => r.url().includes('/api/v1/documents') && r.request().method() === 'POST', { timeout: 15000 });
     await page.getByRole('button', { name: 'Lưu nháp', exact: true }).click();
-    const sent = await saveRes;
-    expect.soft(sent?.status() ?? 0, 'không lưu được phiếu với khoản vay của NH khác').not.toBe(201);
+    const res = await posted;
+    const text = await res.text();
+    expect(res.status(), `lưu nháp với khoản của NH mới phải được nhận: ${text}`).toBe(201);
+    expect(text, 'phiếu gửi đúng khoản của NH mới').toContain(loanB._id);
   });
 
-  test('đảo hạn: đổi ngân hàng sau khi đã chọn khoản đang vay ⇒ khoản của NH cũ không còn được giữ trong ô ("chỉ khoản của ngân hàng đã chọn")', async ({ as }) => {
-    const page = await as('staff');
-    const headers = { 'x-company-scope': CTA };
-    const bankA = await apiCreatePartner(page, { type: 'bank', name: uniq('PKR Dao Han NH A'), bank_name: 'BIDV', account_number: uniqDigits(12) });
-    const bankB = await apiCreatePartner(page, { type: 'bank', name: uniq('PKR Dao Han NH B'), bank_name: 'VCB', account_number: uniqDigits(12) });
-    const maturity = new Date();
-    maturity.setFullYear(maturity.getFullYear() + 1);
-    const loanRes = await page.request.post('/api/v1/bank-debts', {
-      data: {
-        company_id: CTA,
-        partner_id: bankA._id,
-        amount: { amount_minor: '1000000000', currency: 'VND' },
-        maturity_date: maturity.toISOString().slice(0, 10),
-        interest_rate: '9.5',
-        payment_frequency: 'maturity',
-        repayment_method: 'interest_only',
-      },
-      headers,
+  // Đảo hạn: đổi NH sau khi đã chọn khoản đang vay của NH cũ (direct / clear như trên).
+  for (const mode of ['direct', 'clear'] as const) {
+    test(`đảo hạn, đổi NH ${mode === 'direct' ? 'trực tiếp sang NH khác' : 'sau khi bỏ chọn (×)'} khi đã chọn khoản đang vay ⇒ ô khoản vay về "Chọn khoản vay của ngân hàng này", danh sách chỉ có khoản của NH mới, lưu bị chặn (§10.3, §11.4)`, async ({ as }) => {
+      const page = await as('staff');
+      const posts = trackDocPosts(page);
+      const bankA = await apiCreatePartner(page, { type: 'bank', name: uniq('PKR Dao Han NH A'), bank_name: 'BIDV', account_number: uniqDigits(12) });
+      const bankB = await apiCreatePartner(page, { type: 'bank', name: uniq('PKR Dao Han NH B'), bank_name: 'VCB', account_number: uniqDigits(12) });
+      const loanA = await apiCreateLoan(page, bankA._id);
+      const loanB = await apiCreateLoan(page, bankB._id);
+
+      const picker = await openForm(page, '/ngan-hang/dao-han/phuong-an/moi', 'Ngân hàng');
+      const loanField = fieldOf(page, 'Khoản vay đang đảo hạn');
+      await searchPicker(page, picker, bankA.name);
+      await optionNamed(page, bankA.name).first().click();
+      await expect(picker.locator('.ant-select')).toContainText(bankA.name);
+      await pickLoan(page, loanField, loanA.code);
+
+      await switchBank(page, picker, bankB.name, mode);
+      await expect(loanField.locator('.ant-select-placeholder'), 'ô khoản vay về placeholder của đảo hạn').toHaveText('Chọn khoản vay của ngân hàng này');
+      await expect(loanField.locator('.ant-select-selection-item'), 'không còn hiện khoản của NH cũ').toHaveCount(0);
+
+      await loanField.locator('.ant-select').first().click();
+      await expect(dropdown(page).locator('.ant-select-item-option').filter({ hasText: loanB.code }), 'khoản của NH mới được liệt kê').toHaveCount(1, { timeout: 15000 });
+      await expect(dropdown(page).locator('.ant-select-item-option').filter({ hasText: loanA.code }), 'khoản của NH cũ không được liệt kê').toHaveCount(0);
+      await page.keyboard.press('Escape');
+
+      await page.getByRole('button', { name: 'Lưu nháp', exact: true }).click();
+      await expect(loanField.getByRole('alert'), 'lưu bị chặn: lỗi hiện ngay dưới ô khoản vay').toHaveText('Chọn khoản vay đang đảo hạn (cùng ngân hàng)');
+      expect(posts.filter((b) => b.includes(loanA._id) || b.includes(loanA.code)), 'không gửi khoản của NH cũ lên máy chủ').toEqual([]);
     });
-    const loanText = await loanRes.text();
-    expect(loanRes.status(), `tạo khoản vay của NH A: ${loanText}`).toBe(201);
-    const loan = (JSON.parse(loanText) as { data: { _id: string; code: string } }).data;
+  }
+
+  test('đảo hạn: đổi sang NH có khoản đang vay ⇒ chọn được khoản của NH mới và lưu nháp được (máy chủ nhận loan_id của NH mới)', async ({ as }) => {
+    const page = await as('staff');
+    const bankA = await apiCreatePartner(page, { type: 'bank', name: uniq('PKR Dao Han Ok NH A'), bank_name: 'BIDV', account_number: uniqDigits(12) });
+    const bankB = await apiCreatePartner(page, { type: 'bank', name: uniq('PKR Dao Han Ok NH B'), bank_name: 'VCB', account_number: uniqDigits(12) });
+    const loanA = await apiCreateLoan(page, bankA._id);
+    const loanB = await apiCreateLoan(page, bankB._id);
 
     const picker = await openForm(page, '/ngan-hang/dao-han/phuong-an/moi', 'Ngân hàng');
     const loanField = fieldOf(page, 'Khoản vay đang đảo hạn');
     await searchPicker(page, picker, bankA.name);
     await optionNamed(page, bankA.name).first().click();
     await expect(picker.locator('.ant-select')).toContainText(bankA.name);
-    await loanField.locator('.ant-select').first().click();
-    await dropdown(page).locator('.ant-select-item-option').filter({ hasText: loan.code }).first().click();
-    await expect(loanField.locator('.ant-select')).toContainText(loan.code);
+    await pickLoan(page, loanField, loanA.code);
+    await switchBank(page, picker, bankB.name, 'direct');
+    await pickLoan(page, loanField, loanB.code);
 
-    await picker.locator('.ant-select').first().hover();
-    await picker.locator('.ant-select-clear').click({ force: true });
-    await searchPicker(page, picker, bankB.name);
-    await optionNamed(page, bankB.name).first().click();
-    await expect(picker.locator('.ant-select')).toContainText(bankB.name);
+    await fieldOf(page, 'Nội dung / mục đích').locator('textarea').fill(`Đảo hạn ${uniq('PKR')}`);
+    await fillAmount(page, 'Số tiền', '1000000000');
+    const maturity = fieldOf(page, 'Ngày đáo hạn mới').locator('input').first();
+    await maturity.fill('01/12/2027');
+    await maturity.press('Enter');
+    await fieldOf(page, 'Phương án đảo hạn').locator('textarea').fill(`Gia hạn ${uniq('PKR')}`);
 
-    const shown = (await loanField.innerText()).replace(/\s+/g, ' ').trim();
-    expect(
-      shown.includes(loan.code) || shown.includes(loan._id),
-      `khoản đảo hạn của NH A không còn được giữ khi đã đổi sang NH B (ô khoản vay hiện: "${shown}")`,
-    ).toBe(false);
+    const posted = page.waitForResponse((r) => r.url().includes('/api/v1/documents') && r.request().method() === 'POST', { timeout: 15000 });
+    await page.getByRole('button', { name: 'Lưu nháp', exact: true }).click();
+    const res = await posted;
+    const text = await res.text();
+    expect(res.status(), `lưu phương án đảo hạn với khoản của NH mới phải được nhận: ${text}`).toBe(201);
+    expect(text, 'phương án gửi đúng khoản của NH mới').toContain(loanB._id);
+  });
+
+  test('đảo hạn mở từ khoản vay (?loan_id & partner_id): ô Ngân hàng và ô khoản vay đã điền sẵn đúng khoản', async ({ as }) => {
+    const page = await as('staff');
+    const bank = await apiCreatePartner(page, { type: 'bank', name: uniq('PKR Dao Han Prefill NH'), bank_name: 'BIDV', account_number: uniqDigits(12) });
+    const loan = await apiCreateLoan(page, bank._id);
+
+    await page.goto(`/ngan-hang/dao-han/phuong-an/moi?kind=rollover&loan_id=${loan._id}&partner_id=${bank._id}`);
+    const picker = pickerOf(page, 'Ngân hàng');
+    await expect(picker.locator('.ant-select')).toContainText(bank.name, { timeout: 15000 });
+    await expect(fieldOf(page, 'Khoản vay đang đảo hạn').locator('.ant-select')).toContainText(loan.code, { timeout: 15000 });
   });
 });

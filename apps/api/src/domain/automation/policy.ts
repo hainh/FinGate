@@ -163,19 +163,35 @@ export function moneyMoved(loan: { status: string | null; disbursed_at?: Date | 
   return loan.status !== null && DISBURSED_LOAN_STATUSES.includes(loan.status);
 }
 
-/** Quyết định R6 cho một khoản vay sinh ra từ phiếu nguồn bị huỷ / từ chối hẳn. */
+/** Quyết định R6 cho một khoản vay gắn với phiếu nguồn bị huỷ / từ chối hẳn. */
 export type SourceFinalDecision = 'cancel' | 'unlink' | 'alert' | 'none';
 
+/** Nguồn gán của liên kết (`Thủ công` = người dùng chọn trên phiếu; `Tự động` = quy tắc tạo). */
+export type SourceLinkOrigin = 'automation' | 'manual';
+
 /**
+ * Quyết định R6 cho MỘT khoản vay gắn với phiếu nguồn đã huỷ / từ chối hẳn (v2 §11.3 R6, §11.5, §14.3 (6)):
+ * - không do phiếu này sinh ra, chỉ gắn bằng liên kết THỦ CÔNG (người dùng chọn trên phiếu) ⇒ chỉ GỠ liên kết: phiếu
+ *   đã huỷ / từ chối thì liên kết không còn hiệu lực. Khoản vay KHÔNG bị huỷ và KHÔNG cảnh báo (R6 chỉ xử lý đối tượng
+ *   tự sinh), dù khoản đã có tiền hay chưa;
+ * - không liên kết và không do phiếu sinh ra ⇒ không làm gì (không thuộc phạm vi phiếu này);
  * - đã huỷ rồi ⇒ không làm gì;
- * - chưa giải ngân (chờ giải ngân): khoản do quy tắc sinh ⇒ HUỶ khoản vay; khoản tạo tay ⇒ chỉ GỠ liên kết
- *   (khoản vay vẫn còn, dùng cho phiếu khác được);
- * - đã có tiền về ⇒ chỉ CẢNH BÁO KTT, không tự huỷ (§11.5, §14.3 (6)).
+ * - đã có tiền về ⇒ chỉ CẢNH BÁO KTT, không tự huỷ, giữ liên kết để người dùng quyết định (§11.5, §14.3 (6));
+ * - chưa có tiền, do phiếu sinh ra hoặc gắn bằng liên kết tự động ⇒ HUỶ khoản vay.
  */
-export function decideOnSourceFinal(input: { loanStatus: string | null; origin: 'automation' | 'manual'; disbursedAt?: Date | string | null }): SourceFinalDecision {
+export function decideOnSourceFinal(input: {
+  loanStatus: string | null;
+  /** khoản do CHÍNH phiếu nguồn sinh ra (quy tắc tự động, `origin.source_document_id` trỏ tới phiếu này) */
+  generated: boolean;
+  /** nguồn của liên kết hiệu lực từ phiếu nguồn tới khoản vay; null nếu không có liên kết */
+  linkOrigin: SourceLinkOrigin | null;
+  disbursedAt?: Date | string | null;
+}): SourceFinalDecision {
+  if (!input.generated && input.linkOrigin === null) return 'none';
+  if (!input.generated && input.linkOrigin === 'manual') return 'unlink';
   if (input.loanStatus === 'cancelled') return 'none';
   if (moneyMoved({ status: input.loanStatus, disbursed_at: input.disbursedAt ?? null })) return 'alert';
-  if (input.loanStatus === 'pending_disbursement') return input.origin === 'automation' ? 'cancel' : 'unlink';
+  if (input.loanStatus === 'pending_disbursement') return 'cancel';
   return 'none';
 }
 

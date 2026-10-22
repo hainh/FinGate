@@ -176,6 +176,29 @@ export function planToStoredLoan(plan: LoanPlan | null): Record<string, unknown>
  *    (không do lựa chọn này tạo ra) giữ nguyên.
  * Khoản "vay mới" do R2 (quy tắc tự động) tạo và đồng bộ như trước.
  */
+/** Khoản có sẵn đang được chọn trên kế hoạch vay (null nếu không phải "vay — gắn khoản có sẵn"). */
+function existingLoanIdOf(plan: LoanPlan | null | undefined): string | null {
+  return plan?.kind === 'borrow' && plan.mode === 'existing' ? plan.existing_loan_id : null;
+}
+
+/**
+ * Liên kết giải ngân mà lần lưu đổi lựa chọn khoản vay từ `previous` sang `next` sẽ GỠ (v2 §11.4 (b)):
+ *  - chọn khoản có sẵn khác ⇒ gỡ mọi giải ngân tới khoản khác;
+ *  - không chọn nữa ⇒ chỉ gỡ liên kết Thủ công tới khoản đã chọn trước đó.
+ * Dùng chung cho việc gỡ thật (`linkChosenLoanOnSave`) và kiểm đổi đối tác (PATCH /documents/:id): liên kết sắp được gỡ
+ * không được coi là "liên kết tới đối tác khác" (FG-LINK-001) — đổi đối tác + chọn khoản của ngân hàng mới trong MỘT lần lưu.
+ */
+export function disbursementReleasedByLoanChoice(
+  link: Pick<LinkRecord, 'relation' | 'to_type' | 'to_id' | 'origin'>,
+  previous: LoanPlan | null | undefined,
+  next: LoanPlan | null | undefined,
+): boolean {
+  if (link.relation !== 'disbursement' || link.to_type !== 'bank_debt') return false;
+  const nextLoanId = existingLoanIdOf(next);
+  if (link.to_id === nextLoanId) return false;
+  return nextLoanId !== null || (link.origin === 'manual' && link.to_id === existingLoanIdOf(previous));
+}
+
 export async function linkChosenLoanOnSave(input: {
   documentId: string;
   /** kế hoạch đã lưu TRƯỚC lần lưu này (null khi lập mới). */
@@ -185,14 +208,10 @@ export async function linkChosenLoanOnSave(input: {
   actor: LinkActor;
   requestId: string | null;
 }): Promise<void> {
-  const nextLoanId = input.plan?.kind === 'borrow' && input.plan.mode === 'existing' ? input.plan.existing_loan_id : null;
-  const prevLoanId = input.previous?.kind === 'borrow' && input.previous.mode === 'existing' ? input.previous.existing_loan_id : null;
+  const nextLoanId = existingLoanIdOf(input.plan);
   for (const link of await listLinksFor('document', input.documentId, { scopeCompanyIds: null })) {
-    if (link.relation !== 'disbursement' || link.from_type !== 'document' || link.from_id !== input.documentId) continue;
-    if (link.to_type !== 'bank_debt' || link.to_id === nextLoanId) continue;
-    // chọn khoản có sẵn khác ⇒ gỡ mọi giải ngân tới khoản khác; không chọn nữa ⇒ chỉ gỡ liên kết Thủ công do lựa chọn cũ tạo
-    const released = nextLoanId !== null || (link.origin === 'manual' && link.to_id === prevLoanId);
-    if (!released) continue;
+    if (link.from_type !== 'document' || link.from_id !== input.documentId) continue;
+    if (!disbursementReleasedByLoanChoice(link, input.previous, input.plan)) continue;
     await removeLink({
       link_id: link._id,
       reason: nextLoanId ? 'Phiếu thu đổi khoản vay giải ngân' : 'Phiếu thu không còn gắn khoản vay có sẵn',

@@ -13,7 +13,6 @@ import { randomUUID } from 'node:crypto';
 import type { Page } from '@playwright/test';
 import { test, expect, uniq, type Role } from './fixtures';
 import {
-  actOnDocument,
   addMonthsIso,
   api,
   borrowCheckbox,
@@ -32,7 +31,6 @@ import {
   getLoan,
   loansOf,
   pickLoanMode,
-  pickPartner,
   pickSelect,
   roleForStatus,
   runsOfDocument,
@@ -57,13 +55,13 @@ test.afterEach(() => {
 
 /* ============================== nền tảng chung ============================== */
 
-/** Đăng nhập theo vai trò; thử lại khi máy chủ đang khởi động lại (502/503) do bản sửa khác. */
+/** Đăng nhập theo vai trò; thử lại khi máy chủ đang khởi động lại (502/503) do bản sửa khác, hoặc khi hết giờ chờ (máy chủ bận). */
 async function loginRetry(as: (r: Role) => Promise<Page>, role: Role): Promise<Page> {
   for (let i = 0; ; i++) {
     try {
       return await as(role);
     } catch (e) {
-      if (i >= 3 || !/50[23]|ECONNRESET|ECONNREFUSED/.test(String(e))) throw e;
+      if (i >= 3 || !/50[23]|ECONNRESET|ECONNREFUSED|Timeout/.test(String(e))) throw e;
       await new Promise((r) => setTimeout(r, 6000));
     }
   }
@@ -76,7 +74,7 @@ async function setScopeRetry(page: Page, cta: string): Promise<void> {
       await setDefaultScope(page, cta);
       return;
     } catch (e) {
-      if (i >= 3 || !/50[23]|ECONNRESET|ECONNREFUSED/.test(String(e))) throw e;
+      if (i >= 3 || !/50[23]|ECONNRESET|ECONNREFUSED|Timeout/.test(String(e))) throw e;
       await new Promise((r) => setTimeout(r, 6000));
     }
   }
@@ -124,7 +122,7 @@ async function openNewReceipt(page: Page): Promise<void> {
 /** Điền các ô chung của phiếu thu (nội dung, bên nộp tiền, số tiền, tài khoản đích). */
 async function fillReceiptBase(page: Page, o: { purpose: string; partner: string; amount: string }): Promise<void> {
   await fieldOf(page, /^Nội dung \/ mục đích/).locator('textarea').fill(o.purpose);
-  await pickPartner(page, /^Bên nộp tiền/, o.partner);
+  await pickPartnerPatient(page, /^Bên nộp tiền/, o.partner);
   await fillAmount(page, o.amount);
   await pickSelect(page, /^Tài khoản đích/, null, /Cty A/);
 }
@@ -146,6 +144,41 @@ async function saveEdit(page: Page): Promise<string> {
   await page.getByRole('button', { name: 'Lưu thay đổi', exact: true }).click();
   await page.waitForURL(/\/ho-so\/thu\/[0-9a-f]{24}$/, { timeout: 30_000 });
   return docIdFromUrl(page.url());
+}
+
+/**
+ * Như `pickPartner` của tiện ích, nhưng chờ kết quả tìm lâu hơn (15 s → 45 s): khi nhiều bộ test chạy song song,
+ * máy chủ có lúc phản hồi chậm ~15 s (đã ghi nhận trong lượt chạy R2-12), làm dòng gợi ý không hiện kịp.
+ */
+async function pickPartnerPatient(page: Page, label: RegExp, name: string): Promise<void> {
+  const field = fieldOf(page, label);
+  await field.locator('.ant-select').first().click();
+  await field.locator('input[role="combobox"]').first().fill(name);
+  const opt = page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: name }).first();
+  await expect(opt).toBeVisible({ timeout: 45_000 });
+  await opt.click();
+  // khi đã chọn, nút "Sửa đối tác" xuất hiện
+  await expect(field.getByRole('button', { name: 'Sửa đối tác' })).toBeVisible({ timeout: 15_000 });
+}
+
+/**
+ * Như `actOnDocument` của tiện ích, nhưng chờ hộp thoại đóng tới 60 s: lệnh duyệt/huỷ có thể mất > 20 s khi máy chủ bận
+ * (đã ghi nhận: lệnh duyệt của KTT xong sau ~25 s, phiếu chuyển đúng trạng thái, chỉ hộp thoại đóng muộn hơn 20 s).
+ */
+async function actOnDocumentPatient(page: Page, bar: RegExp, confirm: RegExp, opinion?: string): Promise<void> {
+  const toolbar = page.getByRole('toolbar', { name: 'Hành động phê duyệt' });
+  await expect(toolbar.getByRole('button', { name: bar }).first()).toBeVisible({ timeout: 20_000 });
+  await toolbar.getByRole('button', { name: bar }).first().click();
+  const modal = page.locator('.ant-modal:visible').last();
+  await expect(modal).toBeVisible({ timeout: 15_000 });
+  if (opinion) await modal.locator('textarea').first().fill(opinion);
+  await modal.getByRole('button', { name: confirm }).click();
+  try {
+    await expect(page.locator('.ant-modal:visible')).toHaveCount(0, { timeout: 60_000 });
+  } catch {
+    const texts = await page.locator('.ant-modal:visible').allInnerTexts();
+    throw new Error(`Hộp thoại không đóng sau khi xác nhận "${String(confirm)}": ${texts.join(' | ').replace(/\s+/g, ' ').slice(0, 700)}`);
+  }
 }
 
 /** Tạo phiếu thu đi vay (mode "Tạo khoản vay mới") và trả về mã hồ sơ. */
@@ -235,7 +268,7 @@ test('R2-02 form phiếu thu: đi vay chỉ chọn được Ngân hàng; đối 
   await openNewReceipt(page);
   // chờ tải xong thông tin đối tác đã chọn (form kiểm loại đối tác theo dữ liệu đã tải)
   const partnerLoaded = page.waitForResponse((r) => r.url().includes(`/partners/${customer._id}`) && r.request().method() === 'GET', { timeout: 20_000 });
-  await pickPartner(page, /^Bên nộp tiền/, customer.name);
+  await pickPartnerPatient(page, /^Bên nộp tiền/, customer.name);
   await partnerLoaded;
   await borrowCheckbox(page).check();
 
@@ -265,7 +298,7 @@ test('R2-03 form phiếu thu: báo lỗi khi đi vay thiếu đối tác, hoặc
   await expect(page).toHaveURL(/\/thu\/moi/);
 
   // (b) chọn bên nộp tiền là ngân hàng, chế độ "Gắn khoản vay đã có" nhưng chưa chọn khoản ⇒ lỗi, không lưu
-  await pickPartner(page, /^Bên nộp tiền/, bank.name);
+  await pickPartnerPatient(page, /^Bên nộp tiền/, bank.name);
   await pickLoanMode(page, 'Gắn khoản vay đã có');
   await page.getByRole('button', { name: 'Lưu nháp', exact: true }).click();
   await expect(page.locator('[role="alert"]').filter({ hasText: /^Chọn khoản vay đã có$/ }).first()).toBeVisible({ timeout: 10_000 });
@@ -422,12 +455,12 @@ test('R2-15 KTT duyệt phiếu đi vay bằng nút trên hồ sơ (giao diện)
   await eventually('khoản vay R2 chờ giải ngân', async () => autoLoansOf(await loansOf(staff, bank._id, cta))[0], (l) => !!l);
   await staff.goto(docPath('thu', docId));
   await expectPageNotBroken(staff, 'hồ sơ phiếu đi vay (người lập) không vỡ trước khi gửi duyệt');
-  await actOnDocument(staff, /^Gửi duyệt$/, /^Gửi duyệt$/);
+  await actOnDocumentPatient(staff, /^Gửi duyệt$/, /^Gửi duyệt$/);
   await eventually('phiếu chờ KTT', () => getDocument(staff, docId, cta), (d) => d.status === 'pending.ktt');
 
   await chief.goto(docPath('thu', docId));
   await expectPageNotBroken(chief, 'hồ sơ phiếu đi vay hiển thị cho KTT (không vỡ)');
-  await actOnDocument(chief, /^Duyệt khoản/, /^Duyệt khoản/);
+  await actOnDocumentPatient(chief, /^Duyệt khoản/, /^Duyệt khoản/);
   await eventually('phiếu rời KTT', () => getDocument(staff, docId, cta), (d) => d.status !== 'pending.ktt');
 });
 
@@ -475,6 +508,8 @@ test('R2-08 "Gắn khoản vay đã có": phiếu gắn vào khoản đã có, k
   const unchanged = await getLoan(page, manual._id, cta);
   expect(unchanged.status).toBe('active');
   expect(String(unchanged.principal?.minor)).toBe('200000000');
+  // khoản đang vay (đã giải ngân khi tạo): gắn một phiếu CHƯA thực thi không được làm "Đã giải ngân" về 0
+  expect.soft(String(unchanged.disbursed?.minor), '"Đã giải ngân" của khoản đang vay giữ 200 triệu khi gắn phiếu chưa thực thi').toBe('200000000');
   // v2 §11.2: liên kết do người dùng chọn "Gắn khoản vay đã có" là gán THỦ CÔNG (nguồn Thủ công, không mang mã quy tắc R2)
   const chosen = disbursementLinkTo(doc, manual._id);
   expect.soft(chosen?.origin, 'nguồn liên kết người dùng chọn = Thủ công (manual)').toBe('manual');
@@ -615,7 +650,7 @@ test('R2-13 phiếu nháp có nút "Hủy hồ sơ" trên giao diện (v2 §7.1:
   await expect(toolbar.getByRole('button', { name: /^(Hủy hồ sơ|Huỷ hồ sơ|Hủy|Huỷ)$/ }), 'nút huỷ hồ sơ nháp').toBeVisible({ timeout: 5_000 });
 
   // bấm "Hủy hồ sơ" → hộp thoại (lý do tối thiểu 5 ký tự) → xác nhận ⇒ phiếu Đã huỷ (v2 §7.1: Nháp → Huỷ)
-  await actOnDocument(staff, /^Hủy hồ sơ$/, /^Hủy hồ sơ$/, 'Huỷ phiếu nháp để kiểm thử nút Hủy hồ sơ');
+  await actOnDocumentPatient(staff, /^Hủy hồ sơ$/, /^Hủy hồ sơ$/, 'Huỷ phiếu nháp để kiểm thử nút Hủy hồ sơ');
   await eventually('phiếu nháp đã huỷ bằng nút Hủy hồ sơ', () => getDocument(staff, docId, cta), (d) => d.status === 'cancelled');
 });
 
@@ -628,7 +663,7 @@ test('R2-18 huỷ phiếu nháp đi vay bằng nút "Hủy hồ sơ" (giao diệ
 
   await staff.goto(docPath('thu', docId));
   await expectPageNotBroken(staff, 'hồ sơ phiếu đi vay nháp không vỡ trước khi huỷ');
-  await actOnDocument(staff, /^Hủy hồ sơ$/, /^Hủy hồ sơ$/, 'Huỷ phiếu nháp đi vay để kiểm thử R6 qua giao diện');
+  await actOnDocumentPatient(staff, /^Hủy hồ sơ$/, /^Hủy hồ sơ$/, 'Huỷ phiếu nháp đi vay để kiểm thử R6 qua giao diện');
   await eventually('phiếu nháp đã huỷ (giao diện)', () => getDocument(staff, docId, cta), (d) => d.status === 'cancelled');
   await eventually('khoản vay Đã huỷ sau khi huỷ phiếu nháp (giao diện)', () => getLoan(staff, loan0._id, cta), (l) => l.status === 'cancelled');
   await eventually('lượt R6 hoàn tất (giao diện)', () => runsOfDocument(staff, docId, cta), (rs) => rs.some((r) => r.rule_code === 'R6' && r.status === 'done'));
@@ -647,6 +682,9 @@ test('R2-14 khoản vay tự tạo hiện trong danh sách Nợ ngân hàng vớ
   const loan0 = await eventually('khoản vay R2', async () => autoLoansOf(await loansOf(page, bank._id, cta))[0], (l) => !!l);
 
   await page.goto('/ngan-hang/khoan-vay');
+  // danh sách sắp theo hạn thanh toán và chỉ tải 50 khoản một trang (nhiều khoản của các ca khác) ⇒ khoản vừa tạo có thể
+  // không nằm ở trang đầu: lọc theo mã khoản bằng ô tìm (phía máy chủ) rồi mới kiểm dòng
+  await page.getByPlaceholder('Tìm theo mã hoặc tên ngân hàng').fill(loan0.code);
   const row = page.locator('.ant-table-row').filter({ hasText: loan0.code }).first();
   await expect(row).toBeVisible({ timeout: 20_000 });
   await expect(row).toContainText('Tự động · R2');
@@ -875,8 +913,8 @@ test('R2-20 sửa phiếu "Gắn khoản vay đã có" → "Tạo khoản vay m�
 
   const fresh = await eventually('khoản vay R2 mới sau khi đổi sang vay mới', async () => autoLoansOf(await loansOf(page, bank._id, cta))[0], (l) => !!l);
   expect(fresh.status, 'khoản vay mới chờ giải ngân').toBe('pending_disbursement');
-  await page.waitForTimeout(4000);
-  const d = await getDocument(page, docId, cta);
+  // liên kết giải ngân tới khoản mới do bước "link" của cùng lượt tạo, SAU khi khoản đã được tạo (vài giây): chờ tới khi có
+  const d = await eventually('liên kết giải ngân tự sinh tới khoản vay mới', () => getDocument(page, docId, cta), (x) => !!disbursementLinkTo(x, fresh._id));
   expect.soft(disbursementLinkTo(d, manual._id), 'liên kết Thủ công tới khoản cũ đã được gỡ khi đổi sang vay mới').toBeUndefined();
   expect.soft(disbursementLinkTo(d, fresh._id)?.origin, 'liên kết tới khoản vay mới = Tự động').toBe('automation');
   expect.soft(activeDisbursementsOf(d).map((l: any) => l.counterpart?.id), 'chỉ giải ngân tới khoản vay mới (phiếu 50 triệu không phân bổ hai lần)').toEqual([fresh._id]);
@@ -1177,6 +1215,14 @@ test('R2-40 mở màn sửa phiếu thu ngoài phạm vi (GET hồ sơ 403): hi�
   await page.goto(`/thu/${docId}/sua`);
   await expect(page.getByText('Bạn không có quyền xem mục này'), 'màn sửa báo không có quyền xem hồ sơ (không hiện form trống)').toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole('button', { name: 'Lưu thay đổi', exact: true }), 'không có nút "Lưu thay đổi" trên form trống').toHaveCount(0);
+  // ERR-01: trạng thái không có quyền KHÔNG có nút (không "Hủy"), không có ô nhập, không có banner "Phiếu mới — chưa gửi duyệt"
+  await expect(page.getByRole('button', { name: 'Hủy', exact: true }), 'trạng thái không có quyền không có nút "Hủy"').toHaveCount(0);
+  await expect(page.getByLabel('Số tiền', { exact: true }), 'không có ô "Số tiền" (form trống không được hiện)').toHaveCount(0);
+  await expect(page.getByText('Phiếu mới — chưa gửi duyệt'), 'không hiện banner "Phiếu mới — chưa gửi duyệt"').toHaveCount(0);
+  // đối chiếu: màn chi tiết cùng phiếu báo cùng thông báo không có quyền
+  await page.goto(docPath('thu', docId));
+  await expectPageNotBroken(page, 'màn chi tiết phiếu ngoài phạm vi không vỡ');
+  await expect(page.getByText('Bạn không có quyền xem mục này'), 'màn chi tiết cùng phiếu báo cùng thông báo không có quyền').toBeVisible({ timeout: 20_000 });
 });
 
 test('R2-34 lượt R2 lỗi vì xung đột sức chứa: gỡ liên kết gây xung đột rồi "Chạy lại" (KTT) ⇒ nối vào khoản đã tạo, không tạo trùng (US-AUTO-05)', async ({ as }) => {
@@ -1560,7 +1606,7 @@ test('R2-36 lượt R2 bị bỏ dở (tiến trình trước dừng giữa ch�
 });
 
 test('R2-37 lượt R2 bị gián đoạn (lượt còn "Đang chạy" quá lease, sự kiện đã xử lý) ⇒ bộ máy đánh dấu "Lỗi"; KTT bấm "Chạy lại" trên hồ sơ ⇒ khoản vay tạo đúng một lần (US-AUTO-05)', async ({ as }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(360_000);
   const { page: staff, cta } = await staffPage(as);
   const chief = await approverPage(as, 'chief', cta);
   const bank = await createPartner(staff, cta, 'bank', uniq('NH R2 chạy lại'));
@@ -1586,7 +1632,9 @@ test('R2-37 lượt R2 bị gián đoạn (lượt còn "Đang chạy" quá leas
   );
 
   // (3) bộ máy đánh dấu lượt "Lỗi" và KHÔNG tự tạo khoản vay; KTT thấy "Lỗi — cần chạy lại" trên hồ sơ
-  await eventually('lượt R2 bị gián đoạn được đánh dấu Lỗi', () => runsOfDocument(staff, docId, cta), (rs) => rs.some((r) => String(r._id) === sim.runId && r.status === 'failed'), 60_000);
+  // bộ máy quét lượt treo chỉ khi hàng sự kiện rảnh (engine: sweepStaleRuns trong processPendingEvents khi events = 0),
+  // nên dưới tải song song có thể chậm hơn 60 s (đã quan sát ~97 s): chờ tới 180 s
+  await eventually('lượt R2 bị gián đoạn được đánh dấu Lỗi', () => runsOfDocument(staff, docId, cta), (rs) => rs.some((r) => String(r._id) === sim.runId && r.status === 'failed'), 180_000);
   expect(autoLoansOf(await loansOf(staff, bank._id, cta)), 'lượt lỗi: chưa tự tạo khoản vay').toHaveLength(0);
   await chief.goto(docPath('thu', docId));
   await expectPageNotBroken(chief, 'hồ sơ phiếu có lượt R2 lỗi không vỡ (KTT)');
@@ -1601,4 +1649,371 @@ test('R2-37 lượt R2 bị gián đoạn (lượt còn "Đang chạy" quá leas
   expect(autoLoansOf(await loansOf(staff, bank._id, cta)), 'chạy lại không tạo khoản vay thứ hai').toHaveLength(1);
   await eventually('lượt R2 đã xong sau khi chạy lại', () => runsOfDocument(staff, docId, cta), (rs) => rs.some((r) => String(r._id) === sim.runId && r.status === 'done'), 30_000);
   await expect(chief.getByText(new RegExp(`${loan.code} \\(chờ giải ngân\\)`)).first(), 'panel hiện khoản vay đã tạo sau khi chạy lại').toBeVisible({ timeout: 20_000 });
+});
+
+/* ============================== 11. vòng 4 (bổ sung): đồng bộ điều khoản trả nợ; yêu cầu bổ sung; gửi duyệt ngay ============================== */
+
+/** Tóm tắt các lượt R2 của phiếu (đưa vào thông báo khi việc đồng bộ không xảy ra, để biết bộ máy đã chạy hay chưa). */
+async function r2RunSummary(page: Page, docId: string, cta: string): Promise<string> {
+  const runs = (await runsOfDocument(page, docId, cta)).filter((r: any) => r.rule_code === 'R2');
+  return JSON.stringify(
+    runs.map((r: any) => ({ status: r.status, event: r.event_type, steps: (r.steps ?? []).map((s: any) => `${s.name}:${s.status}`) })),
+  ).slice(0, 600);
+}
+
+test('R2-41 sửa chỉ "Phương thức trả nợ gốc" trước duyệt: khoản vay chờ giải ngân đồng bộ phương thức trả nợ (v2 §11.4: sửa phiếu ⇒ thông tin khoản vay đồng bộ theo)', async ({ as }) => {
+  test.setTimeout(180_000);
+  const { page, cta } = await staffPage(as);
+  const bank = await createPartner(page, cta, 'bank', uniq('NH R2 đồng bộ PTN'));
+  await openNewReceipt(page);
+  await fillReceiptBase(page, { purpose: uniq('Đồng bộ phương thức'), partner: bank.name, amount: '50000000' });
+  await borrowCheckbox(page).check();
+  await pickSelect(page, /^Kỳ trả lãi \/ gốc/, 'Hàng tháng');
+  await pickSelect(page, /^Phương thức trả nợ gốc/, 'Chỉ trả lãi, gốc cuối kỳ');
+  const docId = await saveDraft(page);
+  const loan0 = await eventually('khoản vay R2 chờ giải ngân', async () => autoLoansOf(await loansOf(page, bank._id, cta))[0], (l) => !!l);
+  const first = await getLoan(page, loan0._id, cta);
+  expect({ freq: first.payment_frequency, method: first.repayment_method }, 'điều khoản trả nợ lúc lập phiếu').toEqual({ freq: 'monthly', method: 'interest_only' });
+
+  // sửa CHỈ phương thức trả nợ gốc; số tiền và các điều khoản khác giữ nguyên
+  await openReceiptEdit(page, docId, '50.000.000');
+  await pickSelect(page, /^Phương thức trả nợ gốc/, 'Chia đều gốc');
+  await saveEdit(page);
+  expect((await getDocument(page, docId, cta)).options?.loan?.terms?.repayment_method, 'phiếu lưu phương thức mới').toBe('equal_principal');
+  const synced = await eventually(
+    'khoản vay đồng bộ phương thức trả nợ gốc sau khi sửa phiếu',
+    () => getLoan(page, loan0._id, cta),
+    (l) => l.repayment_method === 'equal_principal',
+    30_000,
+  ).catch(async (e: Error) => {
+    throw new Error(`${e.message} · lượt R2 của phiếu: ${await r2RunSummary(page, docId, cta)}`);
+  });
+  expect(synced.payment_frequency, 'kỳ trả lãi/gốc không đổi khi chỉ sửa phương thức').toBe('monthly');
+  expect(String(synced.principal?.minor), 'gốc không đổi').toBe('50000000');
+  expect.soft((synced.history ?? []).some((h: any) => h.action === 'auto_sync'), 'lịch sử khoản vay ghi mục đồng bộ (auto_sync) khi sửa phiếu — v2 §11.2').toBeTruthy();
+});
+
+test('R2-42 sửa chỉ "Kỳ trả lãi / gốc" trước duyệt: khoản vay chờ giải ngân đồng bộ kỳ trả (v2 §11.4: sửa phiếu ⇒ thông tin khoản vay đồng bộ theo)', async ({ as }) => {
+  test.setTimeout(180_000);
+  const { page, cta } = await staffPage(as);
+  const bank = await createPartner(page, cta, 'bank', uniq('NH R2 đồng bộ kỳ trả'));
+  await openNewReceipt(page);
+  await fillReceiptBase(page, { purpose: uniq('Đồng bộ kỳ trả'), partner: bank.name, amount: '40000000' });
+  await borrowCheckbox(page).check();
+  await pickSelect(page, /^Kỳ trả lãi \/ gốc/, 'Hàng tháng');
+  await pickSelect(page, /^Phương thức trả nợ gốc/, 'Chỉ trả lãi, gốc cuối kỳ');
+  const docId = await saveDraft(page);
+  const loan0 = await eventually('khoản vay R2 chờ giải ngân', async () => autoLoansOf(await loansOf(page, bank._id, cta))[0], (l) => !!l);
+
+  // sửa CHỈ kỳ trả lãi/gốc (hàng tháng ⇒ hàng quý)
+  await openReceiptEdit(page, docId, '40.000.000');
+  await pickSelect(page, /^Kỳ trả lãi \/ gốc/, 'Hàng quý');
+  await saveEdit(page);
+  const synced = await eventually(
+    'khoản vay đồng bộ kỳ trả lãi/gốc sau khi sửa phiếu',
+    () => getLoan(page, loan0._id, cta),
+    (l) => l.payment_frequency === 'quarterly',
+    30_000,
+  ).catch(async (e: Error) => {
+    throw new Error(`${e.message} · lượt R2 của phiếu: ${await r2RunSummary(page, docId, cta)}`);
+  });
+  expect(synced.repayment_method, 'phương thức trả nợ gốc không đổi khi chỉ sửa kỳ trả').toBe('interest_only');
+  expect.soft((synced.history ?? []).some((h: any) => h.action === 'auto_sync'), 'lịch sử khoản vay ghi mục đồng bộ (auto_sync) khi sửa phiếu — v2 §11.2').toBeTruthy();
+});
+
+test('R2-43 KTT yêu cầu bổ sung phiếu đi vay: khoản vay vẫn Chờ giải ngân (không huỷ, không lượt R6); bổ sung sửa gốc thì khoản vay đồng bộ', async ({ as }) => {
+  test.setTimeout(200_000);
+  const { page: staff, cta } = await staffPage(as);
+  const chief = await approverPage(as, 'chief', cta);
+  const bank = await createPartner(staff, cta, 'bank', uniq('NH R2 yêu cầu bổ sung'));
+  const docId = await createBorrowReceipt(staff, bank, { amount: '33000000' });
+  const loan0 = await eventually('khoản vay R2 chờ giải ngân', async () => autoLoansOf(await loansOf(staff, bank._id, cta))[0], (l) => !!l);
+
+  const sub = await getDocument(staff, docId, cta);
+  const s = await api(staff, 'POST', `/documents/${docId}/transition`, { data: { action: 'submit', if_match: sub.version }, scope: cta });
+  expect(s.ok, `gửi duyệt: ${s.text.slice(0, 300)}`).toBeTruthy();
+  const cur = await getDocument(staff, docId, cta);
+  const rc = await api(chief, 'POST', `/documents/${docId}/transition`, {
+    data: { action: 'request_changes', if_match: cur.version, reason: 'Bổ sung chứng từ để kiểm thử R2-43', opinion: 'Bổ sung chứng từ để kiểm thử R2-43' },
+    scope: cta,
+  });
+  expect(rc.ok, `KTT yêu cầu bổ sung: ${rc.text.slice(0, 300)}`).toBeTruthy();
+  await eventually('phiếu đang yêu cầu bổ sung', () => getDocument(staff, docId, cta), (d) => d.status === 'changes_requested');
+  await new Promise((r) => setTimeout(r, 4000)); // để bộ máy xử lý sự kiện yêu cầu bổ sung
+  expect((await getLoan(staff, loan0._id, cta)).status, 'yêu cầu bổ sung: khoản vay vẫn Chờ giải ngân').toBe('pending_disbursement');
+  expect((await runsOfDocument(staff, docId, cta)).filter((r: any) => r.rule_code === 'R6'), 'yêu cầu bổ sung không kích hoạt R6').toHaveLength(0);
+
+  // bổ sung: sửa gốc 33 → 40 triệu khi phiếu đang yêu cầu bổ sung ⇒ khoản vay chờ giải ngân đồng bộ gốc
+  await openReceiptEdit(staff, docId, '33.000.000');
+  await fillAmount(staff, '40000000');
+  await saveEdit(staff);
+  const synced = await eventually('gốc khoản vay đồng bộ sau khi bổ sung', () => getLoan(staff, loan0._id, cta), (l) => String(l.principal?.minor) === '40000000');
+  expect(synced.status, 'vẫn chờ giải ngân sau khi bổ sung').toBe('pending_disbursement');
+});
+
+/** Tài khoản ngân hàng đang hoạt động của một công ty (nguồn tiền của phiếu; gửi duyệt cần TK nguồn — FG-WF-008). */
+async function activeBankAccountOf(page: Page, companyId: string): Promise<string> {
+  const r = await api<any>(page, 'GET', `/bank-accounts?for_company=${companyId}`, { scope: companyId });
+  const list: any[] = Array.isArray(r.data) ? r.data : (r.data?.items ?? []);
+  const acct = list.find((a) => a.kind === 'bank' && a.status === 'active' && !a.is_group && String(a.company_id) === companyId);
+  if (!acct) throw new Error(`Không có tài khoản ngân hàng đang hoạt động của công ty: ${r.text.slice(0, 200)}`);
+  return String(acct._id ?? acct.id);
+}
+
+test('R2-48 cấu hình "Tạo khoản vay khi: Khi phiếu đạt Đã duyệt" (MAYOGU): không tạo khoản khi lưu và khi KTT duyệt; khi duyệt cuối khoản vay được tạo và phiếu tự thực thi ⇒ Đang vay', async ({ as }) => {
+  test.setTimeout(300_000);
+  const chairman = await loginRetry(as, 'chairman');
+  const mayogu = await companyIdAll(chairman, 'MAYOGU');
+  const before = (await r2RuleOf(chairman)).company_overrides;
+  try {
+    // đặt R2 ở MAYOGU: tạo khoản vay khi phiếu đạt Đã duyệt (ghi đè chỉ cho MAYOGU; khôi phục trong finally)
+    await putR2Overrides(chairman, [...before.filter((o) => String(o.company_id) !== mayogu), { company_id: mayogu, enabled: true, params: { r2_create_at: 'approve' } }]);
+
+    const staff = await loginRetry(as, 'staff');
+    watchErrors(staff, pageErrors);
+    await setScopeRetry(staff, mayogu);
+    const bank = await createPartner(staff, mayogu, 'bank', uniq('NH R2 tạo khi duyệt'));
+    const accountId = await activeBankAccountOf(staff, mayogu);
+    const created = await api(staff, 'POST', '/documents', {
+      data: {
+        kind: 'income',
+        company_id: mayogu,
+        title: uniq('Thu tạo khi duyệt R2'),
+        purpose: uniq('Thu tạo khi duyệt R2 mục đích'),
+        partner_id: bank._id,
+        amount: { amount_minor: '40000000', currency: 'VND' },
+        source: { fund: 'bank', account_id: accountId, group_managed: false },
+        planned_date: `${todayIsoVn()}T23:59`,
+        priority: 'normal',
+        category_id: null,
+        budget: { budget_id: null, line_id: null, in_plan: true },
+        contract: {},
+        tag_ids: [],
+        options: { loan: { kind: 'borrow', mode: 'new', lender_partner_id: bank._id, receive_account_id: null, amount_minor: null, existing_loan_id: null, terms: null } },
+        transfer_target: null,
+      },
+      scope: mayogu,
+    });
+    expect(created.ok, `tạo phiếu thu đi vay ở MAYOGU (API): ${created.text.slice(0, 300)}`).toBeTruthy();
+    const docId = String(created.data?._id);
+
+    // (1) lưu nháp: chưa tạo khoản vay (tạo khi duyệt)
+    await new Promise((r) => setTimeout(r, 4000));
+    expect(autoLoansOf(await loansOf(staff, bank._id, mayogu)), 'tạo khi duyệt: không có khoản vay khi lưu phiếu').toHaveLength(0);
+
+    // (2) gửi duyệt, KTT duyệt (chưa đạt Đã duyệt): vẫn chưa có khoản vay
+    const sub = await getDocument(staff, docId, mayogu);
+    const s = await api(staff, 'POST', `/documents/${docId}/transition`, { data: { action: 'submit', if_match: sub.version }, scope: mayogu });
+    expect(s.ok, `gửi duyệt (MAYOGU): ${s.text.slice(0, 300)}`).toBeTruthy();
+    const chief = await approverPage(as, 'chief', mayogu);
+    const k = await getDocument(staff, docId, mayogu);
+    const ka = await api(chief, 'POST', `/documents/${docId}/transition`, { data: { action: 'approve', if_match: k.version }, scope: mayogu });
+    expect(ka.ok, `KTT duyệt (MAYOGU): ${ka.text.slice(0, 300)}`).toBeTruthy();
+    const mid = await getDocument(staff, docId, mayogu);
+    expect(mid.status, 'sau KTT duyệt phiếu chưa đạt Đã duyệt').not.toBe('paid');
+    await new Promise((r) => setTimeout(r, 4000));
+    expect(autoLoansOf(await loansOf(staff, bank._id, mayogu)), 'tạo khi duyệt: chưa có khoản vay khi KTT duyệt (chưa đạt Đã duyệt)').toHaveLength(0);
+
+    // (3) duyệt cuối (Chủ tịch): phiếu đạt Đã duyệt, tự thực thi ⇒ khoản vay được tạo rồi thành Đang vay
+    const ct = await approverPage(as, 'chairman', mayogu);
+    const m2 = await getDocument(staff, docId, mayogu);
+    const ca = await api(ct, 'POST', `/documents/${docId}/transition`, { data: { action: 'approve', if_match: m2.version }, scope: mayogu });
+    expect(ca.ok, `Chủ tịch duyệt cuối (MAYOGU): ${ca.text.slice(0, 300)}`).toBeTruthy();
+    const fin = await eventually('phiếu duyệt cuối và tự thực thi', () => getDocument(staff, docId, mayogu), (d) => d.status === 'paid');
+    const loan = await eventually('khoản vay R2 tạo khi đạt Đã duyệt và đang vay', async () => autoLoansOf(await loansOf(staff, bank._id, mayogu))[0], (l) => !!l && l.status === 'active', 45_000);
+    expect(String(loan.principal?.minor), 'gốc = số tiền phiếu').toBe('40000000');
+    expect(String(loan.disbursed_at ?? '').slice(0, 10), 'ngày giải ngân = ngày thực thi').toBe(todayIsoVn());
+    // liên kết được ghi ở lượt "đạt Đã duyệt" (sau khi đọc trạng thái): đọc lại hồ sơ rồi chờ
+    const linked = await eventually('liên kết giải ngân do R2 tạo khi duyệt', () => getDocument(staff, docId, mayogu), (d) => !!disbursementLinkTo(d, loan._id));
+    expect(disbursementLinkTo(linked, loan._id)?.origin, 'liên kết giải ngân do quy trình R2 tạo').toBe('automation');
+    expect(fin.status, 'phiếu đã thực thi').toBe('paid');
+    expect.soft((await failedR2RunsOf(staff, docId, mayogu)).length, 'không có lượt R2 lỗi').toBe(0);
+  } finally {
+    await putR2Overrides(chairman, before);
+    const restored = (await r2RuleOf(chairman)).company_overrides;
+    expect(overrideKeys(restored), 'đã khôi phục ghi đè R2 như trước khi test').toEqual(overrideKeys(before));
+  }
+});
+
+test('R2-44 lập phiếu đi vay bằng "Tạo & gửi duyệt" (tick "Gửi duyệt ngay sau khi tạo"): đúng một khoản vay Chờ giải ngân, liên kết Tự động, phiếu sang chờ duyệt', async ({ as }) => {
+  test.setTimeout(180_000);
+  const { page, cta } = await staffPage(as);
+  const bank = await createPartner(page, cta, 'bank', uniq('NH R2 gửi ngay'));
+  await openNewReceipt(page);
+  await fillReceiptBase(page, { purpose: uniq('Gửi ngay R2'), partner: bank.name, amount: '26000000' });
+  await borrowCheckbox(page).check();
+  await page.locator('label').filter({ hasText: 'Gửi duyệt ngay sau khi tạo' }).locator('input[type="checkbox"]').check();
+  // danh mục bắt buộc khi gửi duyệt (nếu đã cấu hình cho phiếu thu): chọn mục đầu tiên
+  if (await page.locator('label').filter({ hasText: /^Danh mục \*/ }).count()) await pickSelect(page, /^Danh mục/, null);
+  await page.getByRole('button', { name: 'Tạo & gửi duyệt', exact: true }).click();
+  await page.waitForURL(/\/ho-so\/thu\/[0-9a-f]{24}$/, { timeout: 30_000 });
+  const docId = docIdFromUrl(page.url());
+  const sent = await eventually('phiếu đã gửi duyệt (gửi ngay)', () => getDocument(page, docId, cta), (d) => String(d.status).startsWith('pending'));
+  expect(sent.options?.loan?.mode, 'chế độ vay đã lưu = tạo khoản vay mới').toBe('new');
+  const loan = await eventually('khoản vay R2 chờ giải ngân (gửi ngay)', async () => autoLoansOf(await loansOf(page, bank._id, cta))[0], (l) => !!l);
+  expect(loan.status, 'khoản vay chờ giải ngân').toBe('pending_disbursement');
+  const linked = await eventually('liên kết giải ngân tự động (gửi ngay)', () => getDocument(page, docId, cta), (d) => !!disbursementLinkTo(d, loan._id));
+  expect(disbursementLinkTo(linked, loan._id)?.origin, 'liên kết do quy trình R2 tạo').toBe('automation');
+  expect(autoLoansOf(await loansOf(page, bank._id, cta)), 'gửi ngay không tạo khoản vay trùng').toHaveLength(1);
+  expect(activeDisbursementsOf(linked).map((l: any) => String(l.counterpart?.id)), 'chỉ một giải ngân hiệu lực tới khoản vay tự sinh').toEqual([String(loan._id)]);
+});
+
+test('R2-45 sửa phiếu "Gắn khoản vay đã có" sang ngân hàng khác và chọn khoản vay của ngân hàng mới trong cùng một lần lưu: lưu được, liên kết chuyển sang khoản mới (v2 §11.4 (b): khoản phải cùng đối tác ngân hàng)', async ({ as }) => {
+  test.setTimeout(200_000);
+  const { page, cta } = await staffPage(as);
+  const bankA = await createPartner(page, cta, 'bank', uniq('NH R2 đổi NH A'));
+  const bankB = await createPartner(page, cta, 'bank', uniq('NH R2 đổi NH B'));
+  const loanA = await createManualLoan(page, cta, bankA._id, '200000000', '2027-12-31');
+  const loanB = await createManualLoan(page, cta, bankB._id, '200000000', '2027-12-31');
+  const docId = await createExistingLoanReceipt(page, cta, bankA, loanA.code, '50000000');
+  await eventually('liên kết tới khoản của ngân hàng A', () => getDocument(page, docId, cta), (d) => !!disbursementLinkTo(d, loanA._id));
+
+  // đổi bên nộp tiền sang ngân hàng B (form xoá khoản A đã chọn) rồi chọn khoản của B — lưu MỘT lần
+  await openReceiptEdit(page, docId, '50.000.000');
+  await pickPartnerPatient(page, /^Bên nộp tiền/, bankB.name);
+  await pickSelect(page, /^Khoản vay có sẵn/, loanB.code);
+  const saveResponse = page.waitForResponse(
+    (r) => r.request().method() === 'PATCH' && /\/api\/v1\/documents\/[0-9a-f]{24}$/.test(new URL(r.url()).pathname),
+    { timeout: 60_000 },
+  );
+  await page.getByRole('button', { name: 'Lưu thay đổi', exact: true }).click();
+  const res = await saveResponse;
+  const notice = await page.locator('.ant-message-notice').first().innerText({ timeout: 10_000 }).catch(() => '');
+  expect(res.ok(), `đổi sang ngân hàng B và chọn khoản của B phải lưu được (HTTP ${res.status()}): ${notice}`).toBeTruthy();
+  await page.waitForURL(/\/ho-so\/thu\/[0-9a-f]{24}$/, { timeout: 30_000 });
+
+  const d = await eventually('liên kết chuyển sang khoản của ngân hàng B', () => getDocument(page, docId, cta), (x) => !!disbursementLinkTo(x, loanB._id));
+  expect(disbursementLinkTo(d, loanB._id)?.origin, 'liên kết tới khoản của B = Thủ công').toBe('manual');
+  expect(disbursementLinkTo(d, loanA._id), 'liên kết cũ tới khoản của A đã được gỡ khi lưu').toBeUndefined();
+  expect(activeDisbursementsOf(d).map((l: any) => String(l.counterpart?.id)), 'chỉ một giải ngân hiệu lực (tới khoản của B)').toEqual([String(loanB._id)]);
+});
+
+test('R2-46 đường thay thế của R2-45: "Gắn khoản vay đã có" → "Để sau" (lưu), rồi đổi sang ngân hàng B và chọn khoản của B (lưu lần sau): lưu được, liên kết chuyển sang khoản của B', async ({ as }) => {
+  test.setTimeout(200_000);
+  const { page, cta } = await staffPage(as);
+  const bankA = await createPartner(page, cta, 'bank', uniq('NH R2 đường khác A'));
+  const bankB = await createPartner(page, cta, 'bank', uniq('NH R2 đường khác B'));
+  const loanA = await createManualLoan(page, cta, bankA._id, '200000000', '2027-12-31');
+  const loanB = await createManualLoan(page, cta, bankB._id, '200000000', '2027-12-31');
+  const docId = await createExistingLoanReceipt(page, cta, bankA, loanA.code, '50000000');
+  await eventually('liên kết tới khoản của ngân hàng A', () => getDocument(page, docId, cta), (d) => !!disbursementLinkTo(d, loanA._id));
+
+  // lần 1: đổi lựa chọn vay sang "Để sau" (giữ ngân hàng A) ⇒ liên kết Thủ công tới khoản A được gỡ khi lưu
+  await openReceiptEdit(page, docId, '50.000.000');
+  await pickLoanMode(page, 'Để sau');
+  await saveEdit(page);
+  await eventually('liên kết tới khoản A đã gỡ sau khi chuyển sang để sau', () => getDocument(page, docId, cta), (d) => !disbursementLinkTo(d, loanA._id));
+
+  // lần 2: đổi sang ngân hàng B, chọn "Gắn khoản vay đã có" với khoản của B ⇒ lưu được
+  await openReceiptEdit(page, docId, '50.000.000');
+  await pickPartnerPatient(page, /^Bên nộp tiền/, bankB.name);
+  await pickLoanMode(page, 'Gắn khoản vay đã có');
+  await pickSelect(page, /^Khoản vay có sẵn/, loanB.code);
+  await saveEdit(page);
+
+  const d = await eventually('liên kết chuyển sang khoản của ngân hàng B (lần 2)', () => getDocument(page, docId, cta), (x) => !!disbursementLinkTo(x, loanB._id));
+  expect(d.options?.loan?.mode, 'chế độ đã lưu = gắn khoản vay đã có').toBe('existing');
+  expect(disbursementLinkTo(d, loanB._id)?.origin, 'liên kết tới khoản của B = Thủ công').toBe('manual');
+  expect(disbursementLinkTo(d, loanA._id), 'không còn liên kết tới khoản của A').toBeUndefined();
+});
+
+test('R2-47 sửa điều khoản vay trước duyệt (số HĐ, lãi suất, kỳ hạn, hạn thanh toán, TSĐB) trong một lần lưu: khoản vay chờ giải ngân đồng bộ đủ các trường (v2 §11.4)', async ({ as }) => {
+  test.setTimeout(180_000);
+  const { page, cta } = await staffPage(as);
+  const bank = await createPartner(page, cta, 'bank', uniq('NH R2 đồng bộ điều khoản'));
+  const oldContract = uniq('HĐ đồng bộ cũ');
+  const docId = await createBorrowReceipt(page, bank, { amount: '50000000', contractNo: oldContract, interest: '9,5' });
+  const loan0 = await eventually('khoản vay R2 chờ giải ngân', async () => autoLoansOf(await loansOf(page, bank._id, cta))[0], (l) => !!l);
+  const before = await getLoan(page, loan0._id, cta);
+  expect({ rate: before.interest_rate, term: before.term_months, contract: before.contract_no }, 'điều khoản lúc lập phiếu').toEqual({ rate: '9,5', term: 12, contract: oldContract });
+
+  const newContract = uniq('HĐ đồng bộ mới');
+  const newCollateral = uniq('TSĐB đồng bộ');
+  await openReceiptEdit(page, docId, '50.000.000');
+  await fillField(page, /^Số HĐ tín dụng/, newContract);
+  await fillField(page, /^Lãi suất \(%\/năm\)/, '10,25');
+  const term = fieldOf(page, /^Kỳ hạn \(tháng\)/).locator('input').first();
+  await term.fill('18');
+  await term.press('Tab');
+  await setLoanDueDate(page, '15/06/2028');
+  await fillField(page, /^Tài sản bảo đảm/, newCollateral);
+  await saveEdit(page);
+
+  const want: Record<string, unknown> = { interest_rate: '10,25', term_months: 18, maturity_date: '2028-06-15', contract_no: newContract, collateral: newCollateral };
+  const mismatches = (l: any) => Object.entries(want).filter(([k, v]) => String(l[k] ?? '') !== String(v)).map(([k, v]) => `${k}: có "${l[k] ?? ''}", cần "${v}"`);
+  const synced = await eventually('khoản vay đồng bộ đủ điều khoản sau khi sửa phiếu', () => getLoan(page, loan0._id, cta), (l) => mismatches(l).length === 0, 30_000).catch(async (e: Error) => {
+    const now = await getLoan(page, loan0._id, cta);
+    throw new Error(`${e.message} · chưa khớp: ${mismatches(now).join('; ') || '(không)'}`);
+  });
+  expect(String(synced.principal?.minor), 'gốc không đổi').toBe('50000000');
+  expect.soft(
+    (synced.history ?? []).some((h: any) => h.action === 'auto_sync'),
+    'lịch sử khoản vay ghi mục đồng bộ (auto_sync) khi sửa phiếu',
+  ).toBeTruthy();
+});
+
+test('R2-49 lãi suất nhập tay quá 2 chữ số thập phân ("9,555"): giao diện không lưu và báo lỗi, máy chủ từ chối (API), không tạo khoản vay', async ({ as }) => {
+  test.setTimeout(150_000);
+  const { page, cta } = await staffPage(as);
+  const bank = await createPartner(page, cta, 'bank', uniq('NH R2 lãi suất sai'));
+
+  // giao diện: lưu nháp bị chặn tại ô lãi suất (không gửi yêu cầu tạo phiếu)
+  await openNewReceipt(page);
+  await fillReceiptBase(page, { purpose: uniq('Lãi suất sai'), partner: bank.name, amount: '20000000' });
+  await borrowCheckbox(page).check();
+  await fillField(page, /^Lãi suất \(%\/năm\)/, '9,555');
+  lastDraftPost = null;
+  await page.getByRole('button', { name: 'Lưu nháp', exact: true }).click();
+  await expect(page.getByText('Lãi suất dạng số, tối đa 2 chữ số thập phân').first(), 'ô lãi suất báo lỗi định dạng').toBeVisible({ timeout: 10_000 });
+  await expect(page).toHaveURL(/\/thu\/moi/);
+  await page.waitForTimeout(1500);
+  expect(lastDraftPost, 'giao diện không gửi phiếu có lãi suất sai').toBeNull();
+
+  // máy chủ: cùng điều khoản gửi trực tiếp bị từ chối (422), không tạo khoản vay
+  const r = await createReceiptApi(page, cta, bank._id, '20000000', {
+    kind: 'borrow', mode: 'new', lender_partner_id: bank._id, receive_account_id: null, amount_minor: null, existing_loan_id: null,
+    terms: { contract_no: null, interest_rate: '9,555', term_months: 12, due_date: null, repayment_period: null, repayment_method: null, collateral: null },
+  });
+  expect(r.ok, `máy chủ phải từ chối lãi suất 9,555 (HTTP ${r.status}: ${r.text.slice(0, 200)})`).toBeFalsy();
+  expect(autoLoansOf(await loansOf(page, bank._id, cta)), 'không tạo khoản vay từ phiếu có lãi suất sai').toHaveLength(0);
+});
+
+test('R2-50 phiếu "Gắn khoản vay đã có" tới khoản ĐANG VAY (không tự sinh) bị từ chối: khoản vay giữ Đang vay, không có cảnh báo R6 cho khoản đó (R6 chỉ xử lý đối tượng tự sinh, v2 §11.3, US-AUTO-06)', async ({ as }) => {
+  test.setTimeout(180_000);
+  const { page: staff, cta } = await staffPage(as);
+  const chief = await approverPage(as, 'chief', cta);
+  const bank = await createPartner(staff, cta, 'bank', uniq('NH R2 từ chối đang vay'));
+  const manual = await createManualLoan(staff, cta, bank._id, '200000000', '2027-12-31');
+  const docId = await createExistingLoanReceipt(staff, cta, bank, manual.code, '50000000');
+  await eventually('liên kết tới khoản đang vay', () => getDocument(staff, docId, cta), (d) => !!disbursementLinkTo(d, manual._id));
+
+  const sub = await getDocument(staff, docId, cta);
+  const s = await api(staff, 'POST', `/documents/${docId}/transition`, { data: { action: 'submit', if_match: sub.version }, scope: cta });
+  expect(s.ok, `gửi duyệt: ${s.text.slice(0, 300)}`).toBeTruthy();
+  const cur = await getDocument(staff, docId, cta);
+  const rej = await api(chief, 'POST', `/documents/${docId}/transition`, {
+    data: { action: 'reject', if_match: cur.version, reason: 'Từ chối để kiểm thử R6 (khoản đang vay)', opinion: 'Từ chối để kiểm thử R6 (khoản đang vay)' },
+    scope: cta,
+  });
+  expect(rej.ok, `từ chối: ${rej.text.slice(0, 300)}`).toBeTruthy();
+  await eventually('phiếu bị từ chối', () => getDocument(staff, docId, cta), (d) => d.status === 'rejected');
+  await eventually('lượt R6 hoàn tất (phiếu bị từ chối)', () => runsOfDocument(staff, docId, cta), (rs) => rs.some((r) => r.rule_code === 'R6' && r.status === 'done'));
+  await new Promise((r) => setTimeout(r, 2000));
+
+  const afterReject = await getLoan(staff, manual._id, cta);
+  expect(afterReject.status, 'khoản đang vay giữ nguyên trạng thái Đang vay (không bị huỷ)').toBe('active');
+  expect.soft(String(afterReject.disbursed?.minor), '"Đã giải ngân" của khoản đang vay vẫn 200 triệu (phiếu từ chối chưa thực thi không làm về 0)').toBe('200000000');
+  // liên kết giải ngân thủ công của phiếu ĐÃ TỪ CHỐI không còn hiệu lực (Hiệu lực → Đã gỡ), không còn liên kết nào tính vào giải ngân
+  const afterDoc = await getDocument(staff, docId, cta);
+  expect.soft(disbursementLinkTo(afterDoc, manual._id), 'liên kết giải ngân của phiếu đã từ chối không còn hiệu lực (không active)').toBeUndefined();
+  expect.soft(activeDisbursementsOf(afterDoc), 'phiếu đã từ chối không còn liên kết giải ngân hiệu lực nào').toHaveLength(0);
+  const alertTexts = mongoEval<string[]>(`print(JSON.stringify(db.alerts.find({ text: { $regex: '${manual.code}' } }).toArray().map((a) => a.text)));`);
+  expect(alertTexts, 'không có cảnh báo R6 "đã giải ngân" cho khoản đang vay mà phiếu từ chối không phát sinh tiền').toEqual([]);
+
+  // màn khoản vay (giao diện): KPI "Đã giải ngân" vẫn hiển thị 200.000.000 (không ₫0 sau khi gắn rồi từ chối phiếu)
+  await staff.goto(`/ngan-hang/khoan-vay/${manual._id}`);
+  await expectPageNotBroken(staff, 'màn khoản vay đang vay mở được sau khi phiếu gắn bị từ chối');
+  await expect
+    .soft(staff.locator('.fg-kpi').filter({ hasText: 'Đã giải ngân' }).first(), 'KPI "Đã giải ngân" hiển thị 200.000.000 sau khi phiếu gắn bị từ chối')
+    .toContainText('200.000.000', { timeout: 15_000 });
 });

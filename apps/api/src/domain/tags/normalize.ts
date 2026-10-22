@@ -5,7 +5,7 @@
  * Tách riêng để test bằng vitest mà không cần MongoDB.
  */
 
-import { ApiError, normalizeNameKey } from '@fingate/shared';
+import { ApiError, normalizeNameKey, normalizeTagDisplayName } from '@fingate/shared';
 
 /** Độ dài tối đa tên tag (khớp `tagName` trong contracts/tags.ts). */
 export const TAG_NAME_MAX = 40;
@@ -14,9 +14,6 @@ export const TAG_NAME_MAX = 40;
 export const TAG_MAX_PER_DOCUMENT = 50;
 
 export const OBJECT_ID_RE = /^[0-9a-f]{24}$/;
-
-/** Ký tự vô hình hay dính khi copy/paste (ZWSP, ZWNJ, ZWJ, BOM) — bỏ trước khi chuẩn hoá. */
-const INVISIBLE_RE = /[\u200B-\u200D\uFEFF]/g;
 
 export interface NormalizedTagName {
   /** Tên hiển thị: NFC, gộp khoảng trắng còn một, bỏ đầu/cuối. */
@@ -27,15 +24,12 @@ export interface NormalizedTagName {
 
 /**
  * Chuẩn hoá tên tag nhập tay: bỏ ký tự vô hình, NFC, gộp khoảng trắng (kể cả NBSP),
- * trim, kiểm tra không rỗng & ≤ 40 ký tự. Không phân biệt hoa thường; KHÔNG bỏ dấu
+ * trim (`normalizeTagDisplayName` của shared, dùng chung với contract `tagName`), rồi mới
+ * kiểm không rỗng & ≤ 40 ký tự — độ dài tính SAU khi gộp. Không phân biệt hoa thường; KHÔNG bỏ dấu
  * (`Dự án` ≠ `Du an` vì là hai cụm từ khác nhau).
  */
 export function normalizeTagName(raw: unknown): NormalizedTagName {
-  const name = String(raw ?? '')
-    .replace(INVISIBLE_RE, '')
-    .normalize('NFC')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const name = normalizeTagDisplayName(String(raw ?? ''));
   if (!name) {
     throw new ApiError({ code: 'FG-VAL-001', detail: 'Tên tag không được để trống', errors: { name: 'Tên tag không được để trống' } });
   }

@@ -6,6 +6,7 @@ import {
   documentListQuery,
   documentTagsBody,
   documentUpdateBody,
+  queueProcessedQuery,
 } from '../src/contracts/documents.js';
 
 const OID = 'a'.repeat(24);
@@ -131,5 +132,21 @@ describe('v2 — liên kết trong chi tiết phiếu (hai chiều)', () => {
     });
     expect(item.direction).toBe('out');
     expect(item.counterpart.visible).toBe(false);
+  });
+});
+
+describe('phân trang danh sách phiếu (FgPagination: page + limit, không cursor)', () => {
+  it('documentListQuery: trang mặc định 1, cỡ trang mặc định 50; page đọc từ chuỗi (URL)', () => {
+    const d = documentListQuery.parse({});
+    expect(d.page).toBe(1);
+    expect(d.limit).toBe(50);
+    expect(documentListQuery.parse({ page: '3', limit: '100' })).toMatchObject({ page: 3, limit: 100 });
+    expect(documentListQuery.safeParse({ page: '0' }).success).toBe(false);
+    expect(documentListQuery.safeParse({ limit: '500' }).success).toBe(false);
+  });
+
+  it('queueProcessedQuery (tôi đã duyệt): ô tìm + trang + cỡ trang', () => {
+    expect(queueProcessedQuery.parse({})).toMatchObject({ page: 1, limit: 50 });
+    expect(queueProcessedQuery.parse({ q: 'PC', page: '2', limit: '20' })).toMatchObject({ q: 'PC', page: 2, limit: 20 });
   });
 });

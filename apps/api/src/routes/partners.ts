@@ -120,7 +120,14 @@ export function partnerRoutes(app: FastifyInstance): void {
         const q = validate(partnerSearchQuery, { ...raw, type: parseTypeParam(raw.type) });
         const companyId = writeCompanyId(req, q.company_id);
         const type = q.type === undefined ? undefined : Array.isArray(q.type) ? q.type : [q.type];
-        const items = await partnerOptions({ companyIds: [companyId], type, status: q.status, q: q.q, limit: q.limit });
+        const codes = q.codes
+          ? q.codes
+              .split(',')
+              .map((c) => c.trim().toUpperCase())
+              .filter(Boolean)
+              .slice(0, 1000)
+          : undefined;
+        const items = await partnerOptions({ companyIds: [companyId], type, status: q.status, q: q.q, limit: q.limit, codes });
         return ok(reply, { items });
       },
     }),

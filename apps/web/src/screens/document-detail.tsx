@@ -203,7 +203,9 @@ export function DocumentDetailScreen(): ReactNode {
             {showBar ? (
               <div className="fg-action-bar fg-no-print" role="toolbar" aria-label="Hành động phê duyệt">
                 <FgText style="bodyS" color="muted" >
-                  {canAct ? `Bạn xử lý bước ${d.can.step_order ?? ''} · phím tắt: Alt+D duyệt, Alt+X từ chối` : 'Bản nháp / hồ sơ bạn được phép xử lý'}
+                  {canAct
+                    ? `${d.can.step_order != null ? `Bạn xử lý bước ${d.can.step_order}` : 'Bạn xử lý hồ sơ này'} · phím tắt: Alt+D duyệt, Alt+X từ chối`
+                    : 'Bản nháp / hồ sơ bạn được phép xử lý'}
                 </FgText>
                 <span style={{ flex: 1 }} />
                 {d.can.delete ? (

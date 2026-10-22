@@ -10,8 +10,8 @@ import { useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router';
 import { ddmmyyyy, moneyFromWire } from '@fingate/shared';
 import { useRolloverPreparation, useRollovers } from '../app/queries.ts';
-import { bankTotalsOf, originLabel, useLoanList, type BankTotalRow, type LoanRow } from '../app/v2/debts.ts';
-import { FgButton, FgMoneyStack, FgSelect, FgText, FgToneChip } from '../components/primitives.tsx';
+import { bankTotalsFromWire, originLabel, useLoanList, type BankTotalRow, type LoanRow } from '../app/v2/debts.ts';
+import { FgButton, FgInput, FgMoneyStack, FgSelect, FgText, FgToneChip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgMaturityCell } from '../components/finance.tsx';
@@ -28,21 +28,38 @@ const BUCKETS = [
 
 /** Dư nợ theo từng ngân hàng + đáo hạn trong 7 / 30 ngày (US-LOAN-02, không giới hạn top 5). */
 function BankTotalsSection(): ReactNode {
-  const query = useLoanList({});
+  // chỉ cần số liệu tổng hợp (server tính trên mọi khoản): không tải cả danh sách khoản vay
+  const query = useLoanList({ summary: 'true' });
+  const [bankSearch, setBankSearch] = useState('');
   return (
     <FgQuery query={query} skeleton={<FgSkeletonTable rows={3} cols={5} />}>
       {(d) => {
-        const rows: BankTotalRow[] = bankTotalsOf(d.items);
-        if (!rows.length) return null;
+        const all: BankTotalRow[] = bankTotalsFromWire(d.by_bank);
+        if (!all.length) return null;
+        // lọc trên TOÀN BỘ ngân hàng (không chỉ trang đang xem) rồi mới phân trang bảng
+        const needle = bankSearch.trim().toLowerCase();
+        const rows = needle ? all.filter((r) => r.bank_name.toLowerCase().includes(needle)) : all;
         return (
           <div style={{ marginBottom: 'var(--fg-space-4)' }}>
-            <h2 className="fg-page-title" style={{ fontSize: 'var(--fg-font-title-s-size, 16px)', margin: '0 0 var(--fg-space-2)' }}>
-              Dư nợ theo ngân hàng
-            </h2>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 'var(--fg-space-3)', flexWrap: 'wrap', margin: '0 0 var(--fg-space-2)' }}>
+              <h2 className="fg-page-title" style={{ fontSize: 'var(--fg-font-title-s-size, 16px)', margin: 0 }}>
+                Dư nợ theo ngân hàng
+              </h2>
+              <FgInput
+                allowClear
+                placeholder="Tìm ngân hàng trong bảng"
+                aria-label="Tìm ngân hàng trong bảng dư nợ"
+                value={bankSearch}
+                onChange={(e) => setBankSearch(e.target.value)}
+                style={{ width: 240 }}
+              />
+            </div>
             <div className="fg-card" style={{ padding: 0 }}>
               <FgTable<BankTotalRow>
                 rowKey="key"
                 dataSource={rows}
+                // hàng nhiều ngân hàng: phân trang bảng (không render cả danh sách một lượt)
+                pagination={{ pageSize: 20, size: 'small', hideOnSinglePage: true }}
                 columns={[
                   { title: 'Ngân hàng', key: 'bn', render: (_v, r: BankTotalRow) => r.bank_name },
                   { title: 'Số khoản', key: 'cnt', align: 'right', render: (_v, r: BankTotalRow) => r.count },
@@ -66,7 +83,9 @@ function moneyOf(v: bigint): ReturnType<typeof moneyFromWire> {
 
 /** Khoản chờ giải ngân: tổng và danh sách — tách khỏi dư nợ và bảng đáo hạn. */
 function PendingDisbursementSection(): ReactNode {
-  const query = useLoanList({ status: 'pending_disbursement' });
+  // khoản chờ giải ngân: danh sách đầy đủ trong một lần tải (trần 1.000 của máy chủ), không phân trang —
+  // để khoản vừa lập luôn thấy được trong mục này
+  const query = useLoanList({ status: 'pending_disbursement', limit: 1000 });
   return (
     <FgQuery query={query} skeleton={<FgSkeletonTable rows={3} cols={6} />}>
       {(d) => (

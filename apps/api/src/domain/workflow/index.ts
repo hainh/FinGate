@@ -45,6 +45,7 @@ import { loanExceedsSpend } from '../automation/policy.ts';
 import { AUTOMATION_SESSION_ID } from '../automation/actions/common.ts';
 import { bookedBalance } from '../ledger/index.ts';
 import { actualAmountProblem } from '../vouchers/lifecycle.ts';
+import { assertTransferTargetAccount, assertTransferTargetSubmittable } from '../vouchers/rules.ts';
 import { assertAccountAllowedForCompany, assertGroupAccountForCompany } from '../accounts.ts';
 import { emitVoucherEvent, type VoucherEventSubject } from '../events/index.ts';
 import { emitLoanSettledAfterPayment } from '../links/index.ts';
@@ -186,6 +187,10 @@ export async function submitDocument(input: {
   // tài khoản Tập đoàn (phiếu công ty con không dùng quỹ Tập đoàn — §VIII).
   await assertAccountAllowedForCompany(String(doc.company_id), doc.source?.account_id);
   await assertGroupAccountForCompany(String(doc.company_id), doc.source?.group_account_id);
+  // v2 §11.6 — chuyển nội bộ: công ty nhận khác công ty phiếu và có TK đích theo ID. Kiểm CẢ khi gửi (không chỉ khi lưu)
+  // để nháp lưu trước đây không đi thẳng tới duyệt và thực thi (R1 chỉ chạy sau khi tiền đã ra khỏi công ty nguồn).
+  assertTransferTargetSubmittable(doc.kind, String(doc.company_id), doc.transfer_target);
+  await assertTransferTargetAccountLive(doc);
 
   const matrix = await resolveMatrix({
     company_id: String(doc.company_id),
@@ -308,13 +313,17 @@ export async function submitDocument(input: {
     ip: input.ip,
   });
   await syncBalancesForDocument({ doc, from: doc.status, to: status });
+  // Người nhận tính theo hồ sơ SAU CAS (đã có mã chính thức + chuỗi bước mới) — xem nextLevelRecipients.
   const next = currentStep(steps as unknown as StepState[]);
   void notifyNextApprover({
-    doc,
+    doc: result.doc as unknown as DomainDoc,
+    actorId: actor.user_id,
     actorName: actor.name,
     stepRole: next?.role ?? null,
     amountMinor: doc.amount.minor,
     compact: formatMoney(money(doc.amount.minor, doc.amount.currency), { mode: 'compact' }),
+    status,
+    statusLabel: STATUS_REGISTRY[status]?.labelVi ?? status,
   });
 
   return {
@@ -326,6 +335,28 @@ export async function submitDocument(input: {
     next_user_ids: next?.user_id ? [next.user_id] : [],
     skipped: false,
   };
+}
+
+/**
+ * v2 §11.6 — TK đích của chuyển nội bộ phải có, đang hoạt động và thuộc CHÍNH công ty nhận (cùng luật như khi lưu,
+ * `resolveTransferTarget`; R1 cũng kiểm như vậy khi tạo phiếu thu). Gọi khi gửi / duyệt / đưa vào hàng / thực thi —
+ * tức TRƯỚC khi tiền ra khỏi công ty nguồn. Không có công ty nhận ⇒ không kiểm.
+ */
+async function assertTransferTargetAccountLive(doc: DomainDoc): Promise<void> {
+  const target = doc.transfer_target;
+  if (!target?.company_id) return;
+  assertTransferTargetAccount(target);
+  const accountId = String(target.account_id);
+  const acct = /^[0-9a-f]{24}$/i.test(accountId)
+    ? await Models.BankAccount.findById(accountId).select({ company_id: 1, status: 1 }).lean<{ company_id?: unknown; status?: string } | null>()
+    : null;
+  if (!acct || acct.status !== 'active' || String(acct.company_id ?? '') !== String(target.company_id)) {
+    throw new ApiError({
+      code: 'FG-VAL-001',
+      detail: 'Tài khoản nhận không thuộc công ty nhận hoặc đã đóng',
+      errors: { 'transfer_target.account_id': 'Tài khoản nhận không thuộc công ty nhận hoặc đã đóng' },
+    });
+  }
 }
 
 function requiredFieldsMissing(doc: DomainDoc): string[] {
@@ -505,6 +536,10 @@ export async function transition(input: {
 
   const isApproval = action === 'approve' || action === 'approve_with_reason';
   const isDecision = isApproval || action === 'reject' || action === 'request_changes';
+  // v2 §7.1 — DangThanhToan → YeuCauBoSung ("đưa về bổ sung" phiếu đã duyệt đang trong hàng thanh toán). Phiếu này
+  // không còn bước chờ nào nên không đi qua `myStep`; quyền duyệt, hạn mức và phạm vi vẫn kiểm như mọi quyết định.
+  // Khớp `documentPermissions.request_changes` (domain/entitlement).
+  const recall = action === 'request_changes' && doc.status === 'processing';
 
   if (isDecision && !actor.permissions.includes('approval:act')) {
     throw new ApiError({ code: 'FG-RBAC-001', detail: 'Bạn không có quyền duyệt hồ sơ' });
@@ -593,21 +628,23 @@ export async function transition(input: {
   }
 
   const steps = (doc.approval?.steps ?? []) as StepRow[];
-  if (!steps.length && isDecision) throw new ApiError({ code: 'FG-WF-006' });
+  if (!steps.length && isDecision && !recall) throw new ApiError({ code: 'FG-WF-006' });
 
   // 3. đúng người? fast-track: step của mình có thể đang `waiting`
   //    Bước chưa gán người (`user_id: null`, cấu hình người duyệt thêm sau khi gửi)
   //    → ai đúng vai trò cũng xử lý được; người xử lý sẽ "nhận" bước đó.
-  const myStep = isDecision
-    ? steps
-        .filter(
-          (s) =>
-            (s.state === 'current' || s.state === 'waiting') &&
-            (s.user_id != null ? String(s.user_id) === actor.user_id : s.role === actor.role),
-        )
-        .sort((a, b) => a.order - b.order)[0]
-    : null;
-  if (isDecision && !myStep) {
+  //    Nhánh recall (đang thanh toán) không có bước chờ: không cần `myStep`.
+  const myStep =
+    isDecision && !recall
+      ? steps
+          .filter(
+            (s) =>
+              (s.state === 'current' || s.state === 'waiting') &&
+              (s.user_id != null ? String(s.user_id) === actor.user_id : s.role === actor.role),
+          )
+          .sort((a, b) => a.order - b.order)[0]
+      : null;
+  if (isDecision && !recall && !myStep) {
     const holder = steps.find((s) => s.state === 'current');
     throw new ApiError({
       code: 'FG-WF-002',
@@ -654,6 +691,10 @@ export async function transition(input: {
       throw new ApiError({ code: 'FG-WF-004', detail: 'Bỏ qua chứng từ thiếu cần lý do >= 20 ký tự', errors: { reason: 'Cần nêu rõ lý do' } });
     }
   }
+
+  // 5b. v2 §11.6 — duyệt / đưa vào hàng / thực thi phiếu chuyển nội bộ chỉ khi TK đích còn hiệu lực (xem
+  //     assertTransferTargetAccountLive): R1 chỉ chạy SAU thực thi, lỗi lúc đó để tiền đã ra khỏi công ty nguồn.
+  if (isApproval || action === 'queue_payment' || action === 'pay') await assertTransferTargetAccountLive(doc);
 
   // 6. CAS — status + step + history[] + version++ trong MỘT update
   const now = new Date();
@@ -785,7 +826,14 @@ export async function transition(input: {
   }
 
   const cal = await calendarFor(doc.company_id);
-  const nextStepAfter = isDecision ? currentStep(nextSteps as StepState[]) : nextStatus === 'approved' ? null : currentStep(steps as StepState[]);
+  // recall: chuỗi duyệt đã kết thúc (mọi bước đã quyết định) — không còn cấp nào để giao; người lập sửa và gửi lại
+  const nextStepAfter = recall
+    ? null
+    : isDecision
+      ? currentStep(nextSteps as StepState[])
+      : nextStatus === 'approved'
+        ? null
+        : currentStep(steps as StepState[]);
   if (nextStepAfter) {
     const targetStep = nextSteps.find((s) => s.order === nextStepAfter.order);
     if (targetStep) {
@@ -837,7 +885,8 @@ export async function transition(input: {
   const set: Record<string, unknown> = { status: nextStatus };
   if (resolvedAmount.changed) set['amount.minor'] = effectiveAmountMinor;
   if (nextAccountId && nextAccountId !== oldAccountId) set['source.account_id'] = nextAccountId;
-  if (isDecision) set['approval.steps'] = nextSteps;
+  // recall giữ nguyên chuỗi duyệt (lịch sử các cấp đã duyệt); submit lại sẽ dựng chuỗi mới theo ma trận
+  if (isDecision && !recall) set['approval.steps'] = nextSteps;
   if (isDecision) set.sla_deadline = nextStepAfter
     ? nextSteps.find((s) => s.order === nextStepAfter.order)?.sla_deadline ?? null
     : null;
@@ -911,10 +960,12 @@ export async function transition(input: {
   // 7b/7c (v1: tự sinh phiếu thu khi chuyển nội bộ; tự sinh khoản nợ từ phiếu thu cờ vay) đã chuyển sang
   //      quy tắc R1 và R2 của bộ máy tự động — được xử lý từ sự kiện `voucher.paid` (sau CAS, best-effort).
 
-  // 8. thông báo cho cấp kế tiếp (email không await — arch §6)
+  // 8. thông báo cho cấp kế tiếp (email không await — arch §6). Người nhận tính theo hồ sơ SAU CAS
+  //    (trạng thái + chuỗi bước mới), không theo bản nạp trước khi ghi — xem nextLevelRecipients.
   if (isDecision || action === 'pay' || action === 'queue_payment') {
     void notifyNextApprover({
-      doc,
+      doc: result.doc as unknown as DomainDoc,
+      actorId: actor.user_id,
       actorName: actor.name,
       stepRole: nextStepAfter?.role ?? null,
       amountMinor: effectiveAmountMinor,

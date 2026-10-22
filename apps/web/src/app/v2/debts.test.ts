@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   accountCodeOf,
-  bankTotalsOf,
+  bankTotalsFromWire,
   canAssignDisbursement,
   canAssignRepayment,
   canCancelLoan,
@@ -22,52 +22,7 @@ import {
   parseDirection,
   principalOfSplit,
   voucherHref,
-  type LoanRow,
 } from './debts.ts';
-
-/** Dòng khoản vay tối thiểu cho hàm thuần (chỉ các trường hàm đọc). */
-function loanRow(p: Partial<LoanRow> & { _id: string }): LoanRow {
-  return {
-    company_id: 'c1',
-    company_name: 'Công ty A',
-    code: `NHD-${p._id}`,
-    partner_id: 'bank-1',
-    partner: null,
-    bank_name: 'BIDV',
-    credit_limit: { minor: '0', currency: 'VND', decimals: 0 },
-    principal: { minor: '100', currency: 'VND', decimals: 0 },
-    outstanding: { minor: '100', currency: 'VND', decimals: 0 },
-    repaid: { minor: '0', currency: 'VND', decimals: 0 },
-    repaid_interest: { minor: '0', currency: 'VND', decimals: 0 },
-    repaid_fee: { minor: '0', currency: 'VND', decimals: 0 },
-    disbursed: { minor: '100', currency: 'VND', decimals: 0 },
-    disbursement_planned: { minor: '0', currency: 'VND', decimals: 0 },
-    undisbursed: { minor: '0', currency: 'VND', decimals: 0 },
-    funded_by_total: { minor: '0', currency: 'VND', decimals: 0 },
-    currency: 'VND',
-    interest_rate: '9',
-    term_months: 12,
-    payment_frequency: 'maturity',
-    repayment_method: 'interest_only',
-    interest_to_maturity: { minor: '0', currency: 'VND', decimals: 0 },
-    maturity_date: '2027-01-01',
-    next_due_date: null,
-    days_to_due: 100,
-    status: 'active',
-    warning: null,
-    contract_no: null,
-    collateral: null,
-    responsible: null,
-    disbursed_at: null,
-    origin: { kind: 'manual', run_id: null, rule_code: null },
-    repayment_count: 0,
-    attachment_count: 0,
-    note: null,
-    created_at: null,
-    updated_at: null,
-    ...p,
-  } as LoanRow;
-}
 
 describe('công nợ — hàm thuần', () => {
   it('minorOf đọc số tiền minor từ chuỗi hoặc số; sai định dạng hoặc thiếu ⇒ 0', () => {
@@ -139,12 +94,11 @@ describe('đường dẫn chứng từ và nhãn nguồn', () => {
 });
 
 describe('công nợ — tổng theo ngân hàng, lịch sử, chống gửi lặp', () => {
-  it('bankTotalsOf: chỉ khoản đang vay / quá hạn; dư nợ đáo hạn ≤ 7 và ≤ 30 ngày (gồm quá hạn); sắp theo dư nợ', () => {
-    const rows = bankTotalsOf([
-      loanRow({ _id: 'a', partner_id: 'bidv', bank_name: 'BIDV', outstanding: { minor: '100', currency: 'VND', decimals: 0 }, days_to_due: 5 }),
-      loanRow({ _id: 'b', partner_id: 'bidv', bank_name: 'BIDV', outstanding: { minor: '50', currency: 'VND', decimals: 0 }, days_to_due: 20 }),
-      loanRow({ _id: 'c', partner_id: 'vcb', bank_name: 'VCB', outstanding: { minor: '300', currency: 'VND', decimals: 0 }, days_to_due: -3, status: 'overdue' }),
-      loanRow({ _id: 'd', partner_id: 'vcb', status: 'pending_disbursement', outstanding: { minor: '999', currency: 'VND', decimals: 0 } }),
+  it('bankTotalsFromWire: đổi by_bank của server (đã sắp, tính trên mọi khoản) sang kiểu tiền của bảng', () => {
+    const w = (minor: string) => ({ minor, currency: 'VND' as const, decimals: 0 });
+    const rows = bankTotalsFromWire([
+      { key: 'vcb', partner_id: 'vcb', bank_name: 'VCB', count: 1, outstanding: w('300'), due7: w('300'), due30: w('300') },
+      { key: 'bidv', partner_id: 'bidv', bank_name: 'BIDV', count: 2, outstanding: w('150'), due7: w('100'), due30: w('150') },
     ]);
     expect(rows.map((r) => r.bank_name)).toEqual(['VCB', 'BIDV']);
     expect(rows[0]).toMatchObject({ count: 1, outstanding: 300n, due7: 300n, due30: 300n });

@@ -4,11 +4,12 @@
  * Trần 512 MB của Atlas M0: mỗi index mới phải có lý do + EXPLAIN đính kèm PR.
  */
 
+import type { CreateIndexesOptions } from 'mongodb';
 import { Models } from './models.ts';
 
-type IndexDef = { key: Record<string, 1 | -1>; options?: Record<string, unknown> };
+type IndexDef = { key: Record<string, 1 | -1>; options?: CreateIndexesOptions };
 
-const INDEXES: Record<string, IndexDef[]> = {
+export const INDEXES: Record<string, IndexDef[]> = {
   documents: [
     { key: { company_id: 1, kind: 1, status: 1, planned_date: -1 } },
     { key: { company_id: 1, created_at: -1 } },
@@ -157,6 +158,25 @@ const COLLECTION_MODEL: Record<string, keyof typeof Models> = {
   request_claims: 'RequestClaim',
 };
 
+/** Nhãn index cho log — đúng quy ước tên mặc định của MongoDB (`field_1_field2_-1`). */
+function indexLabel(key: Record<string, 1 | -1>): string {
+  return Object.entries(key)
+    .map(([k, v]) => `${k}_${v}`)
+    .join('_');
+}
+
+/**
+ * Bảo đảm mọi index khai báo ở INDEXES có trong DB (idempotent: index đã có thì MongoDB bỏ qua).
+ *
+ * Gọi `collection.createIndex` của driver, KHÔNG gọi `Model.createIndexes(danhSách)`: Mongoose 9 bỏ qua
+ * danh sách truyền vào và chỉ tạo index khai báo trong schema, nên trước đây mọi index ở đây bị bỏ qua
+ * âm thầm (tag thiếu unique (company_id, name_key), documents thiếu index truy vấn, …).
+ *
+ * KHÔNG đặt `name` tuỳ ý: khi cùng khoá đã có index dưới tên khác (ví dụ index schema autoIndex tạo sẵn),
+ * MongoDB từ chối với lỗi 85 (IndexOptionsConflict). Để tên mặc định thì hai bên trùng tên và không xung đột.
+ *
+ * Trả về số index đã bảo đảm có trong DB. Lỗi của từng index được ghi log và không ném ra (boot vẫn chạy).
+ */
 export async function applyIndexes(log: (msg: string) => void = console.log): Promise<number> {
   let applied = 0;
   for (const [collection, defs] of Object.entries(INDEXES)) {
@@ -166,20 +186,21 @@ export async function applyIndexes(log: (msg: string) => void = console.log): Pr
       log(`  · bỏ qua ${collection} (không có model)`);
       continue;
     }
+    let ok = 0;
     for (const def of defs) {
-      const name = Object.entries(def.key)
-        .map(([k, v]) => `${k.replace(/\./g, '_')}_${v}`)
-        .join('__');
       try {
-        await (model as unknown as {
-          createIndexes: (i: { key: Record<string, unknown>; name: string; background: boolean }[]) => Promise<unknown>;
-        }).createIndexes([{ key: def.key, name, background: true, ...def.options }]);
-        applied++;
+        await model.collection.createIndex(def.key, { background: true, ...def.options });
+        ok++;
       } catch (err) {
-        log(`  ! ${collection}.${name}: ${(err as Error).message.split('\n')[0]}`);
+        log(`  ! ${collection}.${indexLabel(def.key)}: ${(err as Error).message.split('\n')[0]}`);
       }
     }
-    log(`  ✓ ${collection}`);
+    applied += ok;
+    log(
+      ok === defs.length
+        ? `  ✓ ${collection} (${ok} index)`
+        : `  ! ${collection}: ${ok}/${defs.length} index`,
+    );
   }
   return applied;
 }

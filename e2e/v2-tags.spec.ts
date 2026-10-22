@@ -6,6 +6,7 @@
  * Dữ liệu test dùng uniq() — không phụ thuộc số liệu toàn cục. Phạm vi công ty đặt bằng
  * useCompanyScope/useAllScope và được khôi phục sau mỗi test.
  */
+import { execFileSync } from 'node:child_process';
 import { test, expect, uniq as uniqRaw } from './fixtures';
 import {
   COMPANY,
@@ -95,6 +96,54 @@ function detailTagChips(page: import('@playwright/test').Page) {
     .locator('.ant-select', { has: page.getByRole('combobox', { name: DETAIL_TAG_LABEL, exact: true }) })
     .first()
     .locator('.fg-chip');
+}
+
+/** Ngân sách độ trễ UI sau một thao tác ghi tag: từ phản hồi API tới khi thông báo hiện trên màn (ms). */
+const UI_AFTER_WRITE_BUDGET_MS = 2_000;
+const TAG_COLLECTION_PATH = /^\/api\/v1\/tags$/;
+const TAG_ITEM_PATH = /^\/api\/v1\/tags\/[0-9a-f]{24}$/;
+
+/**
+ * Bấm nút ghi (POST/PATCH tag), chờ đúng phản hồi, rồi đo tới khi thông báo `toastText` hiện trên trang.
+ * Dò trong trình duyệt theo từng khung hình nên số đo không bị làm tròn bởi `expect` (vốn chờ 100 ms–1 s mỗi lần).
+ */
+async function timeWriteToToast(
+  page: import('@playwright/test').Page,
+  write: { method: 'POST' | 'PATCH'; path: RegExp },
+  click: () => Promise<void>,
+  toastText: string,
+): Promise<{ status: number; ms: number }> {
+  const responded = page.waitForResponse(
+    (r) => r.request().method() === write.method && write.path.test(new URL(r.url()).pathname),
+    { timeout: 15_000 },
+  );
+  await click();
+  const res = await responded;
+  const at = Date.now();
+  await page.waitForFunction(
+    (text: string) => Array.from(document.querySelectorAll('.ant-message-notice')).some((n) => (n.textContent ?? '').includes(text)),
+    toastText,
+    { timeout: 10_000 },
+  );
+  return { status: res.status(), ms: Date.now() - at };
+}
+
+/**
+ * Mở trang trong phạm vi công ty `code`. Tài khoản test dùng chung giữa các lượt chạy song song: lượt khác có thể đổi
+ * phạm vi mặc định của cùng tài khoản giữa lúc đặt và lúc tải trang. Kiểm nút "Phạm vi dữ liệu" và đặt lại nếu lệch.
+ */
+async function openPageInScope(page: import('@playwright/test').Page, path: string, code: string): Promise<void> {
+  const scopeBtn = page.getByRole('button', { name: 'Phạm vi dữ liệu', exact: true });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await openPage(page, path);
+    const inScope = await expect(scopeBtn).toContainText(code, { timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    );
+    if (inScope) return;
+    await useCompanyScope(page, code);
+  }
+  await expect(scopeBtn, `phạm vi công ty phải là ${code}`).toContainText(code);
 }
 
 /* =========================================================================
@@ -298,9 +347,19 @@ test.describe('KTT · màn Quản lý tag', () => {
       const dialog = chief.getByRole('dialog');
       await dialog.getByLabel('Tên tag').fill(name);
       await dialog.getByRole('radio', { name: 'Màu #2563eb', exact: true }).click();
-      await dialog.getByRole('button', { name: 'Tạo tag', exact: true }).click();
-      await expect(toast(chief, `Đã tạo tag “${name}”`)).toBeVisible({ timeout: 10_000 });
+      const created = await timeWriteToToast(
+        chief,
+        { method: 'POST', path: TAG_COLLECTION_PATH },
+        () => dialog.getByRole('button', { name: 'Tạo tag', exact: true }).click(),
+        `Đã tạo tag “${name}”`,
+      );
+      expect(created.status, 'POST /tags tạo mới trả 201').toBe(201);
+      console.log(`[tags-perf] tạo tag trong modal (danh bạ CTA): ${created.ms} ms từ phản hồi POST tới thông báo`);
+      expect(created.ms, 'modal đóng và thông báo hiện trong ~1 s sau khi POST xong (không đứng khi danh bạ lớn)').toBeLessThanOrEqual(UI_AFTER_WRITE_BUDGET_MS);
+      await expect(dialog, 'modal đã đóng sau khi tạo tag').toBeHidden({ timeout: 5_000 });
 
+      // bảng chia trang (danh bạ hàng nghìn tag): tag mới xếp theo tên nên có thể nằm ngoài trang 1 → tìm đúng tên trước
+      await chief.getByRole('textbox', { name: 'Tìm tag theo tên', exact: true }).fill(name);
       const row = tableRow(chief, name);
       await expect(row).toBeVisible();
       await expect(row).toContainText('Đang dùng');
@@ -346,8 +405,16 @@ test.describe('KTT · màn Quản lý tag', () => {
       await expect(dialog).toContainText(oldName);
       await dialog.getByLabel('Tên tag').fill(newName);
       await dialog.getByRole('radio', { name: 'Màu #0891b2', exact: true }).click();
-      await dialog.getByRole('button', { name: 'Lưu thay đổi', exact: true }).click();
-      await expect(toast(chief, 'Đã lưu tag')).toBeVisible({ timeout: 10_000 });
+      const renamed = await timeWriteToToast(
+        chief,
+        { method: 'PATCH', path: TAG_ITEM_PATH },
+        () => dialog.getByRole('button', { name: 'Lưu thay đổi', exact: true }).click(),
+        'Đã lưu tag',
+      );
+      expect(renamed.status, 'PATCH tag thành công').toBe(200);
+      console.log(`[tags-perf] sửa tên và màu tag đang gắn phiếu: ${renamed.ms} ms từ phản hồi PATCH tới thông báo`);
+      expect(renamed.ms, 'sau khi lưu: modal đóng và thông báo hiện trong ~1 s').toBeLessThanOrEqual(UI_AFTER_WRITE_BUDGET_MS);
+      await expect(dialog, 'modal đã đóng sau khi lưu').toBeHidden({ timeout: 5_000 });
       // ô tìm vẫn là tên cũ: đổi sang tên mới để thấy dòng đã đổi tên
       await chief.getByRole('textbox', { name: 'Tìm tag theo tên', exact: true }).fill(newName);
 
@@ -411,6 +478,9 @@ test.describe('KTT · màn Quản lý tag', () => {
       await createVoucherApi(staff, cta, { partnerId, accountId: acc, title: uniq('Phiếu đang dùng tag'), tagIds: [busyId] });
 
       await openPage(chief, '/quantri/tags');
+      // bảng chia trang: tìm đúng tag trước khi bấm (tag không nhất thiết nằm ở trang 1 của danh bạ lớn)
+      const search = chief.getByRole('textbox', { name: 'Tìm tag theo tên', exact: true });
+      await search.fill(idle);
       await chief.getByRole('button', { name: `Ẩn tag ${idle}`, exact: true }).click();
       await expect(toast(chief, `Đã ẩn tag “${idle}”`)).toBeVisible({ timeout: 10_000 });
       await expect(tableRow(chief, idle)).toContainText('Đã ẩn');
@@ -419,6 +489,7 @@ test.describe('KTT · màn Quản lý tag', () => {
       await expect(toast(chief, `Đã hiện lại tag “${idle}”`)).toBeVisible({ timeout: 10_000 });
       await expect(tableRow(chief, idle)).toContainText('Đang dùng');
 
+      await search.fill(busy);
       await expect(chief.getByRole('button', { name: `Ẩn tag ${busy}`, exact: true }), 'nút ẩn bị khoá khi tag còn phiếu').toBeDisabled();
       const hideApi = await api(chief, 'PATCH', `/tags/${busyId}`, { scope: cta, data: { hidden: true } });
       expect(hideApi.status, 'server cũng từ chối ẩn tag đang gắn phiếu').toBe(422);
@@ -901,7 +972,7 @@ test.describe('báo cáo · nhóm và lọc theo tag', () => {
       const partnerId = await createPartnerApi(staff, cta, 'supplier', uniq('NCC lọc báo cáo'));
       await createVoucherApi(staff, cta, { partnerId, accountId: acc, title: uniq('BC lọc'), tagIds: [tagId] });
 
-      await openPage(chief, '/baocao/theo-tag');
+      await openPageInScope(chief, '/baocao/theo-tag', COMPANY.CTA);
       const filter = tagCombo(chief, 'Lọc theo tag');
       await filter.click();
       await filter.pressSequentially(tagName);
@@ -937,7 +1008,9 @@ test.describe('báo cáo · nhóm và lọc theo tag', () => {
       const vm = await createVoucherApi(staff, mayId, { partnerId: pMay, accountId: accMay, title: uniq('Chung M'), tagIds: [tagMay], amountMinor: '200000' });
       expect((await transitionApi(staff, mayId, vm.id, 'submit')).status).toBeLessThan(300);
 
-      const data = await reportApi(chairman, 'all', 'theo-tag');
+      // Báo cáo hợp nhất trả tối đa 100 nhóm (truncated = true) trên kho dữ liệu dùng chung: lọc đúng hai tag vừa tạo
+      // để nhóm này luôn nằm trong kết quả (không phụ thuộc số liệu toàn cục).
+      const data = await reportApi(chairman, 'all', 'theo-tag', { tag_ids: `${tagCta},${tagMay}` });
       const row = (data.rows as any[]).find((r) => r.tag === sharedName);
       expect(row, 'báo cáo hợp nhất có nhóm theo tên tag').toBeTruthy();
       expect(row.company_count, 'gộp hai công ty vào một nhóm').toBe(2);
@@ -1800,17 +1873,48 @@ test.describe('danh bạ > 500 tag · tag ngoài 500 dòng đầu (round 5)', ()
       await chief.getByRole('button', { name: `Sửa tag ${oldName}`, exact: true }).click();
       const dialog = chief.getByRole('dialog');
       await dialog.getByLabel('Tên tag').fill(newName);
-      await dialog.getByRole('button', { name: 'Lưu thay đổi', exact: true }).click();
-      await expect(toast(chief, 'Đã lưu tag')).toBeVisible({ timeout: 10_000 });
+      const renamed = await timeWriteToToast(
+        chief,
+        { method: 'PATCH', path: TAG_ITEM_PATH },
+        () => dialog.getByRole('button', { name: 'Lưu thay đổi', exact: true }).click(),
+        'Đã lưu tag',
+      );
+      expect(renamed.status, 'PATCH đổi tên tag cuối danh bạ').toBe(200);
+      console.log(`[tags-perf] đổi tên tag cuối danh bạ: ${renamed.ms} ms từ phản hồi tới thông báo`);
+      expect(renamed.ms, 'đổi tên: modal đóng và thông báo hiện trong ~1 s').toBeLessThanOrEqual(UI_AFTER_WRITE_BUDGET_MS);
 
       await chief.getByRole('textbox', { name: 'Tìm tag theo tên', exact: true }).fill(newName);
       await expect(tableRow(chief, newName), 'bảng hiện tag cuối danh bạ sau khi đổi tên').toBeVisible({ timeout: 10_000 });
-      await chief.getByRole('button', { name: `Ẩn tag ${newName}`, exact: true }).click();
-      await expect(toast(chief, `Đã ẩn tag “${newName}”`)).toBeVisible({ timeout: 10_000 });
+      const hidden = await timeWriteToToast(
+        chief,
+        { method: 'PATCH', path: TAG_ITEM_PATH },
+        () => chief.getByRole('button', { name: `Ẩn tag ${newName}`, exact: true }).click(),
+        `Đã ẩn tag “${newName}”`,
+      );
+      expect(hidden.status, 'PATCH ẩn tag cuối danh bạ').toBe(200);
+      console.log(`[tags-perf] ẩn tag cuối danh bạ: ${hidden.ms} ms từ phản hồi tới thông báo`);
+      expect(hidden.ms, 'ẩn: thông báo hiện trong ~1 s').toBeLessThanOrEqual(UI_AFTER_WRITE_BUDGET_MS);
       await expect(tableRow(chief, newName)).toContainText('Đã ẩn');
       const saved = await tagByName(chief, cta, newName);
       expect(saved?.name, 'tên mới được lưu').toBe(newName);
       expect(saved?.hidden, 'tag cuối danh bạ đã bị ẩn').toBe(true);
+      expectNoAppCrash(watch);
+    } finally {
+      await restore();
+    }
+  });
+
+  test('màn Quản lý tag chia trang: danh bạ > 500 tag chỉ render một trang (≤ 25 dòng) và có thanh phân trang', async ({ as }) => {
+    const chief = await as('chief');
+    const restore = await useCompanyScope(chief, COMPANY.CTA);
+    const watch = watchPage(chief, 'directory-500-paged');
+    try {
+      await openPage(chief, '/quantri/tags');
+      const rows = chief.locator('.ant-table-tbody tr.ant-table-row');
+      await expect(rows.first(), 'bảng đã tải dòng đầu').toBeVisible({ timeout: 30_000 });
+      const shown = await rows.count();
+      expect(shown, 'mỗi trang tối đa 25 dòng (không render cả danh bạ hàng nghìn tag)').toBeLessThanOrEqual(25);
+      await expect(chief.locator('.ant-pagination'), 'danh bạ nhiều hơn một trang → có thanh phân trang').toBeVisible();
       expectNoAppCrash(watch);
     } finally {
       await restore();
@@ -1998,12 +2102,387 @@ test.describe('lịch sử thay đổi · nhãn mã hành động của khoản 
         }
       }
       expect(debtId, 'có khoản công nợ thật có lịch sử cấn trừ').not.toBeNull();
-      await openPage(staff, `/cong-no/phieu/${debtId}`);
+      await openPageInScope(staff, `/cong-no/phieu/${debtId}`, COMPANY.GROUP);
       const texts = await historyActionTexts(staff);
       console.log(`[history] công nợ thật: mã = ${JSON.stringify(actions)}, nhãn = ${JSON.stringify(texts)}`);
       expect(texts.filter((t) => RAW_AUDIT_CODE.test(t)), 'lịch sử công nợ thật không hiện mã thô').toEqual([]);
       expect(texts.length, 'thẻ hiện đủ mọi dòng lịch sử thật').toBe(actions.length);
       expect([...texts].sort(), 'nhãn từng dòng khớp bảng nhãn khoản công nợ').toEqual(actions.map((a) => DEBT_HISTORY_LABEL[a] ?? a).sort());
+      expectNoAppCrash(watch);
+    } finally {
+      await restore();
+    }
+  });
+});
+
+/* =========================================================================
+ * 12. Vòng 4 (retest): khoảng trắng thừa không làm tên tag bị từ chối giả (422) · index unique trong CSDL
+ * ========================================================================= */
+
+/** Thay mỗi khoảng trắng giữa các từ bằng `gap` khoảng trắng: chuỗi thô dài, sau khi gộp vẫn đúng `name`. */
+function padSpaces(name: string, gap: number): string {
+  return name.split(' ').join(' '.repeat(gap));
+}
+
+/** Chỉ mục của một collection đọc từ CSDL test (container `fingate-mongo`, cùng cách v2-vouchers / v2-auto-r2). */
+function dbIndexes(collection: string): { key: Record<string, number>; unique: boolean; partial: boolean }[] {
+  const script = `print(JSON.stringify(db.getCollection('${collection}').getIndexes().map((i) => ({ key: i.key, unique: !!i.unique, partial: !!i.partialFilterExpression }))))`;
+  const out = execFileSync('docker', ['exec', 'fingate-mongo', 'mongosh', '--quiet', 'fingate', '--eval', script], {
+    encoding: 'utf8',
+    timeout: 60_000,
+    windowsHide: true,
+  });
+  return JSON.parse(out.trim().split(/\r?\n/).filter(Boolean).pop() ?? '[]');
+}
+
+/** Có index đúng thứ tự khoá `key` (và đúng cờ unique / partial nếu được truyền). */
+function hasIndex(
+  indexes: ReturnType<typeof dbIndexes>,
+  key: Record<string, number>,
+  flags: { unique?: boolean; partial?: boolean } = {},
+): boolean {
+  const want = JSON.stringify(Object.entries(key));
+  return indexes.some(
+    (i) =>
+      JSON.stringify(Object.entries(i.key)) === want &&
+      (flags.unique === undefined || i.unique === flags.unique) &&
+      (flags.partial === undefined || i.partial === flags.partial),
+  );
+}
+
+test.describe('vòng 4 · khoảng trắng thừa không làm tên tag bị từ chối (422 giả)', () => {
+  test('API: tên thô > 40 ký tự nhưng sau khi gộp khoảng trắng còn ≤ 40 được chấp nhận (POST 201, trùng → 200, PATCH 200); 41 ký tự sau khi gộp vẫn 422', async ({ as }) => {
+    const chief = await as('chief');
+    const restore = await useCompanyScope(chief, COMPANY.CTA);
+    try {
+      const cta = await companyIdOf(chief, COMPANY.CTA);
+      // tiền đề: chuỗi thô vượt 40 ký tự, nhưng tên đã gộp khoảng trắng vẫn ≤ 40 (đúng ca bị 422 trước đây)
+      const core = uniq('wsprobe ok');
+      const padded = padSpaces(core, 12);
+      expect(core.length, 'tiền đề: tên đã gộp ≤ 40 ký tự').toBeLessThanOrEqual(40);
+      expect(padded.length, 'tiền đề: chuỗi thô > 40 ký tự').toBeGreaterThan(40);
+
+      const created = await createTagApi(chief, cta, `  ${padded}  `);
+      expect(created.status, `POST /tags với khoảng trắng thừa: ${JSON.stringify(created.body)}`).toBe(201);
+      expect(dataOf<any>(created).name, 'tên lưu đã gộp khoảng trắng về đúng một khoảng').toBe(core);
+      const id = String(dataOf<any>(created)._id);
+
+      const again = await createTagApi(chief, cta, padSpaces(core.toUpperCase(), 3));
+      expect(again.status, 'cùng tên sau chuẩn hoá (khác hoa/thường) → trả tag cũ (200)').toBe(200);
+      expect(String(dataOf<any>(again)._id)).toBe(id);
+
+      const otherId = await ensureTagApi(chief, cta, uniq('wsprobe đổi tên'));
+      const renamed = uniq('wsprobe đã đổi');
+      const patched = await api(chief, 'PATCH', `/tags/${otherId}`, { scope: cta, data: { name: padSpaces(renamed, 12) } });
+      expect(patched.status, `PATCH với khoảng trắng thừa: ${JSON.stringify(patched.body)}`).toBe(200);
+      expect(dataOf<any>(patched).name, 'PATCH lưu tên đã gộp khoảng trắng').toBe(renamed);
+
+      // ranh giới: đúng 40 ký tự sau khi gộp hợp lệ; 41 ký tự sau khi gộp bị 422 (độ dài tính SAU khi gộp)
+      const stamp = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
+      const base = `Biên 40 ${stamp}`;
+      const name40 = `${base} ${'x'.repeat(40 - base.length - 1)}`;
+      expect(name40.length, 'tiền đề: tên đúng 40 ký tự').toBe(40);
+      const ok40 = await createTagApi(chief, cta, padSpaces(name40, 5));
+      expect(ok40.status, `đúng 40 ký tự sau khi gộp phải hợp lệ: ${JSON.stringify(ok40.body)}`).toBe(201);
+      expect(dataOf<any>(ok40).name).toBe(name40);
+      const too41 = await createTagApi(chief, cta, padSpaces(`${name40}y`, 5));
+      expect(too41.status, '41 ký tự sau khi gộp vẫn bị từ chối').toBe(422);
+      expect(too41.body?.code).toBe('FG-VAL-001');
+
+      const blank = await createTagApi(chief, cta, ' '.repeat(60));
+      expect(blank.status, 'chuỗi toàn khoảng trắng dài → rỗng sau khi gộp → 422').toBe(422);
+    } finally {
+      await restore();
+    }
+  });
+
+  test('ô Tag của phiếu: gõ tên có khoảng trắng thừa > 40 ký tự → "+ Tạo tag" tạo đúng tên đã gộp, không báo lỗi', async ({ as }) => {
+    const staff = await as('staff');
+    const restore = await useCompanyScope(staff, COMPANY.CTA);
+    const watch = watchPage(staff, 'ui-padded-tag');
+    try {
+      const cta = await companyIdOf(staff, COMPANY.CTA);
+      const core = uniq('Gõ khoảng trắng');
+      const acc = await firstBankAccountApi(staff, cta);
+      const partnerId = await createPartnerApi(staff, cta, 'customer', uniq('KH khoảng trắng'));
+      const v = await createVoucherApi(staff, cta, { partnerId, accountId: acc, title: uniq('Phiếu khoảng trắng') });
+
+      await openPage(staff, `/chi/${v.id}/sua`);
+      const box = tagCombo(staff, VOUCHER_TAG_LABEL);
+      await box.click();
+      await box.pressSequentially(padSpaces(core, 12));
+      await visibleOption(staff, '+ Tạo tag').click();
+      await expect(staff.locator('.fg-chip', { hasText: core }), 'chip hiện đúng tên đã gộp khoảng trắng').toHaveCount(1, { timeout: 10_000 });
+      await staff.keyboard.press('Escape');
+      await staff.getByRole('button', { name: 'Lưu thay đổi', exact: true }).click();
+      await staff.waitForURL(/\/ho-so\/chi\//, { timeout: 20_000 });
+
+      const doc = await getDocApi(staff, cta, v.id);
+      expect((doc.tags ?? []).map((t: any) => t.name), 'phiếu lưu đúng tên tag đã gộp').toEqual([core]);
+      expectNoAppCrash(watch);
+    } finally {
+      await restore();
+    }
+  });
+
+  test('màn Quản lý tag: ô "Tên tag" có khoảng trắng thừa > 40 ký tự không bị cắt cụt (giới hạn 40 tính sau khi gộp)', async ({ as }) => {
+    const chief = await as('chief');
+    const restore = await useCompanyScope(chief, COMPANY.CTA);
+    const watch = watchPage(chief, 'tags-modal-padded');
+    try {
+      const cta = await companyIdOf(chief, COMPANY.CTA);
+      const core = uniq('Modal khoảng trắng');
+      await openPage(chief, '/quantri/tags');
+      await chief.getByRole('button', { name: '+ Tạo tag', exact: true }).click();
+      const dialog = chief.getByRole('dialog');
+      // tiền đề: chuỗi thô vượt 40 ký tự, nhưng tên đã gộp khoảng trắng vẫn ≤ 40 (đúng ca bị cắt cụt trước đây)
+      const raw = padSpaces(core, 12);
+      expect(core.length, 'tiền đề: tên đã gộp ≤ 40 ký tự').toBeLessThanOrEqual(40);
+      expect(raw.length, 'tiền đề: chuỗi thô > 40 ký tự').toBeGreaterThan(40);
+      // gõ như người dùng (không fill) để kiểm ô không cắt chuỗi khi gõ
+      const input = dialog.getByLabel('Tên tag');
+      await input.pressSequentially(raw);
+      const typed = await input.inputValue();
+      expect(typed.replace(/\s+/g, ' ').trim(), 'ô "Tên tag" không được cắt cụt chuỗi thô vượt 40 ký tự (giới hạn 40 tính sau khi gộp)').toBe(core);
+      const created = await timeWriteToToast(
+        chief,
+        { method: 'POST', path: TAG_COLLECTION_PATH },
+        () => dialog.getByRole('button', { name: 'Tạo tag', exact: true }).click(),
+        `Đã tạo tag “${core}”`,
+      );
+      expect(created.status, 'POST /tags với khoảng trắng thừa trả 201').toBe(201);
+      console.log(`[tags-perf] tạo tag có khoảng trắng thừa trong modal: ${created.ms} ms từ phản hồi tới thông báo`);
+      expect(created.ms, 'modal đóng và thông báo hiện trong ~1 s sau khi POST xong').toBeLessThanOrEqual(UI_AFTER_WRITE_BUDGET_MS);
+      await expect(dialog, 'modal đóng sau khi tạo tag').toBeHidden({ timeout: 5_000 });
+      const saved = await tagByName(chief, cta, core);
+      expect(saved?.name, 'danh bạ có đúng tên đã gộp, không phải bản bị cắt cụt').toBe(core);
+      expectNoAppCrash(watch);
+    } finally {
+      await restore();
+    }
+  });
+
+  test('CSDL: index khai báo đã tồn tại — unique (company_id, name_key) của tags, (company_id, tag_ids) của documents, unique idem_key, unique partial của business_links', async () => {
+    expect(hasIndex(dbIndexes('tags'), { company_id: 1, name_key: 1 }, { unique: true }), 'tags: unique (company_id, name_key) chống trùng tên ở tầng DB (v2 §6.2)').toBe(true);
+    expect(hasIndex(dbIndexes('documents'), { company_id: 1, tag_ids: 1 }), 'documents: index (company_id, tag_ids) cho lọc theo tag').toBe(true);
+    expect(hasIndex(dbIndexes('partners'), { company_id: 1, type: 1, name_key: 1 }), 'partners: index (company_id, type, name_key)').toBe(true);
+    expect(hasIndex(dbIndexes('automation_runs'), { idem_key: 1 }, { unique: true }), 'automation_runs: unique idem_key').toBe(true);
+    expect(
+      hasIndex(dbIndexes('business_links'), { from_id: 1, to_id: 1, relation: 1 }, { unique: true, partial: true }),
+      'business_links: unique partial (from_id, to_id, relation)',
+    ).toBe(true);
+  });
+});
+
+/* =========================================================================
+ * 13. Vòng 5 (retest 2) — bổ sung: bỏ tag trên form phiếu · phân trang màn Quản lý tag · ký tự vô hình ·
+ *     số phiếu làm tươi sau khi gắn tag · lỗi hiện ngay trong modal (tên quá dài / trùng tag đang ẩn).
+ * ========================================================================= */
+
+test.describe('vòng 5 (retest 2) · bổ sung', () => {
+  test('form sửa phiếu nháp: bỏ một tag bằng ✕ rồi "Lưu thay đổi" → phiếu chỉ còn tag giữ lại', async ({ as }) => {
+    const staff = await as('staff');
+    const restore = await useCompanyScope(staff, COMPANY.CTA);
+    const watch = watchPage(staff, 'draft-remove-tag');
+    try {
+      const cta = await companyIdOf(staff, COMPANY.CTA);
+      const keepName = uniq('Giữ tag');
+      const dropName = uniq('Gỡ tag');
+      const keepId = await ensureTagApi(staff, cta, keepName);
+      const dropId = await ensureTagApi(staff, cta, dropName);
+      const acc = await firstBankAccountApi(staff, cta);
+      const partnerId = await createPartnerApi(staff, cta, 'customer', uniq('KH gỡ tag'));
+      const v = await createVoucherApi(staff, cta, { partnerId, accountId: acc, title: uniq('Phiếu gỡ tag'), tagIds: [keepId, dropId] });
+
+      await openPage(staff, `/chi/${v.id}/sua`);
+      await expect(staff.locator('.fg-chip', { hasText: dropName })).toHaveCount(1, { timeout: 10_000 });
+      await staff.getByRole('button', { name: `Bỏ tag ${dropName}`, exact: true }).click();
+      await expect(staff.locator('.fg-chip', { hasText: dropName }), 'chip đã bỏ biến khỏi ô tag').toHaveCount(0);
+      await expect(staff.locator('.fg-chip', { hasText: keepName }), 'tag giữ lại vẫn còn trên ô').toHaveCount(1);
+      await staff.getByRole('button', { name: 'Lưu thay đổi', exact: true }).click();
+      await staff.waitForURL(/\/ho-so\/chi\//, { timeout: 20_000 });
+
+      const doc = await getDocApi(staff, cta, v.id);
+      expect(doc.tag_ids, 'phiếu chỉ còn tag giữ lại (tag đã bỏ không còn trên phiếu)').toEqual([keepId]);
+      expectNoAppCrash(watch);
+    } finally {
+      await restore();
+    }
+  });
+
+  test('màn Quản lý tag: sang trang 2 hiện dòng khác trang 1; "Sửa" ở trang 2 mở đúng tag', async ({ as }) => {
+    const chief = await as('chief');
+    const restore = await useCompanyScope(chief, COMPANY.CTA);
+    const watch = watchPage(chief, 'tags-paging');
+    try {
+      await openPage(chief, '/quantri/tags');
+      const rows = chief.locator('.ant-table-tbody tr.ant-table-row');
+      await expect(rows.first(), 'bảng đã tải dòng đầu').toBeVisible({ timeout: 30_000 });
+      const editButtons = chief.getByRole('button', { name: /^Sửa tag / });
+      const firstOnPage1 = await editButtons.first().getAttribute('aria-label');
+
+      const page2 = chief.locator('.ant-pagination-item-2');
+      await expect(page2, 'danh bạ nhiều hơn 25 tag: có nút trang 2').toBeVisible();
+      await page2.click();
+      await expect(chief.locator('.ant-pagination-item-active'), 'đang ở trang 2').toHaveText('2', { timeout: 10_000 });
+      await expect(rows.first()).toBeVisible();
+      expect(await rows.count(), 'mỗi trang tối đa 25 dòng').toBeLessThanOrEqual(25);
+
+      const firstOnPage2 = await editButtons.first().getAttribute('aria-label');
+      expect(firstOnPage2, 'trang 2 không lặp dòng đầu của trang 1').not.toBe(firstOnPage1);
+      const name2 = (firstOnPage2 ?? '').replace(/^Sửa tag /, '');
+      expect(name2, 'đọc được tên tag ở trang 2').not.toBe('');
+      await editButtons.first().click();
+      const dialog = chief.getByRole('dialog');
+      await expect(dialog, 'nút "Sửa" ở trang 2 mở đúng tag đó').toContainText(name2);
+      await dialog.getByRole('button', { name: 'Hủy', exact: true }).click();
+      expectNoAppCrash(watch);
+    } finally {
+      await restore();
+    }
+  });
+
+  test('KTT · modal Tạo tag: tên dài hơn 40 ký tự bị báo ngay trong modal, không gửi yêu cầu và không tạo tag', async ({ as }) => {
+    const chief = await as('chief');
+    const restore = await useCompanyScope(chief, COMPANY.CTA);
+    const watch = watchPage(chief, 'tags-modal-too-long');
+    try {
+      const cta = await companyIdOf(chief, COMPANY.CTA);
+      const tooLong = 'Y'.repeat(41);
+      await openPage(chief, '/quantri/tags');
+      await chief.getByRole('button', { name: '+ Tạo tag', exact: true }).click();
+      const dialog = chief.getByRole('dialog');
+      await dialog.getByLabel('Tên tag').fill(tooLong);
+      let posted = false;
+      chief.on('request', (req) => {
+        if (req.method() === 'POST' && new URL(req.url()).pathname === '/api/v1/tags') posted = true;
+      });
+      await dialog.getByRole('button', { name: 'Tạo tag', exact: true }).click();
+      await expect(dialog.getByText('Tên tag tối đa 40 ký tự'), 'lỗi độ dài hiện ngay trong modal').toBeVisible({ timeout: 5_000 });
+      await settle(chief);
+      expect(posted, 'không gửi POST /tags khi tên quá 40 ký tự').toBe(false);
+      await expect(dialog, 'modal vẫn mở để sửa tên').toBeVisible();
+      expect(await tagsNamed(chief, cta, tooLong), 'không có tag nào được tạo').toHaveLength(0);
+      expectNoAppCrash(watch);
+    } finally {
+      await restore();
+    }
+  });
+
+  test('KTT · modal Tạo tag: tên trùng tag đang ẩn → báo lỗi trong modal, modal vẫn mở, không tạo bản trùng', async ({ as }) => {
+    const chief = await as('chief');
+    const restore = await useCompanyScope(chief, COMPANY.CTA);
+    const watch = watchPage(chief, 'tags-modal-hidden-dup');
+    try {
+      const cta = await companyIdOf(chief, COMPANY.CTA);
+      const name = uniq('Ẩn trùng modal');
+      const id = await ensureTagApi(chief, cta, name);
+      expect((await api(chief, 'PATCH', `/tags/${id}`, { scope: cta, data: { hidden: true } })).status, 'KTT ẩn tag không dùng').toBe(200);
+
+      await openPage(chief, '/quantri/tags');
+      await chief.getByRole('button', { name: '+ Tạo tag', exact: true }).click();
+      const dialog = chief.getByRole('dialog');
+      await dialog.getByLabel('Tên tag').fill(name);
+      const [res] = await Promise.all([
+        chief.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/tags', { timeout: 15_000 }),
+        dialog.getByRole('button', { name: 'Tạo tag', exact: true }).click(),
+      ]);
+      expect(res.status(), 'tạo trùng tag đang ẩn bị từ chối (409 FG-TAG-001)').toBe(409);
+      await expect(dialog.getByText(/đang bị ẩn/), 'lỗi nêu tag đã có nhưng đang ẩn, ngay trong modal').toBeVisible({ timeout: 10_000 });
+      await expect(dialog, 'modal vẫn mở').toBeVisible();
+      expect(await tagsNamed(chief, cta, name), 'không tạo bản trùng').toHaveLength(1);
+      expectNoAppCrash(watch);
+    } finally {
+      await restore();
+    }
+  });
+
+  test('ô tag của phiếu: tên gõ kèm ký tự vô hình (ZWSP, từ copy/paste) vẫn gợi ý tag có sẵn, không đề nghị "+ Tạo tag"', async ({ as }) => {
+    const staff = await as('staff');
+    const restore = await useCompanyScope(staff, COMPANY.CTA);
+    const watch = watchPage(staff, 'zwsp-tag-box');
+    try {
+      const cta = await companyIdOf(staff, COMPANY.CTA);
+      const base = uniq('Có ký tự ẩn');
+      const tagId = await ensureTagApi(staff, cta, base);
+      const acc = await firstBankAccountApi(staff, cta);
+      const partnerId = await createPartnerApi(staff, cta, 'customer', uniq('KH ký tự ẩn'));
+      const v = await createVoucherApi(staff, cta, { partnerId, accountId: acc, title: uniq('Phiếu ký tự ẩn') });
+
+      await openPageInScope(staff, `/chi/${v.id}/sua`, COMPANY.CTA);
+      const box = tagCombo(staff, VOUCHER_TAG_LABEL);
+      await box.click();
+      // chèn ZWSP (U+200B) sau hai ký tự đầu — kiểu ký tự vô hình hay dính khi copy; máy chủ bỏ nó khi chuẩn hoá tên
+      await box.pressSequentially(`${base.slice(0, 2)}\u200B${base.slice(2)}`);
+      // tag có sẵn phải nằm trong gợi ý (không tính dòng "+ Tạo tag", vốn cũng chứa tên đó)
+      const existingOpt = staff
+        .locator('.ant-select-dropdown:visible .ant-select-item-option')
+        .filter({ hasText: base })
+        .filter({ hasNotText: '+ Tạo tag' });
+      await expect.soft(existingOpt, 'gợi ý tag có sẵn dù gõ kèm ký tự vô hình (máy chủ coi đây là cùng tên)').toHaveCount(1, { timeout: 10_000 });
+      await expect.soft(visibleOption(staff, '+ Tạo tag'), 'không đề nghị tạo tag trùng tên đã có').toHaveCount(0);
+      // dù gợi ý sai: chọn đề nghị đang hiện vẫn phải gắn đúng tag đã có, không tạo bản trùng
+      const choice = (await existingOpt.count()) ? existingOpt.first() : visibleOption(staff, '+ Tạo tag');
+      await choice.click();
+      await expect(staff.locator('.fg-chip', { hasText: base }), 'chip hiện đúng tên tag đã có').toHaveCount(1, { timeout: 10_000 });
+      await staff.keyboard.press('Escape');
+      await staff.getByRole('button', { name: 'Lưu thay đổi', exact: true }).click();
+      await staff.waitForURL(/\/ho-so\/chi\//, { timeout: 20_000 });
+
+      const doc = await getDocApi(staff, cta, v.id);
+      expect(doc.tag_ids, 'phiếu gắn đúng tag có sẵn').toEqual([tagId]);
+      expect(await tagsNamed(staff, cta, base), 'không tạo bản trùng').toHaveLength(1);
+      expectNoAppCrash(watch);
+    } finally {
+      await restore();
+    }
+  });
+
+  test('số phiếu trên màn Quản lý tag làm tươi sau khi KTT gắn tag vào phiếu trong cùng phiên (không hiện số cũ)', async ({ as }) => {
+    const chief = await as('chief');
+    const staff = await as('staff');
+    const restore = await useCompanyScope(chief, COMPANY.CTA);
+    const watch = watchPage(chief, 'tags-usage-fresh');
+    try {
+      const cta = await companyIdOf(chief, COMPANY.CTA);
+      const name = uniq('Số phiếu tươi');
+      const tagId = await ensureTagApi(chief, cta, name);
+      const acc = await firstBankAccountApi(staff, cta);
+      const partnerId = await createPartnerApi(staff, cta, 'customer', uniq('KH số phiếu'));
+      const v = await createVoucherApi(staff, cta, { partnerId, accountId: acc, title: uniq('Phiếu số phiếu') });
+
+      // 1) mở màn Quản lý tag: danh bạ được tải, tag chưa gắn phiếu nào
+      await openPageInScope(chief, '/quantri/tags', COMPANY.CTA);
+      await chief.getByRole('textbox', { name: 'Tìm tag theo tên', exact: true }).fill(name);
+      await expect(tableRow(chief, name).locator('td').nth(1), 'ban đầu tag chưa gắn phiếu').toHaveText('0', { timeout: 15_000 });
+
+      // 2) cùng phiên (không tải lại trang, chỉ đi bằng điều hướng trong ứng dụng): tìm phiếu rồi gắn tag ở chi tiết phiếu
+      const search = chief.getByRole('searchbox', { name: 'Tìm kiếm toàn cục', exact: true });
+      await search.fill(v.code);
+      await search.press('Enter');
+      await chief.waitForURL(/\/tim-kiem\?q=/, { timeout: 10_000 });
+      await chief.getByRole('link', { name: v.code, exact: true }).click();
+      await chief.waitForURL(new RegExp(`/ho-so/chi/${v.id}`), { timeout: 15_000 });
+      const box = tagCombo(chief, DETAIL_TAG_LABEL);
+      await expect(box).toBeEnabled();
+      await box.click();
+      await box.pressSequentially(name);
+      await visibleOption(chief, name).click();
+      await chief.keyboard.press('Escape');
+      await saveTagsAndWait(chief, v.id, 1);
+
+      // 3) quay lại màn Quản lý tag bằng menu (không tải lại trang): số phiếu phải là 1 chứ không còn số cũ 0
+      await chief.getByRole('link', { name: /Quản lý tag/ }).click();
+      await chief.waitForURL(/\/quantri\/tags/, { timeout: 10_000 });
+      await chief.getByRole('textbox', { name: 'Tìm tag theo tên', exact: true }).fill(name);
+      await expect
+        .soft(tableRow(chief, name).locator('td').nth(1), 'số phiếu ngay sau khi gắn tag vào phiếu (cùng phiên) phải là 1')
+        .toHaveText('1', { timeout: 5_000 });
+      // đối chứng: tải lại trang thì số đúng → máy chủ đúng (1 phiếu), lỗi nằm ở bộ nhớ đệm của giao diện (staleTime 30 s)
+      await openPageInScope(chief, '/quantri/tags', COMPANY.CTA);
+      await chief.getByRole('textbox', { name: 'Tìm tag theo tên', exact: true }).fill(name);
+      await expect(tableRow(chief, name).locator('td').nth(1), 'sau khi tải lại trang số phiếu là 1').toHaveText('1', { timeout: 10_000 });
+      expect(tagId).toMatch(/^[0-9a-f]{24}$/);
       expectNoAppCrash(watch);
     } finally {
       await restore();
