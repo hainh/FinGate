@@ -272,6 +272,18 @@ body {
   min-width: 0;
 }
 
+/* cột phụ (Trạng thái / Nộp) bám theo khi cuộn form; trên màn hẹp xếp dọc nên không sticky */
+.fg-form-side {
+  position: sticky;
+  top: calc(var(--fg-header-h) + var(--fg-space-4));
+}
+
+@media (max-width: 767px) {
+  .fg-form-side {
+    position: static;
+  }
+}
+
 .fg-card {
   background: var(--fg-bg-surface);
   border: var(--fg-border-w-1) solid var(--fg-border-default);

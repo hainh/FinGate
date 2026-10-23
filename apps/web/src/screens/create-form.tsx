@@ -981,7 +981,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
             </Section>
           ) : null}
         </FgCard>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)' }}>
+        <div className="fg-form-side" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)' }}>
           <FgCard title="Trạng thái">
             <FgText style="bodyS" color="muted">
               {id && loaded ? `Hồ sơ ${loaded.code} · ${statusLabel(loaded.status)}` : id ? 'Đang tải hồ sơ…' : 'Phiếu mới — chưa gửi duyệt'}
