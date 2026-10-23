@@ -11,6 +11,7 @@
  */
 
 import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { EditOutlined, PlusOutlined } from '@ant-design/icons';
 import { Divider, Select } from 'antd';
 import {
   PARTNER_STATUSES,
@@ -39,7 +40,7 @@ import {
 } from '../app/v2/partners.ts';
 import { useDebounced, useToast } from './pagekit.tsx';
 import { detailForValue, isSearchSettled, needsSelectedOption } from './partner-picker-options.ts';
-import { FgAlert, FgButton, FgField, FgInput, FgText, FgTextarea } from './primitives.tsx';
+import { FgAlert, FgButton, FgField, FgInput, FgText, FgTextarea, FgTooltip } from './primitives.tsx';
 import { FgModal, FgSegmented } from './uitk.tsx';
 
 const ALL_TYPES: PartnerType[] = [...PARTNER_TYPES];
@@ -552,20 +553,32 @@ export function PartnerPicker({
             style={{ width: '100%' }}
           />
         </div>
+        {/* nút chỉ có icon; nhãn hiện ở tooltip (span bọc để tooltip vẫn hiện khi nút bị khoá) */}
         {value ? (
-          <FgButton disabled={disabled || !selected || !canWritePartner} onClick={() => setDialog('edit')}>
-            Sửa đối tác
-          </FgButton>
+          <FgTooltip title="Sửa đối tác">
+            <span style={{ display: 'inline-flex' }}>
+              <FgButton
+                icon={<EditOutlined />}
+                aria-label="Sửa đối tác"
+                disabled={disabled || !selected || !canWritePartner}
+                onClick={() => setDialog('edit')}
+              />
+            </span>
+          </FgTooltip>
         ) : (
-          <FgButton
-            disabled={disabled || !canWritePartner}
-            // chụp chữ đang gõ khi nhấn chuột / Tab tới nút — trước khi rc-select xoá ô tìm (xem rememberTyped)
-            onMouseDown={rememberTyped}
-            onFocus={rememberTyped}
-            onClick={openCreate}
-          >
-            + Tạo đối tác
-          </FgButton>
+          <FgTooltip title="Tạo đối tác">
+            <span style={{ display: 'inline-flex' }}>
+              <FgButton
+                icon={<PlusOutlined />}
+                aria-label="Tạo đối tác"
+                disabled={disabled || !canWritePartner}
+                // chụp chữ đang gõ khi nhấn chuột / Tab tới nút — trước khi rc-select xoá ô tìm (xem rememberTyped)
+                onMouseDown={rememberTyped}
+                onFocus={rememberTyped}
+                onClick={openCreate}
+              />
+            </span>
+          </FgTooltip>
         )}
       </div>
 
