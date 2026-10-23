@@ -63,6 +63,9 @@ import { TagInput } from '../components/tag-input.tsx';
 
 type PageKind = 'spend' | 'income' | 'rollover' | 'internal';
 
+/** Tạm tắt ô Danh mục và Ngân sách / dòng ngân sách trên form phiếu (đặt true để bật lại). */
+const SHOW_CATEGORY_BUDGET = false;
+
 /** Khối khoản vay trên phiếu: thu đi vay (R2, `on` = "Đây là khoản vay ngân hàng") hoặc chi vay để chi (R3). */
 interface LoanState {
   on: boolean;
@@ -297,7 +300,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
     .filter((c) => c.active && c.doc_kind === kind)
     .map((c) => ({ value: c._id, label: c.code ? `${c.code} · ${c.name}` : c.name }));
   // danh mục bắt buộc khi GỬI DUYỆT (nháp thì chưa); chỉ đòi khi đã cấu hình danh mục cho loại phiếu này
-  const categoryRequired = hasVoucherFinance && categoryOptions.length > 0;
+  const categoryRequired = SHOW_CATEGORY_BUDGET && hasVoucherFinance && categoryOptions.length > 0;
   const budgetLinesQ = useBudgetLineOptions(currentCompany);
   const budgetLineOptions = (budgetLinesQ.data ?? []).map((o) => ({ value: `${o.budget_id}|${o.line_id}`, label: budgetLineLabel(o) }));
   /** Tạo mới và gửi duyệt ngay (không phải nháp, không phải sửa). */
@@ -670,39 +673,43 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
             </FgField>
             {hasVoucherFinance ? (
               <>
-                <FgField
-                  label={categoryRequired ? 'Danh mục *' : 'Danh mục'}
-                  error={errors.category_id ?? null}
-                  help={categoryOptions.length ? 'Quyết định chứng từ bắt buộc và cấp duyệt' : 'Chưa cấu hình danh mục cho loại phiếu này'}
-                >
-                  <FgSelect
-                    options={categoryOptions}
-                    value={f.categoryId ?? undefined}
-                    onChange={(v) => set('categoryId', v ?? null)}
-                    placeholder="Chọn danh mục"
-                    allowClear
-                    style={{ width: '100%' }}
-                    disabled={!canEdit}
-                  />
-                </FgField>
-                <FgField
-                  label="Ngân sách / dòng ngân sách"
-                  error={errors['budget.line_id'] ?? errors['budget.budget_id'] ?? null}
-                  help={budgetLineOptions.length ? undefined : 'Không có dòng ngân sách trong phạm vi (cần quyền xem ngân sách)'}
-                >
-                  <FgSelect
-                    options={budgetLineOptions}
-                    value={f.budgetId && f.budgetLineId ? `${f.budgetId}|${f.budgetLineId}` : undefined}
-                    onChange={(v) => {
-                      const [budgetId, lineId] = (v ?? '').split('|');
-                      setF((s) => ({ ...s, budgetId: budgetId || null, budgetLineId: lineId || null }));
-                    }}
-                    placeholder="Chọn dòng ngân sách"
-                    allowClear
-                    style={{ width: '100%' }}
-                    disabled={!canEdit}
-                  />
-                </FgField>
+                {SHOW_CATEGORY_BUDGET ? (
+                  <>
+                  <FgField
+                    label={categoryRequired ? 'Danh mục *' : 'Danh mục'}
+                    error={errors.category_id ?? null}
+                    help={categoryOptions.length ? 'Quyết định chứng từ bắt buộc và cấp duyệt' : 'Chưa cấu hình danh mục cho loại phiếu này'}
+                  >
+                    <FgSelect
+                      options={categoryOptions}
+                      value={f.categoryId ?? undefined}
+                      onChange={(v) => set('categoryId', v ?? null)}
+                      placeholder="Chọn danh mục"
+                      allowClear
+                      style={{ width: '100%' }}
+                      disabled={!canEdit}
+                    />
+                  </FgField>
+                  <FgField
+                    label="Ngân sách / dòng ngân sách"
+                    error={errors['budget.line_id'] ?? errors['budget.budget_id'] ?? null}
+                    help={budgetLineOptions.length ? undefined : 'Không có dòng ngân sách trong phạm vi (cần quyền xem ngân sách)'}
+                  >
+                    <FgSelect
+                      options={budgetLineOptions}
+                      value={f.budgetId && f.budgetLineId ? `${f.budgetId}|${f.budgetLineId}` : undefined}
+                      onChange={(v) => {
+                        const [budgetId, lineId] = (v ?? '').split('|');
+                        setF((s) => ({ ...s, budgetId: budgetId || null, budgetLineId: lineId || null }));
+                      }}
+                      placeholder="Chọn dòng ngân sách"
+                      allowClear
+                      style={{ width: '100%' }}
+                      disabled={!canEdit}
+                    />
+                  </FgField>
+                  </>
+                ) : null}
                 <FgField label="Trong kế hoạch" help={f.inPlan ? 'Khoản trong kế hoạch ngân sách' : 'Ngoài kế hoạch: người duyệt phải gõ lại số tiền để xác nhận'}>
                   <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, cursor: canEdit ? 'pointer' : 'not-allowed' }}>
                     <input type="checkbox" checked={f.inPlan} onChange={(e) => set('inPlan', e.target.checked)} style={{ width: 18, height: 18 }} disabled={!canEdit} />
