@@ -228,7 +228,7 @@ export function TagsCard({ doc }: { doc: DocumentDetail }): ReactNode {
       <TagInput value={value} onChange={(ids) => setDraft(ids)} companyId={doc.company_id} disabled={!canTag} knownTags={doc.tags} ariaLabel="Tag của phiếu" />
       <FgText style="caption" color="muted">
         {canTag
-          ? 'Tag là nhãn tự do (dự án, công trình, đợt…). Sửa được cả sau khi duyệt — không ảnh hưởng tiền, có ghi lịch sử.'
+          ? 'Tag là nhãn tự do (dự án, công trình, đợt…).'
           : 'Bạn không có quyền sửa tag của phiếu này.'}
       </FgText>
     </FgCard>

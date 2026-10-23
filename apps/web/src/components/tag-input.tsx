@@ -241,6 +241,7 @@ function TagSelect({
       maxTagCount={maxTagCount}
       loading={tagsQ.isFetching && !tags}
       style={{ width: '100%', minWidth: 200, ...style }}
+      size='small'
     />
   );
 }
