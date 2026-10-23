@@ -18,6 +18,7 @@ import { findDuplicatePartners, identifierSearchPattern, type DuplicateHit } fro
 import { defaultPeriod, loadPartnerLedgers, maturityInfo, numbersOf, type LedgerPartner, type LoanView, type DebtView, type Period, type PartnerLedger, type SummaryVisibility } from './summary.ts';
 import { accountCodeOfPartnerType } from '../debt/rules.ts';
 import { assertPartnerTypeChange, loadPartnerTypeUsage } from './type-guard.ts';
+import { internalPartnerFieldsFor } from './internal.ts';
 import {
   asPartnerType,
   assertValidPartnerRecord,
@@ -129,6 +130,8 @@ export async function createPartner(input: {
   ip?: string | null;
   requestId?: string | null;
 }): Promise<CreateOutput> {
+  // Loại nội bộ: tên / NH / STK lấy từ TK gốc (bỏ giá trị người dùng gửi lên), không cảnh báo trùng.
+  const isInternal = input.body.type === 'internal';
   const snap = snapshotOf({
     type: input.body.type,
     name: input.body.name,
@@ -138,9 +141,7 @@ export async function createPartner(input: {
     note: input.body.note,
     status: input.body.status ?? 'active',
   });
-  assertValidPartnerRecord(snap);
-  const type = asPartnerType(snap.type);
-  const name = snap.name ?? '';
+  if (!isInternal) assertValidPartnerRecord(snap);
 
   // Chống ghi đúp: cùng request_id (bấm lặp / thử lại mạng) ⇒ trả lại đúng đối tác đã tạo, không tạo thêm.
   let claim: ClaimHandle | null = null;
@@ -154,12 +155,26 @@ export async function createPartner(input: {
     claim = outcome.handle;
   }
   try {
-    const warnings = await findDuplicatePartners({
-      companyId: input.companyId,
-      name,
-      bank_name: snap.bank_name,
-      account_number: snap.account_number,
-    });
+    const internal = isInternal
+      ? await internalPartnerFieldsFor({
+          ownerCompanyId: input.companyId,
+          internalCompanyId: input.body.internal_company_id,
+          internalAccountId: input.body.internal_account_id,
+        })
+      : null;
+    const final = internal
+      ? snapshotOf({ type: 'internal', name: internal.name, bank_name: internal.bank_name, account_number: internal.account_number, tax_code: null, note: null, status: snap.status })
+      : snap;
+    const type = asPartnerType(final.type);
+    const name = final.name ?? '';
+    const warnings = internal
+      ? []
+      : await findDuplicatePartners({
+          companyId: input.companyId,
+          name,
+          bank_name: final.bank_name,
+          account_number: final.account_number,
+        });
 
     const code = await nextPartnerCode();
     const now = new Date();
@@ -167,14 +182,16 @@ export async function createPartner(input: {
       company_id: input.companyId,
       code,
       type,
-      status: snap.status ?? 'active',
+      internal_company_id: internal?.internal_company_id ?? null,
+      internal_account_id: internal?.internal_account_id ?? null,
+      status: final.status ?? 'active',
       name,
       name_key: normalizeNameKey(name),
-      bank_name: snap.bank_name,
-      account_number: snap.account_number,
-      tax_code: snap.tax_code,
-      note: snap.note,
-      history: [{ at: now, actor: { user_id: input.actor.user_id, name: input.actor.name ?? null }, changes: creationChanges(snap) }],
+      bank_name: final.bank_name,
+      account_number: final.account_number,
+      tax_code: final.tax_code,
+      note: final.note,
+      history: [{ at: now, actor: { user_id: input.actor.user_id, name: input.actor.name ?? null }, changes: creationChanges(final) }],
       created_by: input.actor.user_id,
       created_at: now,
       updated_at: now,
@@ -189,7 +206,7 @@ export async function createPartner(input: {
       action: 'partner.create',
       subject: { type: 'partner', id: partner._id, code },
       company_id: input.companyId,
-      diff_fields: { type, name, status: snap.status ?? 'active' },
+      diff_fields: { type, name, status: final.status ?? 'active' },
       request_id: input.requestId ?? null,
       ip: input.ip ?? null,
     });
@@ -224,6 +241,23 @@ export async function updatePartner(input: {
   if (b.note !== undefined) next.note = cleanText(b.note);
   if (b.status !== undefined) next.status = cleanText(b.status);
   assertValidPartnerRecord(next);
+
+  // Đối tác nội bộ: thông tin lấy từ công ty / TK gốc nên không sửa tay (chỉ đổi trạng thái); không đổi sang loại này.
+  const infoFields = ['type', 'name', 'bank_name', 'account_number', 'tax_code', 'note'] as const;
+  if (before.type === 'internal' && infoFields.some((f) => before[f] !== next[f])) {
+    throw new ApiError({
+      code: 'FG-VAL-001',
+      detail: 'Đối tác công ty trong tập đoàn không sửa thông tin — thông tin lấy từ công ty / tài khoản gốc',
+      errors: { name: 'Thông tin lấy từ công ty / tài khoản gốc, không sửa tay' },
+    });
+  }
+  if (before.type !== 'internal' && next.type === 'internal') {
+    throw new ApiError({
+      code: 'FG-VAL-001',
+      detail: 'Không đổi sang "Công ty trong tập đoàn" — tạo đối tác mới',
+      errors: { type: 'Tạo đối tác mới để chọn công ty trong tập đoàn' },
+    });
+  }
 
   if (before.type !== next.type) {
     const usage = await loadPartnerTypeUsage(companyId, input.id);
@@ -417,6 +451,14 @@ export async function copyPartners(input: {
   const sources = await Models.Partner.find({ _id: { $in: ids }, company_id: input.sourceCompanyId } as never).lean<PartnerLean[]>();
   if (sources.length !== ids.length) {
     throw new ApiError({ code: 'FG-VAL-001', detail: 'Có đối tác không thuộc công ty nguồn', errors: { partner_ids: 'Đối tác không thuộc công ty nguồn' } });
+  }
+  // đối tác nội bộ trỏ tới TK của một công ty cụ thể — không sao chép sang công ty khác
+  if (sources.some((s) => s.type === 'internal')) {
+    throw new ApiError({
+      code: 'FG-VAL-001',
+      detail: 'Đối tác công ty trong tập đoàn không sao chép — tạo mới trong công ty cần',
+      errors: { partner_ids: 'Bỏ chọn đối tác công ty trong tập đoàn' },
+    });
   }
 
   let claim: ClaimHandle | null = null;

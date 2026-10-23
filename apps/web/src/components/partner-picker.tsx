@@ -26,7 +26,8 @@ import {
   type PartnerType,
 } from '@fingate/shared';
 import { ApiRequestError, uuid } from '../app/api.ts';
-import { useAuth } from '../app/store.tsx';
+import { useBankAccounts } from '../app/queries.ts';
+import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
 import {
   partnerOptionsEmptyState,
   useCreatePartner,
@@ -40,7 +41,7 @@ import {
 } from '../app/v2/partners.ts';
 import { useDebounced, useToast } from './pagekit.tsx';
 import { detailForValue, isSearchSettled, needsSelectedOption } from './partner-picker-options.ts';
-import { FgAlert, FgButton, FgField, FgInput, FgText, FgTextarea, FgTooltip } from './primitives.tsx';
+import { FgAlert, FgButton, FgField, FgInput, FgSelect, FgText, FgTextarea, FgTooltip } from './primitives.tsx';
 import { FgModal, FgSegmented } from './uitk.tsx';
 
 const ALL_TYPES: PartnerType[] = [...PARTNER_TYPES];
@@ -116,7 +117,12 @@ export function PartnerFormModal({
   onSaved,
 }: PartnerFormModalProps): ReactNode {
   const isEdit = !!editing;
-  const types = isEdit ? ALL_TYPES : partnerTypesFor(allowedTypes);
+  const { me } = useAuth();
+  const currentCompanyId = useCurrentCompanyId();
+  // "Công ty trong tập đoàn": đối tác = một TK ngân hàng của công ty khác; tên / NH / STK lấy từ TK gốc
+  const editingInternal = editing?.type === 'internal';
+  // loại nội bộ không đổi qua lại với loại khác: không hiện trong danh sách loại khi sửa đối tác thường
+  const types: PartnerType[] = isEdit ? (editingInternal ? ['internal'] : ALL_TYPES.filter((t) => t !== 'internal')) : partnerTypesFor(allowedTypes);
   // loại điền sẵn: theo ngữ cảnh; không có → Khách hàng (nếu được phép), rồi loại đầu tiên
   const fallbackType: PartnerType = types.includes('customer') ? 'customer' : (types[0] ?? 'customer');
   const [type, setType] = useState<PartnerType>(editing?.type ?? (defaultType && types.includes(defaultType) ? defaultType : fallbackType));
@@ -126,6 +132,23 @@ export function PartnerFormModal({
   const [taxCode, setTaxCode] = useState(editing?.tax_code ?? '');
   const [note, setNote] = useState(editing?.note ?? '');
   const [status, setStatus] = useState<PartnerStatus>(editing?.status ?? 'active');
+  const [internalCompanyId, setInternalCompanyId] = useState('');
+  const [internalAccountId, setInternalAccountId] = useState('');
+  const isInternal = type === 'internal';
+  const homeCompanyId = companyId ?? currentCompanyId;
+  const internalCompanyOptions = (me?.companies ?? [])
+    .filter((c) => c.company_id !== homeCompanyId)
+    .map((c) => ({ value: c.company_id, label: c.company_name }));
+  const internalCompanyName = me?.companies.find((c) => c.company_id === internalCompanyId)?.company_name ?? '';
+  const internalAccounts = useBankAccounts(isInternal && !isEdit && internalCompanyId ? internalCompanyId : null);
+  const internalAccountRows = (internalAccounts.data?.items ?? []).filter(
+    (a) => a.company_id === internalCompanyId && a.kind === 'bank' && !a.is_group && a.status === 'active',
+  );
+  const internalAccountOptions = internalAccountRows.map((a) => ({
+    value: a._id,
+    label: `${a.account_name} · ${a.bank_name} · ${a.account_number_masked}`,
+  }));
+  const internalAccount = internalAccountRows.find((a) => a._id === internalAccountId);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<{ title: string; detail?: string } | null>(null);
   const create = useCreatePartner();
@@ -139,7 +162,7 @@ export function PartnerFormModal({
   const dupTextDebounced = useDebounced(dupText, 500);
   const dupInput = useMemo<PartnerDuplicateCheckBody | null>(() => {
     const t = JSON.parse(dupTextDebounced) as { name: string; bank: string; account: string };
-    if (t.name.length < 2 && !(t.bank && t.account)) return null;
+    if (isInternal || (t.name.length < 2 && !(t.bank && t.account))) return null;
     return {
       company_id: companyId ?? undefined,
       name: t.name,
@@ -147,7 +170,7 @@ export function PartnerFormModal({
       account_number: t.account || null,
       exclude_id: editing?._id ?? null,
     };
-  }, [dupTextDebounced, companyId, editing?._id]);
+  }, [dupTextDebounced, companyId, editing?._id, isInternal]);
   const dupCheck = usePartnerDuplicateCheck(dupInput);
   // cảnh báo chỉ hiện khi đã kiểm ĐÚNG nội dung đang có: đang chờ debounce / đang kiểm tên mới ⇒ không hiện cảnh báo của chữ cũ
   const dupWarnings = dupText === dupTextDebounced ? (dupCheck.data?.warnings ?? []) : [];
@@ -155,24 +178,40 @@ export function PartnerFormModal({
   const submit = async (): Promise<void> => {
     const trimmedName = name.trim();
     const errs: Record<string, string> = {};
-    if (trimmedName.length < 2) errs.name = 'Tên đối tác tối thiểu 2 ký tự';
-    else if (trimmedName.length > 200) errs.name = 'Tên đối tác tối đa 200 ký tự';
-    if (bankName.trim().length > 200) errs.bank_name = 'Tên ngân hàng tối đa 200 ký tự';
-    if (accountNumber.trim().length > 40) errs.account_number = 'Số tài khoản tối đa 40 ký tự';
-    if (taxCode.trim().length > 20) errs.tax_code = 'Mã số thuế tối đa 20 ký tự';
-    if (note.length > 2000) errs.note = 'Ghi chú tối đa 2000 ký tự';
+    // đối tác nội bộ: chỉ chọn công ty + TK khi tạo; khi sửa chỉ đổi trạng thái
+    if (isInternal && !isEdit) {
+      if (!internalCompanyId) errs.internal_company_id = 'Chọn công ty trong tập đoàn';
+      if (!internalAccountId) errs.internal_account_id = 'Chọn tài khoản ngân hàng của công ty đó';
+    } else if (!editingInternal) {
+      if (trimmedName.length < 2) errs.name = 'Tên đối tác tối thiểu 2 ký tự';
+      else if (trimmedName.length > 200) errs.name = 'Tên đối tác tối đa 200 ký tự';
+      if (bankName.trim().length > 200) errs.bank_name = 'Tên ngân hàng tối đa 200 ký tự';
+      if (accountNumber.trim().length > 40) errs.account_number = 'Số tài khoản tối đa 40 ký tự';
+      if (taxCode.trim().length > 20) errs.tax_code = 'Mã số thuế tối đa 20 ký tự';
+      if (note.length > 2000) errs.note = 'Ghi chú tối đa 2000 ký tự';
+    }
     setErrors(errs);
     setFormError(null);
     if (Object.keys(errs).length) return;
 
-    const body: PartnerWriteBody = {
-      type,
-      name: trimmedName,
-      bank_name: bankName.trim() || null,
-      account_number: accountNumber.trim() || null,
-      tax_code: taxCode.trim() || null,
-      note: note.trim() || null,
-    };
+    const body: PartnerWriteBody = editingInternal
+      ? {}
+      : isInternal
+        ? {
+            type,
+            // tên hiển thị do máy chủ lấy từ TK gốc; gửi kèm để qua kiểm tra độ dài
+            name: `${internalCompanyName} · ${internalAccount?.account_name ?? ''}`,
+            internal_company_id: internalCompanyId,
+            internal_account_id: internalAccountId,
+          }
+        : {
+            type,
+            name: trimmedName,
+            bank_name: bankName.trim() || null,
+            account_number: accountNumber.trim() || null,
+            tax_code: taxCode.trim() || null,
+            note: note.trim() || null,
+          };
     try {
       const result = editing
         ? await update.mutateAsync({ id: editing._id, body: { ...body, status } })
@@ -209,6 +248,51 @@ export function PartnerFormModal({
       <div style={{ display: 'grid', gap: 'var(--fg-space-4)' }}>
         {formError ? <FgAlert tone="danger" title={formError.title} description={formError.detail} /> : null}
 
+        {editingInternal ? (
+          <FgAlert
+            tone="info"
+            title="Đối tác công ty trong tập đoàn"
+            description="Tên, ngân hàng và số tài khoản lấy từ công ty và tài khoản gốc, đổi ở đó sẽ tự cập nhật. Ở đây chỉ đổi được trạng thái."
+          />
+        ) : null}
+
+        {isInternal && !isEdit ? (
+          <>
+            <FgAlert
+              tone="info"
+              title="Chọn công ty và tài khoản trong tập đoàn"
+              description="Mỗi tài khoản là một đối tác riêng. Tên, ngân hàng và số tài khoản lấy từ tài khoản gốc, không sửa tay."
+            />
+            <FgField label="Công ty trong tập đoàn" required error={errors.internal_company_id}>
+              <FgSelect
+                options={internalCompanyOptions}
+                value={internalCompanyId || undefined}
+                onChange={(v) => {
+                  setInternalCompanyId(String(v ?? ''));
+                  setInternalAccountId('');
+                }}
+                placeholder="Chọn công ty"
+                style={{ width: '100%' }}
+              />
+            </FgField>
+            <FgField
+              label="Tài khoản ngân hàng"
+              required
+              error={errors.internal_account_id}
+              help={internalCompanyId ? undefined : 'Chọn công ty trước'}
+            >
+              <FgSelect
+                options={internalAccountOptions}
+                value={internalAccountId || undefined}
+                onChange={(v) => setInternalAccountId(String(v ?? ''))}
+                placeholder="Chọn tài khoản"
+                disabled={!internalCompanyId}
+                style={{ width: '100%' }}
+              />
+            </FgField>
+          </>
+        ) : null}
+
         {dupWarnings.length ? (
           <FgAlert
             tone="attention"
@@ -243,35 +327,41 @@ export function PartnerFormModal({
           )}
         </FgField>
 
-        <FgField
-          label="Tên đối tác"
-          required
-          error={errors.name}
-          help={type === 'bank' ? 'Với Ngân hàng: tên ngân hàng + chi nhánh cho vay, VD “BIDV – CN Đông Đô”.' : undefined}
-        >
-          <FgInput
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={type === 'bank' ? 'VD: BIDV – CN Đông Đô' : 'VD: Công ty TNHH ABC'}
-            maxLength={200}
-            autoFocus
-          />
-        </FgField>
+        {!isInternal && !editingInternal ? (
+          <FgField
+            label="Tên đối tác"
+            required
+            error={errors.name}
+            help={type === 'bank' ? 'Với Ngân hàng: tên ngân hàng + chi nhánh cho vay, VD “BIDV – CN Đông Đô”.' : undefined}
+          >
+            <FgInput
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={type === 'bank' ? 'VD: BIDV – CN Đông Đô' : 'VD: Công ty TNHH ABC'}
+              maxLength={200}
+              autoFocus
+            />
+          </FgField>
+        ) : null}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 'var(--fg-space-4)' }}>
-          <FgField
-            label="Ngân hàng"
-            error={errors.bank_name}
-            help={type === 'bank' ? 'Có thể bỏ trống nếu đã ghi trong tên đối tác.' : 'Ngân hàng nơi đối tác nhận / chuyển tiền.'}
-          >
-            <FgInput value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="VD: Vietcombank" />
-          </FgField>
-          <FgField label="Số tài khoản" error={errors.account_number}>
-            <FgInput value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} placeholder="VD: 0123456789" />
-          </FgField>
-          <FgField label="Mã số thuế" error={errors.tax_code}>
-            <FgInput value={taxCode} onChange={(e) => setTaxCode(e.target.value)} placeholder="VD: 0101234567" />
-          </FgField>
+          {!isInternal && !editingInternal ? (
+            <>
+              <FgField
+                label="Ngân hàng"
+                error={errors.bank_name}
+                help={type === 'bank' ? 'Có thể bỏ trống nếu đã ghi trong tên đối tác.' : 'Ngân hàng nơi đối tác nhận / chuyển tiền.'}
+              >
+                <FgInput value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="VD: Vietcombank" />
+              </FgField>
+              <FgField label="Số tài khoản" error={errors.account_number}>
+                <FgInput value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} placeholder="VD: 0123456789" />
+              </FgField>
+              <FgField label="Mã số thuế" error={errors.tax_code}>
+                <FgInput value={taxCode} onChange={(e) => setTaxCode(e.target.value)} placeholder="VD: 0101234567" />
+              </FgField>
+            </>
+          ) : null}
           {isEdit ? (
             <FgField label="Trạng thái" help="Ngừng giao dịch: không chọn được cho phiếu mới; dữ liệu cũ giữ nguyên.">
               <FgSegmented
@@ -283,9 +373,11 @@ export function PartnerFormModal({
           ) : null}
         </div>
 
-        <FgField label="Ghi chú" error={errors.note}>
-          <FgTextarea value={note} onChange={(e) => setNote(e.target.value)} maxLength={2000} />
-        </FgField>
+        {!isInternal && !editingInternal ? (
+          <FgField label="Ghi chú" error={errors.note}>
+            <FgTextarea value={note} onChange={(e) => setNote(e.target.value)} maxLength={2000} />
+          </FgField>
+        ) : null}
       </div>
     </FgModal>
   );

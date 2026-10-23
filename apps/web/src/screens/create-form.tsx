@@ -7,7 +7,7 @@
  * - Tag: TagInput (gõ để tìm; "+ Tạo tag" nếu có quyền).
  * - Phiếu thu đi vay (R2): khối khoản vay — tạo mới / gắn khoản có sẵn / để sau.
  * - Phiếu chi vay để chi (R3): ngân hàng cho vay + TK nhận giải ngân (mặc định = TK nguồn) + số tiền vay + điều khoản.
- * - Phiếu chi "Nhận: tài khoản nội bộ" (R1) và chuyển nội bộ: công ty + TK đích theo ID.
+ * - Phiếu chi có đối tác "Công ty trong tập đoàn" (R1) suy ra chuyển nội bộ; phiếu chuyển nội bộ chọn công ty + TK đích theo ID.
  * - Prefill từ query: ?partner_id (đối tác), ?kind (thu|chi, phải khớp form), ?loan=borrow (phiếu thu đi vay).
  *
  * Tiền nhập bằng parseMoneyInput (hỗ trợ "2,5 tỷ"); lỗi field hiển thị inline từ `problem.errors` (server).
@@ -111,7 +111,7 @@ export interface FormState {
   note: string;
   tagIds: string[];
   loan: LoanState;
-  /** Chuyển nội bộ theo ID (phiếu chi "Nhận: tài khoản nội bộ"; luôn bật với phiếu chuyển nội bộ). */
+  /** Chuyển nội bộ theo ID (luôn bật với phiếu chuyển nội bộ; phiếu chi suy từ đối tác). */
   transferOn: boolean;
   transferCompanyId: string;
   transferAccountId: string;
@@ -220,7 +220,7 @@ function formFromDocument(doc: DocumentDetail, kind: PageKind): FormState {
             collateral: terms?.collateral ?? '',
           }
         : emptyLoan(),
-    transferOn: kind === 'internal' || !!doc.transfer_target || !!doc.target,
+    transferOn: kind === 'internal',
     transferCompanyId: doc.transfer_target?.company_id ?? doc.target?.company_id ?? '',
     transferAccountId: doc.transfer_target?.account_id ?? doc.target?.account_id ?? '',
     plan: doc.rollover?.plan ?? '',
@@ -285,7 +285,8 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
   const isFund = kind === 'spend' && f.loan.on;
   const hasPartnerField = kind === 'spend' || kind === 'income' || kind === 'rollover';
   // Phiếu thu đi vay: bên nộp tiền chỉ là Ngân hàng (§11.4). Đảo hạn: ngân hàng (tuỳ chọn).
-  const partnerAllowed: PartnerType[] = isBorrow || kind === 'rollover' ? ['bank'] : partnerTypesFor(null);
+  // "Công ty trong tập đoàn" chỉ là bên nhận của phiếu chi (chuyển nội bộ suy từ đối tác)
+  const partnerAllowed: PartnerType[] = isBorrow || kind === 'rollover' ? ['bank'] : partnerTypesFor(kind === 'income' ? ['bank', 'customer', 'supplier'] : null);
   const partnerDefault: PartnerType = isBorrow || kind === 'rollover' ? 'bank' : kind === 'income' ? 'customer' : 'supplier';
   const partnerLabel = kind === 'income' ? 'Bên nộp tiền' : kind === 'spend' ? 'Bên nhận tiền' : 'Ngân hàng';
   const partnerRequired = kind === 'spend' || kind === 'income';
@@ -930,30 +931,13 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
             </Section>
           ) : null}
 
-          {/* ---------- Chuyển tiền nội bộ theo ID (phiếu chi "Nhận: tài khoản nội bộ"; phiếu chuyển nội bộ) ---------- */}
-          {kind === 'spend' || kind === 'internal' ? (
-            <Section title={kind === 'internal' ? 'Chuyển tiền nội bộ' : 'Nhận: tài khoản nội bộ'}>
-              {kind === 'spend' ? (
-                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, cursor: canEdit ? 'pointer' : 'not-allowed' }}>
-                  <input
-                    type="checkbox"
-                    checked={f.transferOn}
-                    onChange={(e) => set('transferOn', e.target.checked)}
-                    style={{ width: 18, height: 18, marginTop: 1 }}
-                    disabled={!canEdit}
-                  />
-                  <span>
-                    Tiền chuyển cho tài khoản nội bộ của công ty khác trong tập đoàn
-                    <br />
-                    <span style={{ color: 'var(--fg-text-muted)' }}>Chọn theo tài khoản, không nhập chuỗi. Khi thực thi, công ty nhận tự sinh phiếu thu; không tính vào chi phí/doanh thu.</span>
-                  </span>
-                </label>
-              ) : (
-                <FgText style="caption" color="muted">
-                  Chọn công ty và tài khoản nhận. Khi thực thi, hai bên ghi sổ đối ứng (ra/vào), không tính vào chi phí/doanh thu. Công ty nhận KHÔNG tự sinh phiếu thu: muốn
-                  bên nhận có phiếu thu tự động, lập phiếu chi và chọn “Nhận: tài khoản nội bộ”.
-                </FgText>
-              )}
+          {/* ---------- Chuyển tiền nội bộ theo ID (phiếu chuyển nội bộ) ---------- */}
+          {kind === 'internal' ? (
+            <Section title="Chuyển tiền nội bộ">
+              <FgText style="caption" color="muted">
+                Chọn công ty và tài khoản nhận. Khi thực thi, hai bên ghi sổ đối ứng (ra/vào), không tính vào chi phí/doanh thu. Công ty nhận KHÔNG tự sinh phiếu thu: muốn
+                bên nhận có phiếu thu tự động, lập phiếu chi với đối tác là “Công ty trong tập đoàn”.
+              </FgText>
               {f.transferOn ? (
                 <div style={{ display: 'grid', gap: 'var(--fg-space-3)', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', marginTop: 'var(--fg-space-3)' }}>
                   <FgField

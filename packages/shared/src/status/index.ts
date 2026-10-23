@@ -416,12 +416,13 @@ export const EVIDENCE_LABEL: Record<EvidenceType, string> = {
 export const PARTNER_CODE_PREFIX = 'DT';
 
 /** Loại đối tác — mỗi đối tác đúng một loại (v2 §5.1). */
-export const PARTNER_TYPES = ['bank', 'customer', 'supplier'] as const;
+export const PARTNER_TYPES = ['bank', 'customer', 'supplier', 'internal'] as const;
 export type PartnerType = (typeof PARTNER_TYPES)[number];
 export const PARTNER_TYPE_LABEL: Record<PartnerType, string> = {
   bank: 'Ngân hàng',
   customer: 'Khách hàng',
   supplier: 'Nhà cung cấp',
+  internal: 'Công ty trong tập đoàn',
 };
 
 /** Trạng thái đối tác: Hoạt động / Ngừng giao dịch (không xoá khi đã phát sinh, v2 §5.1). */

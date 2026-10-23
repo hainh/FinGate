@@ -904,7 +904,10 @@ export const PartnerSchema = new Schema(
     company_id: { type: Schema.Types.ObjectId, required: true },
     /** mã tự sinh `DT-2026-00001` — unique toàn hệ thống (db/indexes.ts). */
     code: { type: String, required: true },
-    type: { type: String, enum: ['bank', 'customer', 'supplier'], required: true },
+    type: { type: String, enum: ['bank', 'customer', 'supplier', 'internal'], required: true },
+    /** Chỉ loại `internal`: công ty trong tập đoàn và TK ngân hàng của công ty đó (tên/NH/STK đồng bộ từ đây). */
+    internal_company_id: { type: Schema.Types.ObjectId, default: null },
+    internal_account_id: { type: Schema.Types.ObjectId, default: null },
     status: { type: String, enum: ['active', 'inactive'], default: 'active' },
     name: { type: String, required: true },
     /** tên chuẩn hoá (`normalizeNameKey`) — chỉ để CẢNH BÁO trùng, KHÔNG unique. */

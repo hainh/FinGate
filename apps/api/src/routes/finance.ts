@@ -36,6 +36,7 @@ import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
 import { nextDocumentCode } from '../domain/numbering/index.ts';
 import { invalidateFor } from '../domain/side-effects.ts';
 import { emitVoucherEvent, type VoucherEventSubject } from '../domain/events/index.ts';
+import { syncInternalPartners } from '../domain/partner/internal.ts';
 
 /** Chi tiết tài khoản tiền cho form sửa (BANK-02) — trả số TK đầy đủ (đã kiểm quyền ở route). */
 async function bankAccountDetail(id: string): Promise<Record<string, unknown>> {
@@ -292,6 +293,8 @@ export function financeRoutes(app: FastifyInstance): void {
         if (body.note !== undefined) assign('note', body.note || null);
 
         await Models.BankAccount.updateOne({ _id: id }, { $set: set }).exec();
+        // tên / NH / STK đổi ⇒ đối tác nội bộ trỏ tới TK này đổi theo
+        await syncInternalPartners({ accountId: id });
         await mirrorAudit({
           at: new Date(),
           actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
@@ -351,6 +354,8 @@ export function financeRoutes(app: FastifyInstance): void {
           }
         }
         await Models.BankAccount.updateOne({ _id: id }, { $set: { status, updated_at: new Date() } }).exec();
+        // TK đóng / đóng băng ⇒ đối tác nội bộ trỏ tới TK này chuyển Ngừng giao dịch
+        await syncInternalPartners({ accountId: id });
         await mirrorAudit({
           at: new Date(),
           actor: { user_id: actor.user_id, name: actor.name, role: actor.role },

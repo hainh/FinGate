@@ -281,7 +281,7 @@ export function assertTransferTargetFits(
   if (kind !== 'spend' && kind !== 'internal') {
     throw new ApiError({
       code: 'FG-VAL-001',
-      detail: 'Chỉ phiếu chi mới có "Nhận: tài khoản nội bộ"',
+      detail: 'Chỉ phiếu chi mới có đối tác công ty trong tập đoàn',
       errors: { transfer_target: 'Chỉ phiếu chi mới có tài khoản nội bộ nhận' },
     });
   }

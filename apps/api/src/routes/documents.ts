@@ -301,7 +301,7 @@ export function documentRoutes(app: FastifyInstance): void {
           throw new ApiError({ code: 'FG-VAL-001', detail: 'Chọn đối tác', errors: { partner_id: 'Chọn đối tác (bắt buộc với phiếu thu/chi)' } });
         }
         const partner = body.partner_id
-          ? await resolveVoucherPartner({ companyId, partnerId: String(body.partner_id), requireActive: true, loanKind: loanInput?.kind ?? null })
+          ? await resolveVoucherPartner({ companyId, partnerId: String(body.partner_id), kind, requireActive: true, loanKind: loanInput?.kind ?? null })
           : null;
         // Phương án đảo hạn phải gắn khoản vay: cùng công ty, cùng ngân hàng (đối tác), đang vay / quá hạn (v2 §10.3).
         if (kind === 'rollover') {
@@ -322,6 +322,7 @@ export function documentRoutes(app: FastifyInstance): void {
         const transfer = await resolveTransferTarget({
           companyId,
           kind: kind as VoucherKind,
+          partnerId: body.partner_id ? String(body.partner_id) : null,
           target: transferInput ? { company_id: String(transferInput.company_id), account_id: transferInput.account_id ?? null } : null,
           previous: null,
         });
@@ -474,7 +475,7 @@ export function documentRoutes(app: FastifyInstance): void {
         const loanInput = body.options !== undefined ? (body.options?.loan ?? null) : previousLoan ? planToLoanInput(previousLoan) : null;
         if (nextPartnerId) {
           // đối tác đã ngừng giao dịch chỉ bị chặn khi CHỌN MỚI; giữ nguyên thì dữ liệu cũ vẫn sửa được
-          await resolveVoucherPartner({ companyId, partnerId: nextPartnerId, requireActive: partnerChanged, loanKind: loanInput?.kind ?? null });
+          await resolveVoucherPartner({ companyId, partnerId: nextPartnerId, kind, requireActive: partnerChanged, loanKind: loanInput?.kind ?? null });
         }
         if (kind === 'rollover') {
           // Phương án đảo hạn: khoản vay gắn (mới hoặc giữ nguyên) phải hợp lệ với công ty và ngân hàng đang chọn (v2 §10.3).
@@ -517,13 +518,15 @@ export function documentRoutes(app: FastifyInstance): void {
         }
         const transferIn = body.transfer_target !== undefined ? body.transfer_target : body.target;
         let transfer: TransferTargetPlan | null | undefined; // undefined = không đổi
-        if (transferIn !== undefined) {
+        // phiếu chi: đích suy từ đối tác nên đổi đối tác là phải tính lại
+        if (transferIn !== undefined || (partnerChanged && kind === 'spend')) {
           if (transferIn?.company_id && !companyReachableByActor(requestCtx(req).identity, String(transferIn.company_id))) {
             throw new ApiError({ code: 'FG-RBAC-002', detail: 'Công ty nhận không nằm trong phạm vi của bạn' });
           }
           transfer = await resolveTransferTarget({
             companyId,
             kind,
+            partnerId: nextPartnerId ? String(nextPartnerId) : null,
             target: transferIn ? { company_id: String(transferIn.company_id), account_id: transferIn.account_id ?? null } : null,
             previous: storedTransferOf(doc as unknown as Record<string, unknown>),
           });

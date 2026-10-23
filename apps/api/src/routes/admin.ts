@@ -76,6 +76,7 @@ import { reportPreset } from '../domain/reports/index.ts';
 import { exportRequestBody } from '@fingate/shared';
 import { getEnv } from '../env.ts';
 import { assertVoucherPartner } from '../domain/vouchers/rules.ts';
+import { syncInternalPartners } from '../domain/partner/internal.ts';
 
 export function adminRoutes(app: FastifyInstance): void {
   /* ============================ NHÂN SỰ (§XXIX) ============================ */
@@ -1243,6 +1244,8 @@ export function adminRoutes(app: FastifyInstance): void {
             { _id: String((existing as { _id: unknown })._id) },
             { $set: { ...body, min_balance_minor: minBalance, updated_at: new Date() } },
           ).exec();
+          // tên công ty đổi ⇒ đối tác "Công ty trong tập đoàn" trỏ tới TK của công ty này đổi theo
+          await syncInternalPartners({ companyId: String((existing as { _id: unknown })._id) });
           await mirrorAudit({
             at: new Date(),
             actor: { user_id: actor.user_id, name: actor.name, role: actor.role },

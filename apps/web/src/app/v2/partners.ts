@@ -71,6 +71,9 @@ export interface PartnerWriteBody {
   note?: string | null;
   status?: PartnerStatus;
   company_id?: string;
+  /** Chỉ loại `internal` khi TẠO: công ty trong tập đoàn và TK ngân hàng của công ty đó. */
+  internal_company_id?: string | null;
+  internal_account_id?: string | null;
   /** Chống ghi đúp khi TẠO: một lần mở popup dùng MỘT request_id (bấm lặp / thử lại trả lại đối tác đã tạo). */
   request_id?: string;
 }

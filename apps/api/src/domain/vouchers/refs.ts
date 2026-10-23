@@ -74,6 +74,7 @@ export async function loadPartnerInCompany(companyId: string, partnerId: string)
 export async function resolveVoucherPartner(input: {
   companyId: string;
   partnerId: string;
+  kind: VoucherKind;
   requireActive: boolean;
   loanKind: LoanKind | null;
 }): Promise<Record<string, unknown>> {
@@ -83,6 +84,14 @@ export async function resolveVoucherPartner(input: {
     loanKind: input.loanKind,
     requireActive: input.requireActive,
   });
+  // đối tác "Công ty trong tập đoàn" chỉ dùng cho phiếu chi (chuyển nội bộ, §11.6)
+  if (input.kind !== 'spend' && partner!.type === 'internal') {
+    throw new ApiError({
+      code: 'FG-VAL-001',
+      detail: 'Đối tác công ty trong tập đoàn chỉ dùng cho phiếu chi',
+      errors: { partner_id: 'Đối tác công ty trong tập đoàn chỉ dùng cho phiếu chi' },
+    });
+  }
   return partner!;
 }
 
@@ -329,13 +338,42 @@ export interface TransferTargetPlan {
 export async function resolveTransferTarget(input: {
   companyId: string;
   kind: VoucherKind;
+  /** Đối tác của phiếu: với phiếu chi, đối tác "Công ty trong tập đoàn" quyết định đích chuyển nội bộ. */
+  partnerId: string | null;
   target: { company_id: string; account_id?: string | null } | null;
   previous: TransferTargetPlan | null;
 }): Promise<TransferTargetPlan | null> {
-  if (!input.target) return null;
+  let input_target = input.target;
+  if (input.kind === 'spend') {
+    const partner = input.partnerId && OBJECT_ID_RE.test(input.partnerId)
+      ? await Models.Partner.findOne({ _id: input.partnerId, company_id: input.companyId } as never)
+          .select({ type: 1, internal_company_id: 1, internal_account_id: 1 })
+          .lean<{ type?: string; internal_company_id?: unknown; internal_account_id?: unknown } | null>()
+      : null;
+    const derived = partner?.type === 'internal'
+      ? { company_id: String(partner.internal_company_id), account_id: String(partner.internal_account_id) }
+      : null;
+    // Không còn chọn đích tay: đích chỉ đến từ đối tác nội bộ, nên mọi phiếu chi chuyển nội bộ đều có đối tác đi kèm
+    if (input_target && !derived) {
+      throw new ApiError({
+        code: 'FG-VAL-001',
+        detail: 'Chuyển nội bộ: chọn đối tác là công ty trong tập đoàn',
+        errors: { transfer_target: 'Chọn đối tác là công ty trong tập đoàn để chuyển nội bộ' },
+      });
+    }
+    if (input_target && derived && (String(input_target.company_id) !== derived.company_id || (input_target.account_id ?? null) !== derived.account_id)) {
+      throw new ApiError({
+        code: 'FG-VAL-001',
+        detail: 'Tài khoản nhận lấy từ đối tác công ty trong tập đoàn',
+        errors: { transfer_target: 'Tài khoản nhận lấy từ đối tác công ty trong tập đoàn' },
+      });
+    }
+    input_target = derived;
+  }
+  if (!input_target) return null;
   const t: TransferTargetPlan = {
-    company_id: String(input.target.company_id),
-    account_id: strOrNull(input.target.account_id),
+    company_id: String(input_target.company_id),
+    account_id: strOrNull(input_target.account_id),
   };
   assertTransferTargetFits(input.kind, t, input.companyId);
   // kiểm trước nhánh "không đổi": phiếu cũ thiếu TK cũng phải chọn TK khi lưu lại

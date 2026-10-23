@@ -31,6 +31,9 @@ const partnerFields = z.object({
 export const partnerCreateBody = partnerFields.extend({
   company_id: objectId.optional().describe('Mặc định theo phiên làm việc'),
   status: partnerStatus.default('active'),
+  /** Chỉ với loại `internal`: công ty trong tập đoàn và TK ngân hàng của công ty đó (tên/NH/STK lấy từ TK). */
+  internal_company_id: objectId.nullable().optional(),
+  internal_account_id: objectId.nullable().optional(),
   request_id: uuid.optional(),
 });
 export type PartnerCreateBody = z.infer<typeof partnerCreateBody>;
