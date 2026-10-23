@@ -318,10 +318,9 @@ function PartnerOptionLabel({ p }: { p: PartnerRef }): ReactNode {
 
 /** Thông tin ngân hàng / STK / MST — CHỈ ĐỌC, lấy từ đối tác hiện tại (v2 §5.2). */
 function PartnerReadonly({ p }: { p: PartnerRef }): ReactNode {
-  const parts: ReactNode[] = [];
-  if (p.bank_name) parts.push(<span key="bank">Ngân hàng: {p.bank_name}</span>);
-  if (p.account_number) parts.push(<span key="acc" className="fg-num">STK: {p.account_number}</span>);
-  if (p.tax_code) parts.push(<span key="tax" className="fg-num">MST: {p.tax_code}</span>);
+  // gộp "Ngân hàng - Số tài khoản" thành một mục; MST không hiện ở đây
+  const account = [p.bank_name, p.account_number].filter(Boolean).join(' - ');
+  const parts: ReactNode[] = account ? [<span key="acc" className="fg-num">Tài khoản: {account}</span>] : [];
   return (
     <div
       style={{
@@ -333,7 +332,7 @@ function PartnerReadonly({ p }: { p: PartnerRef }): ReactNode {
         color: 'var(--fg-text-secondary)',
       }}
     >
-      {parts.length ? parts : <span>Chưa có ngân hàng / MST</span>}
+      {parts.length ? parts : <span>Chưa có tài khoản ngân hàng</span>}
       {p.status === 'inactive' ? (
         <span style={{ color: 'var(--fg-status-danger-text)' }}>{PARTNER_STATUS_LABEL.inactive} — không dùng cho phiếu mới</span>
       ) : null}
