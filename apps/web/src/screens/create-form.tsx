@@ -653,6 +653,23 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
             <FgField label="Hợp đồng / căn cứ" error={errors['contract.code']}>
               <FgInput value={f.contractCode} onChange={(e) => set('contractCode', e.target.value)} placeholder="HĐ 45/2026" disabled={!canEdit} />
             </FgField>
+            {hasVoucherFinance ? (
+              <>
+                <FgField label="Giá trị hợp đồng" error={errors['contract.value'] ?? null} help={f.contractValue ? formatMoney(f.contractValue, { mode: 'full' }) : 'Bỏ trống nếu không có hợp đồng'}>
+                  <FgMoneyInput value={f.contractValue} onChange={(m) => set('contractValue', m)} disabled={!canEdit} placeholder="Giá trị HĐ" ariaLabel="Giá trị hợp đồng" />
+                </FgField>
+                <FgField label="Ngày ký hợp đồng" error={errors['contract.signed_at'] ?? null}>
+                  <DatePicker
+                    value={f.contractSignedAt ? dayjs(f.contractSignedAt) : null}
+                    onChange={(d) => set('contractSignedAt', d ? d.format('YYYY-MM-DD') : '')}
+                    format="DD/MM/YYYY"
+                    style={{ width: '100%' }}
+                    disabled={!canEdit}
+                    placeholder="Chọn ngày"
+                  />
+                </FgField>
+              </>
+            ) : null}
             <FgField label="Mức ưu tiên">
               <FgSelect
                 options={[
@@ -711,19 +728,6 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                     <input type="checkbox" checked={f.inPlan} onChange={(e) => set('inPlan', e.target.checked)} style={{ width: 18, height: 18 }} disabled={!canEdit} />
                     Khoản trong kế hoạch
                   </label>
-                </FgField>
-                <FgField label="Giá trị hợp đồng" error={errors['contract.value'] ?? null} help={f.contractValue ? formatMoney(f.contractValue, { mode: 'full' }) : 'Bỏ trống nếu không có hợp đồng'}>
-                  <FgMoneyInput value={f.contractValue} onChange={(m) => set('contractValue', m)} disabled={!canEdit} placeholder="Giá trị HĐ" ariaLabel="Giá trị hợp đồng" />
-                </FgField>
-                <FgField label="Ngày ký hợp đồng" error={errors['contract.signed_at'] ?? null}>
-                  <DatePicker
-                    value={f.contractSignedAt ? dayjs(f.contractSignedAt) : null}
-                    onChange={(d) => set('contractSignedAt', d ? d.format('YYYY-MM-DD') : '')}
-                    format="DD/MM/YYYY"
-                    style={{ width: '100%' }}
-                    disabled={!canEdit}
-                    placeholder="Chọn ngày"
-                  />
                 </FgField>
               </>
             ) : null}
