@@ -932,7 +932,7 @@ test.describe('Phiếu thu/chi, phê duyệt và thực thi (CTA)', () => {
   });
 
   /* ------------------------------------------------------------------ */
-  test('thực thi phiếu chi: cần UNC và số tham chiếu; số dư giảm đúng số tiền duyệt cuối (US-EXE-01)', async ({ as }) => {
+  test('thực thi phiếu chi: UNC và số tham chiếu không bắt buộc; số dư giảm đúng số tiền duyệt cuối (US-EXE-01)', async ({ as }) => {
     test.setTimeout(300_000);
     const staff = await as('staff');
     const chief = await as('chief');
@@ -963,24 +963,15 @@ test.describe('Phiếu thu/chi, phê duyệt và thực thi (CTA)', () => {
     expect(await H.approveToFinal({ chief, director, chairman }, co, id, { page: chief, body: { amount_minor: '4500000' } })).toBe('approved');
     expect(await H.balanceOf(staff, co, accountId), 'duyệt không trừ số dư').toBe(20_000_000n);
 
-    // chưa có UNC: không được xác nhận
+    // chưa có UNC và số tham chiếu: không cảnh báo, vẫn thực thi được khi không nhập gì
     await H.openDoc(staff, 'spend', id);
     await H.actionBar(staff).getByRole('button', { name: 'Thực thi', exact: true }).click();
     const m = H.topModal(staff);
-    await expect(m.getByText('Chưa có chứng từ UNC')).toBeVisible();
-    await H.fieldOf(m, 'Số tham chiếu ngân hàng').locator('input').fill('FT26300TEST01');
-    await expect(m.locator('.ant-modal-footer').getByRole('button', { name: /^Thực thi/ })).toBeDisabled();
-    await m.locator('.ant-modal-footer').getByRole('button', { name: 'Hủy bỏ', exact: true }).click();
-    await expect(staff.locator('.ant-modal:visible')).toHaveCount(0);
-
-    // đính kèm UNC rồi thực thi
-    await H.attachApi(staff, co, id, 'bank_order', 'uy-nhiem-chi.pdf');
-    await H.openDoc(staff, 'spend', id);
-    await H.uiPay(staff, 'FT26300TEST01');
+    await expect(m.getByText('Chưa có chứng từ UNC')).toHaveCount(0);
+    await m.locator('.ant-modal-footer').getByRole('button', { name: /^Thực thi/ }).click();
+    await expect(staff.locator('.ant-modal:visible')).toHaveCount(0, { timeout: 25_000 });
     await H.expectStatus(staff, co, id, 'paid');
     expect(await H.balanceOf(staff, co, accountId), 'số dư giảm đúng số tiền duyệt cuối').toBe(15_500_000n);
-    const doc = await H.getDoc(staff, co, id);
-    expect(JSON.stringify(doc), 'lưu số tham chiếu ngân hàng').toContain('FT26300TEST01');
 
     // sổ cái TK nguồn hiển thị số dư đã trừ sau khi thực thi (US-EXE-01: số dư cập nhật ngay; danh sách TK phân trang nên đọc từ sổ cái của TK)
     await H.gotoCta(staff, `/ngan-hang/taikhoan/${accountId}`);

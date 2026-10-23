@@ -81,7 +81,6 @@ import {
 } from '../domain/vouchers/rules.ts';
 import {
   mayChangeVoucherTags,
-  missingPaymentEvidence,
   roundLocksEdit,
   voucherAmountField,
 } from '../domain/vouchers/lifecycle.ts';
@@ -972,23 +971,6 @@ export function documentRoutes(app: FastifyInstance): void {
           return ok(reply, { data: fresh, idempotent: true });
         }
 
-        // §8 / US-EXE-01 — đánh dấu phiếu chi ĐÃ CHI cần số tham chiếu ngân hàng và chứng từ UNC (tự động không đi qua route này).
-        if (body.action === 'pay') {
-          const missing = missingPaymentEvidence({
-            kind: String(doc.kind),
-            bankRef: body.execution?.bank_ref,
-            attachmentTypes: ((doc.attachments ?? []) as { type?: unknown }[]).map((a) => String(a.type ?? '')),
-          });
-          if (missing.length) {
-            throw new ApiError({
-              code: 'FG-VAL-001',
-              detail: `Chưa đủ để đánh dấu đã chi: ${missing.map((m) => (m === 'bank_ref' ? 'số tham chiếu ngân hàng' : 'chứng từ UNC (Ủy nhiệm chi)')).join(', ')}`,
-              errors: Object.fromEntries(
-                missing.map((m) => (m === 'bank_ref' ? ['execution.bank_ref', 'Nhập số tham chiếu ngân hàng'] : ['attachments', 'Đính kèm chứng từ UNC (Ủy nhiệm chi)'])),
-              ),
-            });
-          }
-        }
         // §11.5 — cấp duyệt đổi số tiền phiếu chi chỉ trước khi R3 đã tạo khoản vay cho phiếu này.
         if ((body.action === 'approve' || body.action === 'approve_with_reason') && body.amount_minor !== undefined) {
           await assertApprovalAmountEditable(params.id, BigInt(String(doc.amount.minor)), BigInt(body.amount_minor));

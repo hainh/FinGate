@@ -282,7 +282,6 @@ export async function approveChain(pages: Record<ApproverRole, Page>, cta: Cta, 
 
 /**
  * Đính kèm chứng từ UNC (loại bank_order) vào phiếu chi: prepare → PUT nội dung (storage dev = fs) → confirm.
- * Máy chủ yêu cầu UNC khi đánh dấu phiếu chi đã thi hành (FG-VAL-001 "chứng từ UNC").
  */
 export async function attachUnc(page: Page, cta: Cta, docId: string): Promise<void> {
   // PDF tối thiểu (storage fs kiểm chữ ký tệp: chỉ nhận PDF/ảnh thật)
@@ -315,7 +314,7 @@ trailer << >>
   );
 }
 
-/** Thực thi thanh toán phiếu chi (kế toán viên có payment:mark). Phiếu chi cần UNC + số tham chiếu NH. */
+/** Thực thi thanh toán phiếu chi (kế toán viên có payment:mark), kèm số tham chiếu NH; đính kèm UNC nếu chưa có. */
 export async function payVoucherApi(page: Page, cta: Cta, id: string, paidAt = vnToday()): Promise<any> {
   const doc = await getVoucherApi(page, cta, id);
   const hasUnc = ((doc as any).attachments ?? []).some((a: { type?: string }) => a.type === 'bank_order');

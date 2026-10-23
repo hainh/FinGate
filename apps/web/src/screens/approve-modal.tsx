@@ -315,12 +315,10 @@ export function ApprovalConfirmModal({
   const [amountText, setAmountText] = useState('');
   const [amountErr, setAmountErr] = useState<string | null>(null);
   const [amountConfirm, setAmountConfirm] = useState<null | { nextMinor: bigint }>(null);
-  // §8 / US-EXE-01 — thực thi phiếu chi: ngày thực tế (mặc định hôm nay, không quá hôm nay), số tham chiếu NH, UNC đính kèm
+  // §8 / US-EXE-01 — thực thi: ngày thực tế (mặc định hôm nay, không quá hôm nay); số tham chiếu NH và UNC không bắt buộc
   const isPay = action === 'pay';
   const [paidAt, setPaidAt] = useState<string>(() => today());
   const [bankRef, setBankRef] = useState('');
-  const hasUnc = (doc.attachments ?? []).some((a) => a.type === 'bank_order');
-  const payMissing = isPay && doc.kind === 'spend' ? [...(bankRef.trim() ? [] : ['số tham chiếu ngân hàng']), ...(hasUnc ? [] : ['chứng từ UNC (Ủy nhiệm chi)'])] : [];
   // thành công (cả khi retry sau step-up/gõ lại tiền) → đóng confirm
   useEffect(() => {
     if (runner.success > 0) onDone();
@@ -401,7 +399,7 @@ export function ApprovalConfirmModal({
             variant={danger ? 'danger' : 'primary'}
             onClick={submit}
             loading={runner.busy}
-            disabled={(needsReason && opinion.trim().length < 5) || payMissing.length > 0}
+            disabled={needsReason && opinion.trim().length < 5}
           >
             {label[action]}
           </FgButton>
@@ -470,15 +468,10 @@ export function ApprovalConfirmModal({
             />
           </FgField>
           {doc.kind === 'spend' ? (
-            <FgField label="Số tham chiếu ngân hàng *" help="Mã giao dịch trên UNC / sao kê ngân hàng">
+            <FgField label="Số tham chiếu ngân hàng" help="Không bắt buộc. Mã giao dịch trên UNC / sao kê ngân hàng">
               <FgInput value={bankRef} onChange={(e) => setBankRef(e.target.value)} maxLength={80} placeholder="VD: FT26294xxxx" />
             </FgField>
           ) : null}
-        </div>
-      ) : null}
-      {isPay && doc.kind === 'spend' && !hasUnc ? (
-        <div style={{ marginTop: 12 }}>
-          <FgAlert tone="warning" title="Chưa có chứng từ UNC" description="Đính kèm ủy nhiệm chi (UNC) ở tab Chứng từ của hồ sơ trước khi đánh dấu đã chi." />
         </div>
       ) : null}
       {canEditAmount ? (

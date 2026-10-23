@@ -368,7 +368,7 @@ export async function approveToEnd(docId: string): Promise<string> {
 
 const PNG_1X1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 
-/** Đính kèm UNC (loại `bank_order`) — điều kiện bắt buộc để đánh dấu đã chi. */
+/** Đính kèm UNC (loại `bank_order`) để có chứng từ đối chiếu khi đánh dấu đã chi. */
 export async function attachUnc(docId: string): Promise<void> {
   const staff = await apiAs('staff');
   const cta = await ctaId();

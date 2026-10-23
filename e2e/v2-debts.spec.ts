@@ -121,7 +121,7 @@ test.describe('Công nợ — phải thu / phải trả, cấn trừ, tuổi n�
    * 0. Nền: chuỗi lập → duyệt → thực thi qua API (phục vụ các kịch bản bên dưới)
    * ------------------------------------------------------------------ */
 
-  test('0. Nền API: phiếu thu tự thực thi khi duyệt xong; phiếu chi cần UNC + số tham chiếu để thực thi', async () => {
+  test('0. Nền API: phiếu thu tự thực thi khi duyệt xong; phiếu chi thực thi được qua API', async () => {
     const cta = await ctaId();
     const cust = await createPartner('customer', uniq('KH debts N0'));
     const sup = await createPartner('supplier', uniq('NCC debts N0'));
@@ -138,7 +138,7 @@ test.describe('Công nợ — phải thu / phải trả, cấn trừ, tuổi n�
     await submitVoucher(spendSent.id);
     expect(['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptgd']).toContain((await getDoc(spendSent.id)).status);
 
-    // Phiếu chi đủ điều kiện: duyệt xong (approved) → UNC + số tham chiếu → paid
+    // Phiếu chi đã duyệt xong (approved) → thực thi → paid
     const spend = await createVoucher('spend', sup.id, 500_000, uniq('Chi N0'));
     expect(await runVoucherToPaid('spend', spend.id)).toBe('paid');
   });

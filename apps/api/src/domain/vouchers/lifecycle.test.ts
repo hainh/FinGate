@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   actualAmountProblem,
-  missingPaymentEvidence,
   mayChangeVoucherTags,
   reversalEntriesFor,
   roundLocksEdit,
@@ -57,18 +56,6 @@ describe('actualAmountProblem — §6.1/§8: số thực chi không vượt số
   });
   it('thấp hơn có lý do ≥ 5 ký tự ⇒ hợp lệ', () => {
     expect(actualAmountProblem(1000n, 900n, 'Trả thiếu theo thoả thuận')).toBeNull();
-  });
-});
-
-describe('missingPaymentEvidence — §8/US-EXE-01: đã chi cần số tham chiếu NH và UNC (chỉ phiếu chi)', () => {
-  it('phiếu chi thiếu cả hai ⇒ báo đủ', () => {
-    expect(missingPaymentEvidence({ kind: 'spend', bankRef: '', attachmentTypes: ['invoice'] })).toEqual(['bank_ref', 'unc']);
-  });
-  it('phiếu chi có số tham chiếu và UNC ⇒ đủ', () => {
-    expect(missingPaymentEvidence({ kind: 'spend', bankRef: 'FT2601', attachmentTypes: ['bank_order'] })).toEqual([]);
-  });
-  it('phiếu thu không cần bằng chứng thực chi', () => {
-    expect(missingPaymentEvidence({ kind: 'income', bankRef: null, attachmentTypes: [] })).toEqual([]);
   });
 });
 

@@ -293,7 +293,7 @@ export async function attachUnc(page: Page, companyId: string, id: string): Prom
   );
 }
 
-/** Thực thi phiếu chi bằng API (cần UNC + số tham chiếu). */
+/** Thực thi phiếu chi bằng API (kèm số tham chiếu ngân hàng). */
 export async function payByApi(page: Page, companyId: string, id: string, paidAt = vnToday()): Promise<Res> {
   return transition(page, companyId, id, 'pay', { execution: { paid_at: paidAt, bank_ref: `FT${digits(10)}` } });
 }

@@ -44,25 +44,6 @@ export function actualAmountProblem(approvedMinor: bigint, actualMinor: bigint, 
   return null;
 }
 
-/** Loại chứng từ UNC trong danh mục bằng chứng (`bank_order` = "Ủy nhiệm chi"). */
-export const UNC_EVIDENCE_TYPE = 'bank_order';
-
-/**
- * §8 / US-EXE-01 — thiếu gì để đánh dấu phiếu chi ĐÃ CHI: số tham chiếu ngân hàng và chứng từ UNC.
- * Chỉ áp dụng cho phiếu chi. Trả về danh sách thiếu (rỗng = đủ).
- */
-export function missingPaymentEvidence(input: {
-  kind: string;
-  bankRef?: string | null;
-  attachmentTypes: readonly string[];
-}): Array<'bank_ref' | 'unc'> {
-  if (input.kind !== 'spend') return [];
-  const missing: Array<'bank_ref' | 'unc'> = [];
-  if (!(input.bankRef ?? '').trim()) missing.push('bank_ref');
-  if (!input.attachmentTypes.includes(UNC_EVIDENCE_TYPE)) missing.push('unc');
-  return missing;
-}
-
 /** Bản ghi sổ cái tối thiểu để dựng bút toán đảo (khớp model `CashEntry`, đọc bằng `lean`). */
 export interface LedgerEntryForReversal {
   _id: unknown;
