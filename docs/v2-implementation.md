@@ -471,7 +471,7 @@ Chỉ UI và hook phía web; không đổi API hay contract. Đã đối chiếu
 
 | Endpoint | Ghi chú | Lỗi chính |
 | --- | --- | --- |
-| POST `/documents` | bắt buộc `partner_id` (phiếu thu/chi); `tag_ids`; `options.loan`; `transfer_target` (ghi song song vào `target`); không ghi `payee`, không tách chuỗi, không tự tạo đối tác. Vay để chi: TK nguồn mặc định = TK nhận giải ngân. Có `options.loan` thì bỏ qua cờ v1 `create_bank_debt`. | 422 FG-PARTNER-001 / FG-VAL-001 |
+| POST `/documents` | bắt buộc `partner_id` (phiếu thu/chi); `tag_ids`; `options.loan`; `transfer_target` (ghi song song vào `target`); không ghi `payee`, không tách chuỗi, không tự tạo đối tác. Vay để chi: TK nguồn = TK nhận giải ngân (luôn bằng nhau). Có `options.loan` thì bỏ qua cờ v1 `create_bank_debt`. | 422 FG-PARTNER-001 / FG-VAL-001 |
 | PATCH `/documents/:id` | kiểm đối tác, khoản vay, chuyển nội bộ, tag trên trạng thái SAU khi gộp; đổi đối tác ⇒ kiểm lại toàn bộ khoản vay; `payee` bị bỏ qua. Vẫn chỉ khi nháp / trả về / từ chối (như v1). | |
 | PATCH `/documents/:id/tags` | mới. Quyền `doc:create` hoặc `tag:create`. Mọi trạng thái. Ghi history `tags_update` với `added` / `removed` (id + tên), không phát sự kiện (tag không ảnh hưởng tiền). Không đổi thì không ghi lịch sử. | 409 FG-WF-011; 422 FG-VAL-001 (tag ẩn / không thuộc công ty) |
 | POST `/documents/:id/links` | mới, `link:manage`, 201. `offset` → công nợ; `repayment` / `disbursement` → khoản NH; tách gốc/lãi/phí chỉ cho `repayment`. Phiếu đã từ chối / huỷ không gắn. Gọi `createLink` (FG-LINK-001/002/003). | |
@@ -948,7 +948,7 @@ Chỉ UI và hook phía web; không đổi API hay contract. Đã đối chiếu
 - Ô đối tác là `PartnerPicker` (chọn theo ID). Thu: mọi loại; thu đi vay: chỉ Ngân hàng (bật "đi vay" thì bỏ đối tác không phải ngân hàng). Chi: mọi loại. Đảo hạn: Ngân hàng, tuỳ chọn. Phiếu chuyển nội bộ: không có ô đối tác. Không còn ô nhập tự do và không còn chuỗi "Tên - NH - STK".
 - Prefill một lần: `?partner_id=`, `?loan=borrow` (thu), `?kind=` (chỉ áp dụng khi khớp form; lệch thì bỏ qua prefill).
 - Thu đi vay (R2): mode `new` (điều khoản: số HĐ, lãi suất, kỳ hạn mặc định 12, hạn mặc định ngày gốc + 11 tháng sửa được, kỳ trả, phương thức, TSĐB; gốc = số tiền phiếu) · `existing` (chọn khoản của cùng ngân hàng đang `pending_disbursement` hoặc `active`, lấy từ `/partners/:id/loans`) · `later`.
-- Chi vay để chi (R3): ngân hàng cho vay (PartnerPicker, chỉ Ngân hàng) · TK nhận giải ngân (TK ngân hàng của công ty; chọn xong thì tự đặt làm TK nguồn nếu chưa chọn, vẫn sửa được) · số tiền vay (bỏ trống = bằng phiếu chi) · điều khoản như R2.
+- Chi vay để chi (R3): ngân hàng cho vay (PartnerPicker, chỉ Ngân hàng) · TK nhận giải ngân (TK ngân hàng của công ty; TK nguồn luôn đồng bộ với ô này — đổi ô nào cũng đổi cả hai; ô "Nguồn tiền" bị khóa khi đang vay) · số tiền vay (bỏ trống = bằng phiếu chi) · điều khoản như R2.
 - Chuyển nội bộ: phiếu chi "Nhận: tài khoản nội bộ" (tuỳ chọn) và phiếu chuyển nội bộ (bắt buộc): công ty nhận + TK nhận theo ID.
 - Tag: `TagInput` (có "+ Tạo tag" nếu có `tag:create`).
 - Body gửi lên: `partner_id`, `tag_ids`, `options: { loan }` (null nếu không vay), `transfer_target` (null nếu không chuyển). Không gửi `payee`, không gửi `create_bank_debt` (cờ v1).

@@ -553,12 +553,12 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
     );
   }
 
-  /** Chọn TK nhận giải ngân: mặc định cũng là TK nguồn của phiếu chi (sửa được) — §11.5. */
-  const pickReceiveAccount = (accountId: string) =>
+  /** Phiếu chi vay để chi: TK nguồn và TK nhận giải ngân luôn là một — đổi ô nào cũng ghi cả hai (§11.5). */
+  const pickLinkedAccount = (accountId: string) =>
     setF((s) => ({
       ...s,
+      accountId,
       loan: { ...s.loan, receiveAccountId: accountId },
-      accountId: s.accountId === '' || s.accountId === s.loan.receiveAccountId ? accountId : s.accountId,
       fund: 'bank',
     }));
 
@@ -633,7 +633,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                   set('accountId', '');
                 }}
                 style={{ width: '100%' }}
-                disabled={!canEdit}
+                disabled={!canEdit || isFund}
               />
             </FgField>
             <FgField
@@ -642,9 +642,9 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
               help={kind === 'income' ? 'Tiền thu về tài khoản của công ty lập phiếu' : 'Chỉ tài khoản của công ty lập phiếu'}
             >
               <FgSelect
-                options={sourceAccountOptions}
+                options={isFund ? receiveAccountOptions : sourceAccountOptions}
                 value={f.accountId}
-                onChange={(v) => set('accountId', v ?? '')}
+                onChange={(v) => (isFund ? pickLinkedAccount(v ?? '') : set('accountId', v ?? ''))}
                 placeholder={f.fund === 'cash' ? 'Chọn quỹ tiền mặt' : 'Chọn tài khoản ngân hàng'}
                 allowClear
                 style={{ width: '100%' }}
@@ -869,13 +869,16 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                   checked={f.loan.on}
                   onChange={(e) => {
                     const on = e.target.checked;
-                    setF((s) => ({
-                      ...s,
-                      loan: { ...s.loan, on },
-                      // vay để chi: TK nguồn mặc định = TK nhận giải ngân (vẫn sửa được)
-                      fund: on ? 'bank' : s.fund,
-                      accountId: on && !s.accountId && s.loan.receiveAccountId ? s.loan.receiveAccountId : s.accountId,
-                    }));
+                    setF((s) => {
+                      // vay để chi: TK nguồn và TK nhận giải ngân dùng chung một giá trị (ưu tiên TK đã chọn sẵn)
+                      const linked = on ? s.loan.receiveAccountId || s.accountId : null;
+                      return {
+                        ...s,
+                        loan: { ...s.loan, on, ...(linked !== null ? { receiveAccountId: linked } : {}) },
+                        fund: on ? 'bank' : s.fund,
+                        accountId: linked !== null ? linked : s.accountId,
+                      };
+                    });
                   }}
                   style={{ width: 18, height: 18, marginTop: 1 }}
                   disabled={!canEdit}
@@ -910,7 +913,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                     <FgSelect
                       options={receiveAccountOptions}
                       value={f.loan.receiveAccountId || undefined}
-                      onChange={(v) => pickReceiveAccount(v ?? '')}
+                      onChange={(v) => pickLinkedAccount(v ?? '')}
                       placeholder="Chọn tài khoản ngân hàng"
                       style={{ width: '100%' }}
                       disabled={!canEdit}
