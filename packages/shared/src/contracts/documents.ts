@@ -195,7 +195,6 @@ const documentFields = z.object({
       .nullable()
       .optional(),
     /** mã công nợ liên quan (§V). */
-    debt_code: z.string().max(60).optional(),
     /** ★ v2 [MỚI]: đối tác theo ID (bắt buộc từ bước migrate M2; tạm tuỳ chọn để không vỡ v1). */
     partner_id: objectId.nullable().optional().describe('Đối tác (danh bạ công ty) — v2'),
     /** ★ v2 [MỚI]: tag gắn phiếu (tối đa 50). */
@@ -406,7 +405,7 @@ export const decisionPack = z.object({
     fx_rate: z.string().nullable().optional(),
   }),
   q3_purpose: z.object({ text: z.string(), category: z.string().nullable(), department: z.string().nullable() }),
-  q4_basis: z.object({ contract_code: z.string().nullable(), contract_value: moneyWire.nullable(), invoice: z.string().nullable() }),
+  q4_basis: z.object({ contract_code: z.string().nullable(), contract_value: moneyWire.nullable() }),
   q5_source: z.object({
     fund: fundKind,
     account_label: z.string(),
@@ -488,7 +487,6 @@ export const documentDetail = z.object({
         .optional(),
     })
     .nullable(),
-  debt_code: z.string().nullable(),
   /** ★ v2: đối tác (chỉ đọc qua ID) + tham chiếu gọn để hiển thị. */
   partner_id: objectId.nullable().optional(),
   partner: partnerRef.nullable().optional(),

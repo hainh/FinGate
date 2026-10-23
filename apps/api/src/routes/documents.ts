@@ -369,7 +369,6 @@ export function documentRoutes(app: FastifyInstance): void {
             signed_at: body.contract.signed_at ?? null,
           },
           loan_id: body.loan_id ?? null,
-          debt_code: body.debt_code ?? null,
           budget: { budget_id: body.budget.budget_id ?? null, line_id: body.budget.line_id ?? null, in_plan: body.budget.in_plan },
           note: body.note ?? null,
           rollover: body.rollover
@@ -456,7 +455,7 @@ export function documentRoutes(app: FastifyInstance): void {
         }
 
         const set: Record<string, unknown> = {};
-        for (const key of ['title', 'purpose', 'note', 'priority', 'business_date', 'debt_code', 'category_id', 'department_id', 'loan_id'] as const) {
+        for (const key of ['title', 'purpose', 'note', 'priority', 'business_date', 'category_id', 'department_id', 'loan_id'] as const) {
           if (body[key] !== undefined) set[key] = body[key];
         }
         if (body.planned_date !== undefined) set.planned_date = normalizePlannedDate(body.planned_date);
@@ -1572,7 +1571,6 @@ export async function detailOf(id: string, userId: string, scopeCompanyIds: stri
     links: refs.links,
     automation_runs: refs.automation_runs,
     rollover: doc.rollover ?? null,
-    debt_code: doc.debt_code ?? null,
     note: doc.note ?? null,
     approval: {
       matrix_id: (doc.approval as { matrix_id?: unknown })?.matrix_id ? String((doc.approval as { matrix_id: unknown }).matrix_id) : null,

@@ -353,7 +353,6 @@ export interface DocumentDetail {
       note: string | null;
     } | null;
   } | null;
-  debt_code: string | null;
   note: string | null;
   approval: { matrix_id: string | null; matrix_version: number; matrix_label?: string; steps: ApprovalStep[] };
   evidence: { required: string[]; present: string[]; missing: string[] };
@@ -402,7 +401,7 @@ export interface DecisionPack {
   q1_payee: { name: string; tax_code: string | null; is_internal: boolean; bank: string | null };
   q2_amount: { amount: MoneyWire; amount_usd: MoneyWire | null; fx_rate: string | null };
   q3_purpose: { text: string; category: string | null; department: string | null };
-  q4_basis: { contract_code: string | null; contract_value: MoneyWire | null; invoice: string | null };
+  q4_basis: { contract_code: string | null; contract_value: MoneyWire | null };
   q5_source: { fund: string; account_label: string; group_account_label: string | null; group_managed: boolean };
   q6_impact: { balance_before: MoneyWire; balance_after: MoneyWire; min_balance: MoneyWire; breach: boolean };
   q7_plan: { in_plan: boolean; budget_line: string | null; used: MoneyWire | null; limit: MoneyWire | null; percent: number | null; period: string | null };

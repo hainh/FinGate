@@ -87,7 +87,6 @@ export const UI = {
     groupAccount: 'Tài khoản tập đoàn phụ trách',
     contract: 'Hợp đồng',
     invoice: 'Hóa đơn',
-    debtCode: 'Mã công nợ',
     note: 'Ghi chú',
     purpose: 'Nội dung',
     title: 'Tiêu đề',

@@ -309,7 +309,6 @@ export function FgDecisionPack({
             <FgMoneyStack value={w(pack.q4_basis.contract_value)} />
           </SumRow>
         ) : null}
-        <SumRow label="Hóa đơn">{pack.q4_basis.invoice ?? '—'}</SumRow>
         <div className="fg-sum-note">
           {pack.evidence.missing.length ? (
             <FgText style="bodyS" color="danger">

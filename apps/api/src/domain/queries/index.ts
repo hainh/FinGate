@@ -908,7 +908,6 @@ export async function decisionPack(
     q4_basis: {
       contract_code: contract.code ?? null,
       contract_value: wireOf(contract.value),
-      invoice: (doc as { debt_code?: string }).debt_code ?? null,
     },
     q5_source: {
       fund: (source.fund as 'bank' | 'cash') ?? 'bank',

@@ -417,7 +417,6 @@ export const DocumentSchema = new Schema(
       signed_at: { type: String, default: null },
     },
     loan_id: { type: Schema.Types.ObjectId, default: null },
-    debt_code: { type: String, default: null },
     /**
      * Phiếu thu: tự tạo phiếu nợ ngân hàng khi được duyệt & thực thi.
      * [v2 — SẼ BỎ] thay bằng `options.loan` (kind borrow) + link disbursement; giữ để chạy song song v1.

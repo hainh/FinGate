@@ -87,7 +87,6 @@ export async function createDraftVoucher(input: DraftVoucherInput): Promise<Crea
     priority: 'normal',
     contract: { code: null, value: null, signed_at: null },
     loan_id: null,
-    debt_code: null,
     partner_id: input.partner_id,
     tag_ids: [],
     options: { loan: null },

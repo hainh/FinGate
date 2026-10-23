@@ -103,7 +103,6 @@ export interface FormState {
   budgetId: string | null;
   budgetLineId: string | null;
   inPlan: boolean;
-  debtCode: string;
   contractCode: string;
   /** Giá trị hợp đồng (§6.1) và ngày ký. */
   contractValue: Money | null;
@@ -161,7 +160,6 @@ const initial = (kind: PageKind): FormState => ({
   budgetId: null,
   budgetLineId: null,
   inPlan: true,
-  debtCode: '',
   contractCode: '',
   contractValue: null,
   contractSignedAt: '',
@@ -197,7 +195,6 @@ function formFromDocument(doc: DocumentDetail, kind: PageKind): FormState {
     budgetId: doc.budget?.budget_id ?? null,
     budgetLineId: doc.budget?.line_id ?? null,
     inPlan: doc.budget?.in_plan !== false,
-    debtCode: doc.debt_code ?? '',
     contractCode: doc.contract.code ?? '',
     contractValue: doc.contract.value ? moneyFromWire(doc.contract.value) : null,
     contractSignedAt: doc.contract.signed_at ?? '',
@@ -424,7 +421,6 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
       priority: f.priority,
       category_id: f.categoryId,
       budget: { budget_id: f.budgetId, line_id: f.budgetLineId, in_plan: f.inPlan },
-      debt_code: f.debtCode || undefined,
       contract: {
         code: f.contractCode || undefined,
         value: f.contractValue ? { amount_minor: f.contractValue.minor.toString(), currency: f.contractValue.currency } : undefined,
@@ -715,9 +711,6 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                     <input type="checkbox" checked={f.inPlan} onChange={(e) => set('inPlan', e.target.checked)} style={{ width: 18, height: 18 }} disabled={!canEdit} />
                     Khoản trong kế hoạch
                   </label>
-                </FgField>
-                <FgField label="Mã công nợ" error={errors.debt_code ?? null}>
-                  <FgInput value={f.debtCode} onChange={(e) => set('debtCode', e.target.value)} placeholder="VD: CN-2026-014" maxLength={60} disabled={!canEdit} />
                 </FgField>
                 <FgField label="Giá trị hợp đồng" error={errors['contract.value'] ?? null} help={f.contractValue ? formatMoney(f.contractValue, { mode: 'full' }) : 'Bỏ trống nếu không có hợp đồng'}>
                   <FgMoneyInput value={f.contractValue} onChange={(m) => set('contractValue', m)} disabled={!canEdit} placeholder="Giá trị HĐ" ariaLabel="Giá trị hợp đồng" />
