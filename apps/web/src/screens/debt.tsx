@@ -66,7 +66,15 @@ import { FgDescriptions, FgEmptyState, FgModal, FgPagination, FgSegmented, FgSke
 import { ChangeHistoryCard } from '../components/change-history.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useDebounced, useToast } from '../components/pagekit.tsx';
-import { acceptOwnerFile, attachmentHref, AttachmentPreviewModal, isImage, problemText, uploadOwnerAttachment } from '../components/attachments.tsx';
+import {
+  acceptOwnerFile,
+  attachmentHref,
+  AttachmentPreviewModal,
+  isImage,
+  problemText,
+  removeOwnerAttachment,
+  uploadOwnerAttachment,
+} from '../components/attachments.tsx';
 import type { OwnerAttachment } from '../app/types.ts';
 
 /* ================= nhãn & tiện ích màn ================= */
@@ -1060,6 +1068,8 @@ export function OwnerAttachmentSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<OwnerAttachment | null>(null);
+  const [toRemove, setToRemove] = useState<OwnerAttachment | null>(null);
+  const [removing, setRemoving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const { message } = useToast();
   const list = attachments ?? [];
@@ -1080,52 +1090,102 @@ export function OwnerAttachmentSection({
     }
   };
 
+  const onRemove = async (): Promise<void> => {
+    if (!toRemove) return;
+    setError(null);
+    setRemoving(true);
+    try {
+      await removeOwnerAttachment({ base, ownerId, attachmentId: toRemove.id });
+      message.success('Đã xoá chứng từ');
+      setToRemove(null);
+      onChanged();
+    } catch (e) {
+      setError(problemText(e, 'Không xoá được chứng từ'));
+    } finally {
+      setRemoving(false);
+    }
+  };
+
   return (
-    <FgCard title="Chứng từ đính kèm">
+    <FgCard
+      title="Chứng từ đính kèm"
+      extra={
+        <FgButton variant="primary" size="small" loading={busy} onClick={() => fileRef.current?.click()}
+        >
+          + Thêm chứng từ (PDF/ảnh, tối đa 100MB)
+        </FgButton>
+      }
+    >
       {list.length ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
           {list.map((a) => (
-            <button
-              key={a.id}
-              type="button"
-              onClick={() => setPreview(a)}
-              title={a.filename}
-              aria-label={`Xem ${a.filename}`}
-              style={{
-                width: 160,
-                padding: 0,
-                border: 'var(--fg-border-w-1) solid var(--fg-border-default)',
-                borderRadius: 'var(--fg-radius-sm)',
-                background: 'var(--fg-bg-subtle)',
-                cursor: 'pointer',
-                overflow: 'hidden',
-                display: 'flex',
-                flexDirection: 'column',
-                textAlign: 'left',
-              }}
-            >
-              <div style={{ width: '100%', height: 120, display: 'grid', placeItems: 'center', overflow: 'hidden' }}>
-                {isImage(a) ? (
-                  <img src={attachmentHref(a)} alt={a.filename} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                ) : (
-                  <FgText style="caption" strong color="secondary">
-                    {a.mime === 'application/pdf' || /\.pdf$/i.test(a.filename) ? 'PDF' : 'TỆP'}
-                  </FgText>
-                )}
-              </div>
-              <div
+            <div key={a.id} style={{ position: 'relative', width: 160 }}>
+              <button
+                type="button"
+                onClick={() => setPreview(a)}
+                title={a.filename}
+                aria-label={`Xem ${a.filename}`}
                 style={{
-                  padding: 'var(--fg-space-1) var(--fg-space-2)',
-                  fontSize: 'var(--fg-font-caption-size)',
-                  color: 'var(--fg-text-secondary)',
+                  width: '100%',
+                  padding: 0,
+                  border: 'var(--fg-border-w-1) solid var(--fg-border-default)',
+                  borderRadius: 'var(--fg-radius-sm)',
+                  background: 'var(--fg-bg-subtle)',
+                  cursor: 'pointer',
                   overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  textAlign: 'left',
                 }}
               >
-                {a.filename}
-              </div>
-            </button>
+                <div style={{ width: '100%', height: 120, display: 'grid', placeItems: 'center', overflow: 'hidden' }}>
+                  {isImage(a) ? (
+                    <img src={attachmentHref(a)} alt={a.filename} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  ) : (
+                    <FgText style="caption" strong color="secondary">
+                      {a.mime === 'application/pdf' || /\.pdf$/i.test(a.filename) ? 'PDF' : 'TỆP'}
+                    </FgText>
+                  )}
+                </div>
+                <div
+                  style={{
+                    padding: 'var(--fg-space-1) var(--fg-space-2)',
+                    fontSize: 'var(--fg-font-caption-size)',
+                    color: 'var(--fg-text-secondary)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {a.filename}
+                </div>
+              </button>
+              {a.referenced ? null : (
+                <button
+                  type="button"
+                  onClick={() => setToRemove(a)}
+                  title="Xoá chứng từ"
+                  aria-label={`Xoá ${a.filename}`}
+                  style={{
+                    position: 'absolute',
+                    top: 4,
+                    right: 4,
+                    width: 24,
+                    height: 24,
+                    borderRadius: '50%',
+                    border: 'none',
+                    background: 'var(--fg-bg-surface)',
+                    color: 'var(--fg-status-danger-text)',
+                    cursor: 'pointer',
+                    lineHeight: '24px',
+                    padding: 0,
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                  }}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           ))}
         </div>
       ) : (
@@ -1144,15 +1204,34 @@ export function OwnerAttachmentSection({
           e.target.value = '';
         }}
       />
-      <FgButton variant="primary" loading={busy} onClick={() => fileRef.current?.click()}>
-        + Thêm chứng từ (PDF/ảnh, tối đa 100MB)
-      </FgButton>
       {error ? (
         <div style={{ marginTop: 8 }}>
           <FgAlert tone="danger" title={error} />
         </div>
       ) : null}
       {preview ? <AttachmentPreviewModal att={preview} onClose={() => setPreview(null)} /> : null}
+      {toRemove ? (
+        <FgModal
+          open
+          title="Xoá chứng từ"
+          onCancel={() => setToRemove(null)}
+          width={480}
+          footer={
+            <>
+              <FgButton onClick={() => setToRemove(null)} disabled={removing}>
+                Hủy
+              </FgButton>
+              <FgButton variant="danger" loading={removing} onClick={() => void onRemove()}>
+                Xoá
+              </FgButton>
+            </>
+          }
+        >
+          <FgText style="body">
+            Xoá chứng từ <strong>{toRemove.filename}</strong>? Thao tác ghi audit.
+          </FgText>
+        </FgModal>
+      ) : null}
     </FgCard>
   );
 }

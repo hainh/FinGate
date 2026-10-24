@@ -55,6 +55,12 @@ export async function uploadOwnerAttachment(opts: {
   await apiData(`${base}/${ownerId}/attachments/confirm`, { method: 'POST', body: { attachment_id: prep.attachment_id } });
 }
 
+/** Xoá chứng từ khỏi phiếu công nợ / khoản vay. Server từ chối nếu chứng từ đã được tham chiếu. */
+export async function removeOwnerAttachment(opts: { base: string; ownerId: string; attachmentId: string }): Promise<void> {
+  const { base, ownerId, attachmentId } = opts;
+  await apiData(`${base}/${ownerId}/attachments/${attachmentId}/remove`, { method: 'POST', body: {} });
+}
+
 export { problemText };
 
 export function attachmentHref(att: { id: string }, download = false): string {
