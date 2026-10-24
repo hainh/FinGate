@@ -204,7 +204,16 @@ export function registerOwnerAttachmentRoutes(app: FastifyInstance, spec: OwnerS
         if (Array.isArray(att.referenced_by) && att.referenced_by.length > 0) {
           throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chứng từ đã được tham chiếu — chỉ thêm, không xoá (audit)' });
         }
-        await updateOwner(spec, id, { $pull: { attachments: { id: att.id } } });
+        const entry = buildHistoryEntry({
+          action: 'attachment_remove',
+          actor: { user_id: actor.user_id, role: actor.role, name: actor.name },
+          from: null,
+          to: null,
+          reason: body.reason ?? null,
+          ip: requestCtx(req).ip,
+          fields: { file: att.filename, version: att.version },
+        });
+        await updateOwner(spec, id, { $pull: { attachments: { id: att.id } }, $push: { history: entry } });
         await Models.Attachment.deleteOne({ owner_type: spec.kind, owner_id: owner._id, attachment_id: attachmentId } as never).exec();
         await storage().remove(String(att.key)).catch(() => undefined);
         await mirrorAudit({
