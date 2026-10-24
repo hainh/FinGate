@@ -11,7 +11,7 @@ import { useIsFetching } from '@tanstack/react-query';
 import { LoadingOutlined } from '@ant-design/icons';
 import { Badge, Dropdown, Input } from 'antd';
 import { useAuth, useUi, SCOPE_ALL } from '../app/store.tsx';
-import { useOverview, useUnreadCount } from '../app/queries.ts';
+import { useBadges, useUnreadCount } from '../app/queries.ts';
 import { apiData, openDownload } from '../app/api.ts';
 import { FgButton, FgText } from './primitives.tsx';
 import { useToast } from './pagekit.tsx';
@@ -116,7 +116,7 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const { data: overview } = useOverview();
+  const { data: badges } = useBadges();
   const { data: unread } = useUnreadCount();
   const { message } = useToast();
   const [backupBusy, setBackupBusy] = useState(false);
@@ -184,7 +184,7 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
   }, [items, location.pathname]);
 
   const badgeCount = (b?: string): number =>
-    b === 'awaiting' ? (overview?.counts?.awaiting_me ?? 0) : b === 'unread' ? (unread?.count ?? 0) : 0;
+    b === 'awaiting' ? (badges?.counts?.awaiting_me ?? 0) : b === 'unread' ? (unread?.count ?? 0) : 0;
 
   const companies = me?.companies ?? [];
   const assignments = me?.assignments ?? [];
@@ -261,7 +261,7 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
         ) : null}
         <div style={{ padding: 'var(--fg-space-3)', display: collapsed && !isOverlay ? 'none' : undefined }}>
           <FgText style="caption" color="muted">
-            Nghiệp vụ {overview?.business_date ?? '—'}
+            Nghiệp vụ {badges?.business_date ?? '—'}
           </FgText>
         </div>
       </aside>
@@ -323,7 +323,7 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
           />
 
           <Link to="/cho-toi-duyet" aria-label="Chờ tôi duyệt" style={{ color: 'var(--fg-text-secondary)' }}>
-            <Badge count={overview?.counts?.awaiting_me ?? 0} size="small" offset={[2, -2]}>
+            <Badge count={badges?.counts?.awaiting_me ?? 0} size="small" offset={[2, -2]}>
               <span style={{ fontSize: 18 }}>✉</span>
             </Badge>
           </Link>

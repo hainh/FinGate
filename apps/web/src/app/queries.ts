@@ -48,6 +48,19 @@ export function useOverview(tagIds: string[] = []) {
   });
 }
 
+/**
+ * Badge thanh điều hướng (shell, mọi màn): số "chờ tôi duyệt" + ngày nghiệp vụ. Key nằm dưới `['overview', …]`
+ * nên `invalidateQueries({ queryKey: ['overview'] })` sẵn có vẫn làm tươi badge.
+ */
+export function useBadges() {
+  const { scope, can } = useAuth();
+  return useQuery({
+    queryKey: ['overview', 'badges', scope],
+    enabled: can('doc:read'),
+    queryFn: () => apiData<{ business_date: string; counts: { awaiting_me: number } }>('/dashboard/badges', { query: { scope } }),
+  });
+}
+
 /** Bộ lọc gửi lên hàng chờ "Chờ tôi duyệt" (GET /queue): ô tìm, trạng thái, đối tác, tag (v2 §5.2, §12). */
 export interface QueueFilters {
   limit?: number;

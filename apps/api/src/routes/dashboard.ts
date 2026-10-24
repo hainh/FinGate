@@ -158,6 +158,24 @@ export function dashboardRoutes(app: FastifyInstance): void {
     }),
   );
 
+  /**
+   * Badge thanh điều hướng (shell, mọi màn): chỉ "chờ tôi duyệt" + ngày nghiệp vụ. Màn ngoài dashboard
+   * không cần cả tổng quan (số dư, đáo hạn, ngoại lệ…) — `/dashboard/overview` chỉ dành cho dashboard.
+   */
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/dashboard/badges',
+      config: { perms: ['doc:read'] as Permission[], screen: 'DASH-01', summary: 'Badge thanh điều hướng' },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const scope = requireScope(req);
+        const awaiting = await awaitingBadge(scope, actor.user_id, actor.role, actor.permissions.includes('payment:mark'));
+        return ok(reply, { data: { business_date: today(), counts: { awaiting_me: awaiting.count } } }, { maxAge: 15 });
+      },
+    }),
+  );
+
   /** DASH-08 / "/hom-nay" — bản mobile rút gọn: cùng data contract. */
   app.route(
     defineRoute({

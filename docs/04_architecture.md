@@ -516,7 +516,8 @@ draft → pending.ktt → pending.pgd → pending.gd → pending.chairman
 ```http
 POST /v1/auth/login · /v1/auth/2fa · /v1/auth/logout · POST /v1/auth/password-reset · POST /v1/activate
 GET  /v1/me · /v1/me/entitlements · /v1/companies
-GET  /v1/dashboard/overview?scope=            # compound (no-store)
+GET  /v1/dashboard/overview?scope=            # compound (no-store) — chỉ màn dashboard
+GET  /v1/dashboard/badges?scope=              # badge shell: chờ tôi duyệt + ngày nghiệp vụ (mọi màn)
 GET  /v1/queue · /v1/queue/processed · /v1/needs-attention
 GET|POST /v1/documents · GET|PATCH /v1/documents/{id}
 POST /v1/documents/{id}/transition            # submit|approve|reject|changes_requested|fast_track|pay|cancel
