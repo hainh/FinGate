@@ -727,7 +727,7 @@ Body: `items: [{debt_voucher_id, amount_minor}]` (KH/NCC) hoặc `loans: [{bank_
 
 - Người có `partner:write` tạo đối tác nội bộ tới **mọi công ty đang hoạt động** trong tập đoàn, không chỉ công ty được phân công. Công ty ghi (`company_id`) vẫn phải nằm trong phạm vi; `internalPartnerFieldsFor` chỉ kiểm TK thuộc công ty đã chọn, đang hoạt động, không phải TK nhóm, khác công ty đang tạo và chưa có đối tác cho TK đó.
 - Hai endpoint đọc mới (mục 14.4) thay cho `me.companies` và `GET /bank-accounts?for_company` ở `PartnerFormModal`: endpoint sau bị `companyReachableByActor` chặn với công ty không được phân công.
-- Đối tác nội bộ lưu STK đầy đủ của TK gốc (như trước), nên ai xem được đối tác của công ty ghi sẽ thấy STK đó. Phiếu chi chọn đối tác nội bộ không kiểm phạm vi công ty nhận ở server (đích lấy từ đối tác, `resolveTransferTarget`); form «Chuyển nội bộ» vẫn yêu cầu công ty nhận được phân công (`routes/documents.ts`, §7.5/§11.6). Hai quy tắc này chưa thống nhất — cần quyết định sản phẩm.
+- Đối tác nội bộ lưu STK đầy đủ của TK gốc (như trước), nên ai xem được đối tác của công ty ghi sẽ thấy STK đó (còn mở: có che STK trên bản ghi đối tác không). Phiếu chi chọn đối tác nội bộ không kiểm phạm vi công ty nhận ở server (đích lấy từ đối tác, `resolveTransferTarget`); form «Chuyển nội bộ» vẫn yêu cầu công ty nhận được phân công (`routes/documents.ts`, §7.5/§11.6). Quyết định sản phẩm: giữ nguyên, phiếu chi qua đối tác nội bộ không kiểm phạm vi công ty nhận ở server, khác với form «Chuyển nội bộ».
 
 ## 16. Dashboard · dòng tiền · cảnh báo · bản tin · báo cáo — backend v2 (agent DASH, v2/v2.md §4.2 BỎ, §12)
 
