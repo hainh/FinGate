@@ -133,6 +133,8 @@ export interface QueueRow {
   amount: WireAmount;
   compact: string;
   planned_date: string;
+  /** Ngày tạo hồ sơ (ISO); cột "Ngày tạo" ở màn Thu / Chi. */
+  created_at: string | null;
   version: number;
   missing_evidence_count: number;
   href: string;
@@ -441,6 +443,7 @@ async function decorateRows(rows: Record<string, unknown>[]): Promise<QueueRow[]
       amount,
       compact: compact(asBigInt(amount.minor), amount.currency),
       planned_date: String(r.planned_date ?? ''),
+      created_at: r.created_at ? new Date(r.created_at as string | Date).toISOString() : null,
       version: Number(r.version ?? 1),
       missing_evidence_count: evidence?.missing?.length ?? 0,
       href: docHref(String(r.kind ?? 'spend'), String(r._id)),

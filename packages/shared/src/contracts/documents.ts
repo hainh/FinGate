@@ -587,6 +587,7 @@ export const documentRow = z.object({
   amount: moneyWire,
   planned_date: businessDate,
   version: docVersion,
+  created_at: z.string().nullable().optional(),
   updated_at: z.string(),
   missing_evidence_count: z.number().int().default(0),
   /** [v2] đối tác theo ID + tên hiển thị, và tag gọn. */
