@@ -224,6 +224,8 @@ export interface QueueRow {
   amount: MoneyWire;
   compact: string;
   planned_date: string;
+  /** Ngày tạo hồ sơ (ISO) — cột "Ngày tạo" ở màn Thu / Chi. */
+  created_at?: string | null;
   version: number;
   missing_evidence_count: number;
   href: string;

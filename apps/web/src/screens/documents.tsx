@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Select, type TableColumnsType } from 'antd';
+import dayjs from 'dayjs';
 import {
   STATUS_KEYS,
   daysBetween,
@@ -99,7 +100,7 @@ function TagList({ tags }: { tags: DocTagRef[] }): ReactNode {
   );
 }
 
-export function useDocColumns(sortable = false): TableColumnsType<QueueRow> {
+export function useDocColumns(sortable = false, showCreatedAt = false): TableColumnsType<QueueRow> {
   return useMemo(
     () =>
       [
@@ -185,7 +186,7 @@ export function useDocColumns(sortable = false): TableColumnsType<QueueRow> {
           render: (v: string, r: QueueRow) => {
             const late = isDeadlinePast(v) && !['paid', 'cancelled', 'rejected'].includes(r.status);
             return (
-              <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
                 <span className="fg-num">{deadlineLabel(v)}</span>
                 {late ? (
                   <span className="fg-chip" style={{ borderColor: 'var(--fg-status-danger-border)', color: 'var(--fg-status-danger-text)', background: 'var(--fg-status-danger-bg)' }}>
@@ -196,8 +197,19 @@ export function useDocColumns(sortable = false): TableColumnsType<QueueRow> {
             );
           },
         },
+        ...(showCreatedAt
+          ? [
+              {
+                title: 'Ngày tạo',
+                dataIndex: 'created_at',
+                key: 'created_at',
+                sorter: sortable ? (a: QueueRow, b: QueueRow) => (a.created_at ?? '').localeCompare(b.created_at ?? '') : undefined,
+                render: (v: string | null | undefined) => (v ? <span className="fg-num">{dayjs(v).format('DD/MM/YYYY HH:mm')}</span> : '—'),
+              },
+            ]
+          : []),
       ] as TableColumnsType<QueueRow>,
-    [sortable],
+    [sortable, showCreatedAt],
   );
 }
 
@@ -253,6 +265,8 @@ export interface DocListConfig {
   createLabel?: string;
   /** sắp xếp trực tiếp trên cột bảng (ẩn dropdown "Sắp xếp" ở thanh lọc). */
   sortOnTable?: boolean;
+  /** thêm cột "Ngày tạo" (màn Thu / Chi). */
+  showCreatedAt?: boolean;
   /**
    * Chế độ swimlane: nhóm hồ sơ theo trạng thái thành các khối, khối đầu hiển thị trên
    * cùng (vd màn Chi: "Đã duyệt — chờ chi" lên đầu cho kế toán). Bỏ lọc trạng thái.
@@ -268,6 +282,7 @@ export function DocListScreen({
   createHref,
   createLabel,
   sortOnTable = false,
+  showCreatedAt = false,
   swimlanes,
 }: DocListConfig): ReactNode {
   const { can, scope } = useAuth();
@@ -354,7 +369,7 @@ export function DocListScreen({
   const [selected, setSelected] = useState<Record<string, QueueRow>>({});
   const [bulkOpen, setBulkOpen] = useState(false);
   const anyFilter = Boolean(qDebounced || get('status') || get('mine') || partnerParam || tagIds.length);
-  const columns = useDocColumns(sortOnTable);
+  const columns = useDocColumns(sortOnTable, showCreatedAt);
   // Duyệt hàng loạt chỉ dành cho người có quyền duyệt; kế toán thực thi không chọn bulk.
   const selectable = Boolean(bulk) && can('approval:act');
 
@@ -645,6 +660,7 @@ export function SpendListScreen(): ReactNode {
       createHref="/chi/moi"
       createLabel="+ Đề nghị chi"
       sortOnTable
+      showCreatedAt
       swimlanes={SPEND_LANES}
     />
   );
@@ -652,12 +668,20 @@ export function SpendListScreen(): ReactNode {
 
 /** CHI-04 — ghim pending.* (cùng khung, filter ghim qua URL mặc định). */
 export function SpendPendingScreen(): ReactNode {
-  return <DocListScreen title="Chi chờ duyệt" source="documents" fixed={{ kind: 'spend', status: PENDING_APPROVAL_STATUSES }} sortOnTable />;
+  return (
+    <DocListScreen
+      title="Chi chờ duyệt"
+      source="documents"
+      fixed={{ kind: 'spend', status: PENDING_APPROVAL_STATUSES }}
+      sortOnTable
+      showCreatedAt
+    />
+  );
 }
 
 /** CHI-07 — đã thanh toán. */
 export function SpendPaidScreen(): ReactNode {
-  return <DocListScreen title="Chi đã thanh toán" source="documents" fixed={{ kind: 'spend', status: 'paid' }} sortOnTable />;
+  return <DocListScreen title="Chi đã thanh toán" source="documents" fixed={{ kind: 'spend', status: 'paid' }} sortOnTable showCreatedAt />;
 }
 
 /** THU-01 — danh sách thu (swimlane: đã duyệt chờ thu lên đầu cho kế toán thực hiện). */
@@ -670,6 +694,7 @@ export function IncomeListScreen(): ReactNode {
       createHref="/thu/moi"
       createLabel="+ Khoản thu"
       sortOnTable
+      showCreatedAt
       swimlanes={INCOME_LANES}
     />
   );
@@ -677,7 +702,15 @@ export function IncomeListScreen(): ReactNode {
 
 /** THU-04 — thu quá hạn. */
 export function IncomeOverdueScreen(): ReactNode {
-  return <DocListScreen title="Thu quá hạn" source="documents" fixed={{ kind: 'income', overdue_only: 'true' }} sortOnTable />;
+  return (
+    <DocListScreen
+      title="Thu quá hạn"
+      source="documents"
+      fixed={{ kind: 'income', overdue_only: 'true' }}
+      sortOnTable
+      showCreatedAt
+    />
+  );
 }
 
 /** DANH MỤC — chuyển tiền nội bộ + đảo hạn mở (link DOC-01). */

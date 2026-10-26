@@ -186,24 +186,30 @@ function debtColumns(): TableColumnsType<DebtRow> {
       render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} emphasis />,
     },
     {
+      // hạn và số ngày quá hạn gộp một cột; badge quá hạn nằm dòng dưới ngày
       title: 'Hạn',
       dataIndex: 'due_date',
       key: 'due',
       sorter: (a, b) => a.due_date.localeCompare(b.due_date),
-      render: (v: string) => ddmmyyyy(v),
+      render: (v: string, r: DebtRow) => (
+        <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+          <span className="fg-num">{ddmmyyyy(v)}</span>
+          {r.days_overdue > 0 ? (
+            <FgToneChip tone="danger">⛔ {r.days_overdue} ngày</FgToneChip>
+          ) : (
+            <FgText style="caption" color="muted">
+              đúng hạn
+            </FgText>
+          )}
+        </span>
+      ),
     },
     {
-      title: 'Quá hạn',
-      key: 'overdue',
-      sorter: (a, b) => a.days_overdue - b.days_overdue,
-      render: (_v, r: DebtRow) =>
-        r.days_overdue > 0 ? (
-          <FgToneChip tone="danger">⛔ {r.days_overdue} ngày</FgToneChip>
-        ) : (
-          <FgText style="caption" color="muted">
-            đúng hạn
-          </FgText>
-        ),
+      title: 'Ngày tạo',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      sorter: (a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''),
+      render: (v: string | null) => (v ? <span className="fg-num">{dayjs(v).format('DD/MM/YYYY HH:mm')}</span> : '—'),
     },
   ];
 }
