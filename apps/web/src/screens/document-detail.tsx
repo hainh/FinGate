@@ -482,6 +482,11 @@ function tagNamesIn(v: unknown): string[] {
 
 /** Chi tiết một dòng lịch sử hồ sơ: với "Sửa tag" nêu tên tag thêm / bỏ; các dòng khác để trống ("—"). */
 function historyDetailText(entry: Pick<DocumentDetail['history'][number], 'action' | 'fields'>): string {
+  // gộp đối tác: đổi đối tác của phiếu (fields.changes.<trường> = {from, to} là nhãn "mã · tên" của hai đối tác)
+  if (entry.action === 'partner.merge') {
+    const change = Object.values((entry.fields?.changes ?? {}) as Record<string, { from?: unknown; to?: unknown }>)[0];
+    return typeof change?.from === 'string' && typeof change?.to === 'string' ? `Đối tác: ${change.from} → ${change.to}` : '—';
+  }
   if (entry.action !== 'tags_update') return '—';
   const added = tagNamesIn(entry.fields?.added);
   const removed = tagNamesIn(entry.fields?.removed);

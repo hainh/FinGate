@@ -100,6 +100,7 @@ describe('hợp đồng OpenAPI của route đối tác', () => {
       'partnerCreateBodySchema',
       'partnerUpdateBodySchema',
       'partnerCopyBodySchema',
+      'partnerMergeBodySchema',
       'partnerDirectoryQuerySchema',
       'partnerTabQuerySchema',
       'partnerSettleBodySchema',

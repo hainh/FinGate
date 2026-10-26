@@ -162,3 +162,24 @@ export const partnerCopyResult = z.object({
   ),
   warnings: z.array(partnerDuplicateWarning),
 });
+
+/** POST /partners/:id/merge — gộp đối tác `:id` (nguồn, bị xoá) vào `target_id` (đích, giữ lại). Cùng công ty, cùng loại. */
+export const partnerMergeBody = z.object({
+  target_id: objectId.describe('Đối tác đích — giữ lại; cùng công ty và cùng loại với đối tác nguồn'),
+  /** Chống ghi đúp: một lần mở hộp thoại dùng MỘT request_id (bấm lặp / gửi lại trả lại kết quả cũ). */
+  request_id: uuid.optional(),
+});
+export type PartnerMergeBody = z.infer<typeof partnerMergeBody>;
+
+export const partnerMergeResult = z.object({
+  partner: partnerRef,
+  /** Số tham chiếu đã chuyển sang đối tác đích, theo loại. */
+  moved: z.object({
+    documents: z.number().int().nonnegative(),
+    lender_documents: z.number().int().nonnegative(),
+    debt_vouchers: z.number().int().nonnegative(),
+    bank_debts: z.number().int().nonnegative(),
+    recurring_rules: z.number().int().nonnegative(),
+  }),
+});
+export type PartnerMergeResult = z.infer<typeof partnerMergeResult>;

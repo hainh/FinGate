@@ -17,6 +17,7 @@
  *   DELETE /partners/:id                  xoá (chỉ khi chưa phát sinh)
  *   POST   /partners/check-duplicates     kiểm trùng trước khi lưu (chỉ đọc) → { warnings }
  *   POST   /partners/copy                 sao chép từ công ty khác → { created, warnings }
+ *   POST   /partners/:id/merge            gộp đối tác :id vào target_id (cùng loại), xoá :id → { partner, moved }
  *   POST   /partners/:id/settle           trả nợ → { partner_id, replayed, vouchers[] } (phiếu NHÁP)
  *   GET    /partners/:id/documents        tab Phiếu thu/chi → { items, total }
  *   GET    /partners/:id/debts            tab Công nợ (KH/NCC) → { items, total }
@@ -113,6 +114,12 @@ export interface PartnerCopyInput {
 export interface PartnerCopyResult {
   created: { source_id: string; partner_id: string; code: string; name: string }[];
   warnings: PartnerDuplicateWarning[];
+}
+
+/** Kết quả gộp: đối tác đích (giữ lại) + số tham chiếu đã chuyển sang đích, theo loại. */
+export interface PartnerMergeResult {
+  partner: PartnerRef;
+  moved: { documents: number; lender_documents: number; debt_vouchers: number; bank_debts: number; recurring_rules: number };
 }
 
 /** Trả khoản công nợ (KH/NCC): phân bổ `amount_minor` → phiếu thu (phải thu) hoặc phiếu chi (phải trả). */
@@ -454,6 +461,34 @@ export function useCopyPartners() {
   return useMutation({
     mutationFn: (body: PartnerCopyInput) => apiData<PartnerCopyResult>('/partners/copy', { method: 'POST', body }),
     onSuccess: () => invalidatePartnerQueries(qc),
+  });
+}
+
+/**
+ * Gộp đối tác `sourceId` vào `targetId` (cùng công ty, cùng loại). Nguồn bị xoá; phiếu / công nợ / khoản vay /
+ * khoản chi định kỳ chuyển sang đích nên làm mới cả các màn đó. `requestId`: một lần mở hộp thoại = một mã.
+ */
+export function useMergePartner() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ sourceId, targetId, requestId }: { sourceId: string; targetId: string; requestId: string }) =>
+      apiData<PartnerMergeResult>(`/partners/${sourceId}/merge`, { method: 'POST', body: { target_id: targetId, request_id: requestId } }),
+    onSuccess: () => {
+      invalidatePartnerQueries(qc);
+      for (const key of [
+        'documents',
+        'document',
+        'queue',
+        'overview',
+        'debt-vouchers',
+        'debt-voucher',
+        'bank-debts',
+        'bank-debt',
+        'recurring-rules',
+      ]) {
+        void qc.invalidateQueries({ queryKey: [key] });
+      }
+    },
   });
 }
 

@@ -64,6 +64,7 @@ import {
   CopyPartnersDialog,
   DebtDirectionDialog,
   DeletePartnerDialog,
+  MergePartnerDialog,
   SettlePartnerDialog,
   TogglePartnerStatusDialog,
   partnerLoanHref,
@@ -137,6 +138,7 @@ type ListDialog =
   | { kind: 'settle'; partner: PartnerListRow }
   | { kind: 'direction'; partner: PartnerListRow }
   | { kind: 'toggle'; partner: PartnerListRow }
+  | { kind: 'merge'; partner: PartnerListRow }
   | { kind: 'delete'; partner: PartnerListRow };
 
 export function PartnersScreen(): ReactNode {
@@ -226,6 +228,8 @@ export function PartnersScreen(): ReactNode {
           label: r.status === 'active' ? 'Ngừng giao dịch' : 'Kích hoạt lại',
           onClick: () => setDialog({ kind: 'toggle', partner: r }),
         },
+        // đối tác công ty trong tập đoàn không gộp: mỗi TK gốc là một đối tác riêng
+        ...(r.type === 'internal' ? [] : [{ key: 'merge', label: 'Gộp vào…', onClick: () => setDialog({ kind: 'merge', partner: r }) }]),
         {
           key: 'delete',
           label: r.has_activity ? 'Xoá (đã phát sinh)' : 'Xoá',
@@ -494,6 +498,7 @@ export function PartnersScreen(): ReactNode {
       {dialog?.kind === 'settle' ? <SettlePartnerDialog partner={dialog.partner} onClose={close} /> : null}
       {dialog?.kind === 'direction' ? <DebtDirectionDialog partnerId={dialog.partner._id} onClose={close} /> : null}
       {dialog?.kind === 'toggle' ? <TogglePartnerStatusDialog partner={dialog.partner} onClose={close} /> : null}
+      {dialog?.kind === 'merge' ? <MergePartnerDialog partner={dialog.partner} onClose={close} /> : null}
       {dialog?.kind === 'delete' ? <DeletePartnerDialog partner={dialog.partner} onClose={close} /> : null}
     </>
   );
@@ -501,7 +506,7 @@ export function PartnersScreen(): ReactNode {
 
 /* ================= chi tiết ================= */
 
-type DetailDialog = 'edit' | 'settle' | 'direction' | 'toggle' | 'delete';
+type DetailDialog = 'edit' | 'settle' | 'direction' | 'toggle' | 'merge' | 'delete';
 
 export function PartnerDetailScreen(): ReactNode {
   const { id } = useParams<{ id: string }>();
@@ -549,6 +554,7 @@ export function PartnerDetailScreen(): ReactNode {
               disabled: !canWrite,
               onClick: () => setDialog('toggle'),
             },
+            ...(d.type === 'internal' ? [] : [{ key: 'merge', label: 'Gộp vào…', disabled: !canWrite, onClick: () => setDialog('merge') }]),
             { type: 'divider', key: 'divider' },
             {
               key: 'delete',
@@ -708,6 +714,9 @@ export function PartnerDetailScreen(): ReactNode {
       {p && dialog === 'settle' ? <SettlePartnerDialog partner={p} onClose={close} /> : null}
       {p && dialog === 'direction' ? <DebtDirectionDialog partnerId={p._id} onClose={close} /> : null}
       {p && dialog === 'toggle' ? <TogglePartnerStatusDialog partner={p} onClose={close} /> : null}
+      {p && dialog === 'merge' ? (
+        <MergePartnerDialog partner={p} onClose={close} onMerged={(targetId) => navigate(`/doi-tac/${targetId}`)} />
+      ) : null}
       {p && dialog === 'delete' ? <DeletePartnerDialog partner={p} onClose={close} onDeleted={() => navigate('/doi-tac')} /> : null}
     </>
   );
@@ -909,6 +918,7 @@ const HISTORY_FIELD_LABEL: Record<string, string> = {
   note: 'Ghi chú',
   status: 'Trạng thái',
   copied_from: 'Sao chép từ công ty khác',
+  merged_from: 'Gộp từ đối tác',
 };
 
 function historyValue(field: string, v: unknown): string {

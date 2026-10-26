@@ -3,7 +3,7 @@
  *
  * Route là lớp MỎNG: quyền (config.perms) → phạm vi công ty → zod → domain/partner.
  * · `partner:read` xem danh sách / chi tiết / các tab (kèm quyền của module tương ứng: phiếu, công nợ, nợ NH).
- * · `partner:write` tạo / sửa / ngừng / kích hoạt / xoá / sao chép.
+ * · `partner:write` tạo / sửa / ngừng / kích hoạt / xoá / sao chép / gộp.
  * · Trả nợ thêm `doc:create` (tạo phiếu nháp) và `link:manage` (tạo liên kết cấn trừ / trả nợ).
  */
 
@@ -13,6 +13,7 @@ import {
   partnerCopyBody,
   partnerCreateBody,
   partnerDuplicateCheckBody,
+  partnerMergeBody,
   partnerSearchQuery,
   partnerUpdateBody,
   type PartnerType,
@@ -25,6 +26,7 @@ import {
   partnerCreateBodySchema,
   partnerDirectoryQuerySchema,
   partnerDuplicateCheckBodySchema,
+  partnerMergeBodySchema,
   partnerSettleBodySchema,
   partnerTabQuerySchema,
   partnerUpdateBodySchema,
@@ -46,6 +48,7 @@ import {
   partnerRefOf,
   assertPartnerInScope,
   historyOf,
+  mergePartners,
   setPartnerStatus,
   updatePartner,
 } from '../domain/partner/index.ts';
@@ -316,6 +319,35 @@ export function partnerRoutes(app: FastifyInstance): void {
           ip: requestCtx(req).ip,
         });
         return ok(reply, { data: { ok: true } });
+      },
+    }),
+  );
+
+  // Gộp: `:id` (nguồn, bị xoá) vào `target_id` (đích, giữ lại). Cùng công ty, cùng loại — kiểm trong domain.
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/partners/:id/merge',
+      config: {
+        perms: ['partner:write'] as Permission[],
+        screen: SCREEN,
+        summary: 'Gộp đối tác vào đối tác khác cùng loại (chuyển phiếu, công nợ, khoản vay; xoá đối tác nguồn)',
+      },
+      schema: { tags: ['partners'], body: partnerMergeBodySchema },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const scope = requireScope(req);
+        const { id } = req.params as { id: string };
+        const body = validate(partnerMergeBody, req.body);
+        const { partner, moved } = await mergePartners({
+          sourceId: id,
+          targetId: body.target_id,
+          scopeCompanyIds: scope.companyIds,
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          ip: requestCtx(req).ip,
+          requestId: body.request_id ?? null,
+        });
+        return ok(reply, { data: { partner, moved } });
       },
     }),
   );

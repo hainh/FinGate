@@ -10,11 +10,12 @@
 
 import { ApiError, normalizeNameKey, PARTNER_TYPE_LABEL, type PartnerCreateBody, type PartnerType, type PartnerUpdateBody, vnDate } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
-import { mirrorAudit } from '../audit/index.ts';
+import { buildHistoryEntry, mirrorAudit } from '../audit/index.ts';
 import { toBig } from '../links/index.ts';
 import { nextPartnerCode } from '../numbering/index.ts';
 import { acquireClaim, claimKeyOf, completeClaim, releaseClaim, type ClaimHandle } from './claims.ts';
 import { findDuplicatePartners, identifierSearchPattern, type DuplicateHit } from './duplicates.ts';
+import { assertMergeable, mergedMasterFields, type MergeCandidate } from './merge.ts';
 import { defaultPeriod, loadPartnerLedgers, maturityInfo, numbersOf, type LedgerPartner, type LoanView, type DebtView, type Period, type PartnerLedger, type SummaryVisibility } from './summary.ts';
 import { accountCodeOfPartnerType } from '../debt/rules.ts';
 import { assertPartnerTypeChange, loadPartnerTypeUsage } from './type-guard.ts';
@@ -532,6 +533,220 @@ export async function copyPartners(input: {
   }
   if (claim) await completeClaim(claim, { created, warnings });
   return { created, warnings, replayed: false };
+}
+
+/* ================================================================== *
+ * Gộp đối tác (v2 §5.1): chuyển mọi tham chiếu của NGUỒN sang ĐÍCH, cập nhật thông tin đích, rồi xoá nguồn.
+ * Không transaction (ADR-03): mỗi bước chuyển đều lọc theo nguồn nên chạy lại an toàn — lượt lỗi giữa chừng
+ * gửi lại (cùng request_id) sẽ chuyển nốt phần còn lại.
+ * ================================================================== */
+
+/** Số tham chiếu đã chuyển sang đích, theo loại. */
+export interface MergeMoved {
+  documents: number;
+  lender_documents: number;
+  debt_vouchers: number;
+  bank_debts: number;
+  recurring_rules: number;
+}
+
+export interface MergeOutput {
+  partner: PartnerRefView;
+  moved: MergeMoved;
+  replayed: boolean;
+}
+
+/** Số vòng chuyển tối đa: phiếu mới ghi vào nguồn trong lúc gộp được chuyển nốt, không lặp vô hạn. */
+const MERGE_ROUNDS = 3;
+
+const candidateOf = (p: PartnerLean): MergeCandidate => ({
+  _id: idOf(p._id),
+  company_id: idOf(p.company_id),
+  type: p.type,
+  status: p.status,
+});
+
+/**
+ * Gộp đối tác `sourceId` vào `targetId` (cùng công ty, cùng loại — kiểm ở `assertMergeable`).
+ * Chống ghi đúp theo `requestId` như sao chép: lượt lặp lại ⇒ trả lại đúng kết quả đã ghi.
+ */
+export async function mergePartners(input: {
+  sourceId: string;
+  targetId: string;
+  scopeCompanyIds: string[] | null;
+  actor: PartnerActor;
+  ip?: string | null;
+  requestId?: string | null;
+}): Promise<MergeOutput> {
+  // Đích còn tồn tại sau gộp nên đọc trước: kiểm phạm vi và lấy công ty cho khoá. Nguồn đã bị xoá khi lượt gửi
+  // lại đến, nên khoá replay phải được kiểm TRƯỚC khi đọc nguồn.
+  const target = await loadPartner(input.targetId);
+  assertPartnerInScope(target.company_id, input.scopeCompanyIds);
+
+  let claim: ClaimHandle | null = null;
+  if (input.requestId) {
+    const outcome = await acquireClaim<Omit<MergeOutput, 'replayed'>>(
+      claimKeyOf('partner.merge', input.sourceId, input.requestId),
+      'partner.merge',
+      idOf(target.company_id),
+    );
+    if (outcome.replayed) return { ...outcome.result, replayed: true };
+    claim = outcome.handle;
+  }
+  try {
+    const result = await runMerge({ ...input, target });
+    if (claim) await completeClaim(claim, result);
+    return { ...result, replayed: false };
+  } catch (err) {
+    if (claim) await releaseClaim(claim);
+    throw err;
+  }
+}
+
+async function runMerge(input: {
+  sourceId: string;
+  target: PartnerLean;
+  scopeCompanyIds: string[] | null;
+  actor: PartnerActor;
+  ip?: string | null;
+  requestId?: string | null;
+}): Promise<Omit<MergeOutput, 'replayed'>> {
+  const { target } = input;
+  const source = await loadPartner(input.sourceId);
+  assertPartnerInScope(source.company_id, input.scopeCompanyIds);
+  assertMergeable(candidateOf(source), candidateOf(target));
+  const companyId = idOf(target.company_id);
+  const sourceId = idOf(source._id);
+  const targetId = idOf(target._id);
+  const now = new Date();
+  const actor = { user_id: input.actor.user_id, name: input.actor.name ?? null, role: input.actor.role ?? null };
+  const meta = { request_id: input.requestId ?? null, ip: input.ip ?? null };
+  const sourceLabel = `${source.code} · ${source.name}`;
+  const targetLabel = `${target.code} · ${target.name}`;
+
+  // 1. Chuyển tham chiếu tới khi nguồn không còn tham chiếu nào.
+  const moved: MergeMoved = { documents: 0, lender_documents: 0, debt_vouchers: 0, bank_debts: 0, recurring_rules: 0 };
+  let left: number;
+  let round = 0;
+  do {
+    const step = await moveReferences({
+      companyId,
+      fromId: sourceId,
+      toId: targetId,
+      fromLabel: sourceLabel,
+      toLabel: targetLabel,
+      actor,
+      meta,
+      now,
+    });
+    for (const k of Object.keys(moved) as (keyof MergeMoved)[]) moved[k] += step[k];
+    left = await remainingRefs(companyId, sourceId);
+  } while (left > 0 && ++round < MERGE_ROUNDS);
+  if (left > 0) {
+    throw new ApiError({
+      code: 'FG-WF-011',
+      detail: 'Đối tác nguồn vẫn đang được ghi nhận trong lúc gộp — gửi lại để gộp nốt',
+      data: { remaining: left },
+    });
+  }
+
+  // 2. Đích: giữ tên / loại / trạng thái; phần còn trống lấy từ nguồn (MST, NH + STK). Ghi lịch sử kèm dấu vết gộp.
+  const before = snapshotOfLean(target);
+  const after = mergedMasterFields(before, snapshotOfLean(source), sourceLabel);
+  const fieldChanges = diffSnapshots(before, after);
+  const changes: Record<string, unknown> = { ...fieldChanges, merged_from: { from: null, to: sourceLabel } };
+  const set: Record<string, unknown> = { updated_at: now };
+  for (const f of Object.keys(fieldChanges) as PartnerTrackedField[]) set[f] = after[f];
+  const updated = await Models.Partner.updateOne(
+    { _id: targetId, updated_at: target.updated_at } as never,
+    { $set: set, $push: { history: { at: now, actor: { user_id: actor.user_id, name: actor.name }, changes } } } as never,
+  ).exec();
+  if (updated.matchedCount === 0) throw new ApiError({ code: 'FG-WF-011' });
+
+  await mirrorAudit({
+    at: now,
+    actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+    action: 'partner.merge',
+    subject: { type: 'partner', id: targetId, code: target.code },
+    company_id: companyId,
+    diff_fields: { source_partner_id: sourceId, source_code: source.code, source_name: source.name, moved: { ...moved } },
+    request_id: input.requestId ?? null,
+    ip: input.ip ?? null,
+  });
+
+  // 3. Xoá nguồn. Phiếu mới gắn vào nguồn ngay trước khi xoá ⇒ khôi phục đúng nguồn cũ và báo lỗi (gửi lại để gộp nốt).
+  await Models.Partner.deleteOne({ _id: sourceId, company_id: companyId } as never).exec();
+  const leftAfterDelete = await remainingRefs(companyId, sourceId);
+  if (leftAfterDelete > 0) {
+    await Models.Partner.collection.insertOne(source as never); // khôi phục đúng bản ghi nguồn (cùng _id, lịch sử)
+    throw new ApiError({
+      code: 'FG-WF-011',
+      detail: 'Đối tác nguồn vừa được ghi nhận trong lúc gộp — gửi lại để gộp nốt',
+      data: { remaining: leftAfterDelete },
+    });
+  }
+  return { partner: partnerRefOf(await loadPartner(targetId)), moved };
+}
+
+/** Số tham chiếu còn trỏ về đối tác: phiếu / công nợ / khoản vay / khoản chi định kỳ / liên kết, và người cho vay trên phiếu vay. */
+async function remainingRefs(companyId: string, partnerId: string): Promise<number> {
+  const lenders = await Models.Document.countDocuments({ company_id: companyId, 'options.loan.lender_partner_id': partnerId } as never).exec();
+  return usageTotal(await partnerUsageCounts(companyId, partnerId)) + lenders;
+}
+
+/**
+ * Chuyển MỘT lượt tham chiếu từ nguồn sang đích: phiếu (partner_id và người cho vay trên phiếu vay), công nợ,
+ * khoản vay NH, khoản chi định kỳ. Phiếu / công nợ / khoản vay có lịch sử nên được ghi thêm một dòng.
+ * Liên kết (business_links) trỏ tới phiếu theo ID nên không cần chuyển.
+ */
+async function moveReferences(input: {
+  companyId: string;
+  fromId: string;
+  toId: string;
+  /** Nhãn "mã · tên" để hiện trong lịch sử phiếu / công nợ (ID vẫn ở audit). */
+  fromLabel: string;
+  toLabel: string;
+  actor: { user_id: string; name: string | null; role: string | null };
+  meta: { request_id: string | null; ip: string | null };
+  now: Date;
+}): Promise<MergeMoved> {
+  const { companyId, fromId, toId, fromLabel, toLabel, actor, meta, now } = input;
+  const entry = (field: string) =>
+    buildHistoryEntry({
+      at: now,
+      action: 'partner.merge',
+      actor,
+      request_id: meta.request_id,
+      ip: meta.ip,
+      fields: { changed: [field], changes: { [field]: { from: fromLabel, to: toLabel } } },
+    });
+  const documents = await Models.Document.updateMany(
+    { company_id: companyId, partner_id: fromId } as never,
+    { $set: { partner_id: toId, updated_at: now }, $push: { history: entry('partner_id') } } as never,
+  ).exec();
+  const lenderDocuments = await Models.Document.updateMany(
+    { company_id: companyId, 'options.loan.lender_partner_id': fromId } as never,
+    { $set: { 'options.loan.lender_partner_id': toId, updated_at: now }, $push: { history: entry('options.loan.lender_partner_id') } } as never,
+  ).exec();
+  const debtVouchers = await Models.DebtVoucher.updateMany(
+    { company_id: companyId, partner_id: fromId } as never,
+    { $set: { partner_id: toId, updated_at: now }, $push: { history: entry('partner_id') } } as never,
+  ).exec();
+  const bankDebts = await Models.BankDebt.updateMany(
+    { company_id: companyId, partner_id: fromId } as never,
+    { $set: { partner_id: toId, updated_at: now }, $push: { history: entry('partner_id') } } as never,
+  ).exec();
+  const recurringRules = await Models.RecurringRule.updateMany(
+    { company_id: companyId, partner_id: fromId } as never,
+    { $set: { partner_id: toId, updated_at: now } } as never,
+  ).exec();
+  return {
+    documents: documents.modifiedCount,
+    lender_documents: lenderDocuments.modifiedCount,
+    debt_vouchers: debtVouchers.modifiedCount,
+    bank_debts: bankDebts.modifiedCount,
+    recurring_rules: recurringRules.modifiedCount,
+  };
 }
 
 /* ================================================================== *

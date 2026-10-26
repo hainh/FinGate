@@ -7,7 +7,7 @@ const API_AUDIT_CODES = [
   'session.revoke',
   'document.create', 'document.update', 'document.delete', 'document.opinion', 'document.auto_create', 'document.tags_update',
   'document.tag_merge', 'document.attachment_confirm', 'document.attachment_remove',
-  'partner.create', 'partner.update', 'partner.delete', 'partner.settle', 'partner.copy', 'partner.deactivate', 'partner.reactivate',
+  'partner.create', 'partner.update', 'partner.delete', 'partner.settle', 'partner.copy', 'partner.merge', 'partner.deactivate', 'partner.reactivate',
   'debt.create', 'debt.update', 'debt.delete', 'debt.link', 'debt.unlink', 'debt.attachment_confirm', 'debt.attachment_remove',
   'link.create', 'link.remove',
   'bank_debt.create', 'bank_debt.update', 'bank_debt.delete', 'bank_debt.import', 'bank_debt.cancel', 'bank_debt.auto_create',

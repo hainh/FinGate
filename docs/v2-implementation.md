@@ -612,10 +612,10 @@ Phạm vi: `v2/v2.md` §15 (M1–M6) và dữ liệu demo v2. Không đổi rout
 ## 14. Web — Đối tác (PartnerPicker · popup Đối tác · màn Đối tác & chi tiết) — v2/v2.md §5.2, §5.3
 
 ### 14.1 File
-- `apps/web/src/app/v2/partners.ts` — kiểu trên wire và hooks: `usePartnerOptions`, `usePartner`, `usePartnerList`, `usePartnerCopySource`, `usePartnerVouchers`, `usePartnerDebts`, `usePartnerLoans`, `useCreatePartner`, `useUpdatePartner`, `useSetPartnerStatus`, `useDeletePartner`, `useCopyPartners`, `useSettlePartner`; hàm `debtDirectionOf`.
+- `apps/web/src/app/v2/partners.ts` — kiểu trên wire và hooks: `usePartnerOptions`, `usePartner`, `usePartnerList`, `usePartnerCopySource`, `usePartnerVouchers`, `usePartnerDebts`, `usePartnerLoans`, `useCreatePartner`, `useUpdatePartner`, `useSetPartnerStatus`, `useDeletePartner`, `useCopyPartners`, `useMergePartner`, `useSettlePartner`; hàm `debtDirectionOf`.
 - `apps/web/src/components/partner-picker.tsx` — `PartnerPicker` (ô chọn), `PartnerFormModal` (export để tái dùng), `notifyPartnerWarnings`, `partnerTypesFor`.
 - `apps/web/src/screens/partners.tsx` — `PartnersScreen` (`/doi-tac`), `PartnerDetailScreen` (`/doi-tac/:id`), các tab.
-- `apps/web/src/screens/partner-dialogs.tsx` — `partnerVoucherHref`, `partnerDebtHref`, `partnerLoanHref`, `DebtDirectionDialog`, `SettlePartnerDialog`, `CopyPartnersDialog`, `TogglePartnerStatusDialog`, `DeletePartnerDialog`.
+- `apps/web/src/screens/partner-dialogs.tsx` — `partnerVoucherHref`, `partnerDebtHref`, `partnerLoanHref`, `DebtDirectionDialog`, `SettlePartnerDialog`, `CopyPartnersDialog`, `MergePartnerDialog`, `TogglePartnerStatusDialog`, `DeletePartnerDialog`.
 - Đã xoá `screens/counterparty.tsx`. `routes.tsx`: `/doi-tac` + `/doi-tac/:id`. `shell.tsx`: nhãn "Đối tác". Hook và type `/counterparties` đã bỏ ở vòng hoàn thiện (§20.1).
 
 ### 14.2 Dùng PartnerPicker
@@ -639,6 +639,7 @@ Phạm vi: `v2/v2.md` §15 (M1–M6) và dữ liệu demo v2. Không đổi rout
 - `GET /partners/:id` → tóm tắt **tháng hiện tại** (server không nhận kỳ) + `history[]` (`changes`: `{field: {from, to}}`).
 - `POST /partners`, `PATCH /partners/:id` → `{partner, warnings}`; `POST /partners/:id/deactivate|reactivate` → `{partner, warnings}`; `DELETE /partners/:id` → `{ok}`.
 - `POST /partners/copy` (`source_company_id`, `partner_ids`, `target_company_id`) → `{created: [{source_id, partner_id, code, name}], warnings}`. Web gửi header scope = công ty nguồn cộng `company_id` khi đọc danh bạ nguồn.
+- `POST /partners/:id/merge` body `{target_id, request_id}` → `{partner, moved: {documents, lender_documents, debt_vouchers, bank_debts, recurring_rules}}` (mục 12.10). Nút «Gộp vào…» nằm trong «Thao tác» ở danh sách và «Khác» ở chi tiết (không hiện với đối tác công ty trong tập đoàn); popup chỉ liệt kê đối tác cùng công ty, cùng loại, đang hoạt động.
 - `POST /partners/:id/settle` body `{items: [{debt_voucher_id, amount_minor}], loans: [{bank_debt_id, amount_minor, split: {principal, interest, fee}}], note}` → `{partner_id, replayed, vouchers: [{document_id, code, kind, status, amount_minor, title, links}]}`. Mở phiếu nháp đầu tiên; các phiếu còn lại báo ở thông báo.
 - Tab: `GET /partners/:id/documents` (`{items: {_id, code, kind, status, title, planned_date, amount, …}}`), `/debts` (`direction`, `value`, `applied`, `remaining`, `due_date`, `overdue_days`, `status`), `/loans` (`principal`, `repaid_principal`, `outstanding`, `maturity_date`, `status`).
 
@@ -655,10 +656,10 @@ Phạm vi: danh bạ đối tác THEO CÔNG TY (`partners`), lịch sử, cảnh
 
 ### 12.1 File
 
-- Domain (mới): `apps/api/src/domain/partner/` — `index.ts` (dịch vụ: tạo / sửa / trạng thái / xoá / sao chép / đọc), `rules.ts` (thuần: ảnh chụp, so sánh lịch sử, kiểm tra bản ghi), `duplicates.ts` (cảnh báo trùng), `type-guard.ts` (chặn đổi loại), `summary.ts` (số liệu tóm tắt + nạp sổ theo lô), `settle.ts` (trả nợ: kế hoạch thuần + thực thi), `voucher-draft.ts` (tạo phiếu nháp), `contracts.ts` (hợp đồng API riêng của màn Đối tác).
+- Domain (mới): `apps/api/src/domain/partner/` — `index.ts` (dịch vụ: tạo / sửa / trạng thái / xoá / sao chép / đọc), `rules.ts` (thuần: ảnh chụp, so sánh lịch sử, kiểm tra bản ghi), `duplicates.ts` (cảnh báo trùng), `type-guard.ts` (chặn đổi loại), `summary.ts` (số liệu tóm tắt + nạp sổ theo lô), `settle.ts` (trả nợ: kế hoạch thuần + thực thi), `voucher-draft.ts` (tạo phiếu nháp), `contracts.ts` (hợp đồng API riêng của màn Đối tác), `merge.ts` (gộp đối tác: điều kiện và thông tin danh bạ sau gộp, thuần).
 - Route (mới): `apps/api/src/routes/partners.ts`. Route cũ `routes/counterparty.ts` đã xoá; alias `/counterparties` đã gỡ (§20.1).
 - Shared-small-edit: `routes/index.ts` (đăng ký `partnerRoutes`), `routes/schemas.ts` (JSON Schema cho OpenAPI, chỉ thêm cuối file).
-- Test (72 test, vitest, thuần): `duplicates.test.ts`, `type-guard.test.ts`, `rules.test.ts`, `summary.test.ts`, `settle.test.ts`, `contracts.test.ts`.
+- Test (72 test, vitest, thuần): `duplicates.test.ts`, `type-guard.test.ts`, `rules.test.ts`, `summary.test.ts`, `settle.test.ts`, `contracts.test.ts`, `merge.test.ts`.
 
 ### 12.2 Endpoint (`/api/v1`)
 
@@ -672,6 +673,7 @@ Phạm vi: danh bạ đối tác THEO CÔNG TY (`partners`), lịch sử, cảnh
 | PATCH | `/partners/:id` | `partner:write` | Sửa. Trả `{data: {partner, warnings}}` |
 | POST | `/partners/:id/deactivate` · `/reactivate` | `partner:write` | Ngừng / kích hoạt lại (có ghi lịch sử) |
 | DELETE | `/partners/:id` | `partner:write` | Chỉ khi chưa phát sinh, nếu không ⇒ `FG-PARTNER-002` |
+| POST | `/partners/:id/merge` | `partner:write` | Gộp `:id` (nguồn, bị xoá) vào `target_id` (đích, giữ lại), cùng công ty và cùng loại (xem 12.10). 200 `{data: {partner, moved}}`; lặp lại cùng `request_id` ⇒ trả lại kết quả cũ |
 | GET | `/partners/:id/documents` | `partner:read` + `doc:read` | Tab Phiếu thu/chi. Lọc `status`, `kind`, `limit` |
 | GET | `/partners/:id/debts` | `partner:read` + `debt:read` | Tab Công nợ (còn lại, đã cấn trừ, quá hạn, trạng thái) |
 | GET | `/partners/:id/loans` | `partner:read` + (`loan:read` hoặc `bank:read`) | Tab Nợ NH (dư nợ, đáo hạn, mức cảnh báo) |
@@ -728,6 +730,36 @@ Body: `items: [{debt_voucher_id, amount_minor}]` (KH/NCC) hoặc `loans: [{bank_
 - Người có `partner:write` tạo đối tác nội bộ tới **mọi công ty đang hoạt động** trong tập đoàn, không chỉ công ty được phân công. Công ty ghi (`company_id`) vẫn phải nằm trong phạm vi; `internalPartnerFieldsFor` chỉ kiểm TK thuộc công ty đã chọn, đang hoạt động, không phải TK nhóm, khác công ty đang tạo và chưa có đối tác cho TK đó.
 - Hai endpoint đọc mới (mục 14.4) thay cho `me.companies` và `GET /bank-accounts?for_company` ở `PartnerFormModal`: endpoint sau bị `companyReachableByActor` chặn với công ty không được phân công.
 - Đối tác nội bộ lưu STK đầy đủ của TK gốc (như trước), nên ai xem được đối tác của công ty ghi sẽ thấy STK đó. Quyết định sản phẩm: giữ nguyên, đối tác nội bộ lưu và hiện STK đầy đủ. Phiếu chi chọn đối tác nội bộ không kiểm phạm vi công ty nhận ở server (đích lấy từ đối tác, `resolveTransferTarget`); form «Chuyển nội bộ» vẫn yêu cầu công ty nhận được phân công (`routes/documents.ts`, §7.5/§11.6). Quyết định sản phẩm: giữ nguyên, phiếu chi qua đối tác nội bộ không kiểm phạm vi công ty nhận ở server, khác với form «Chuyển nội bộ».
+
+### 12.10 Gộp đối tác (`POST /partners/:id/merge`)
+
+Gộp hai bản trùng thành một: đối tác NGUỒN (`:id`, đối tác đang mở) được gộp VÀO đối tác ĐÍCH (`target_id`, chọn trong popup). Quyết định sản phẩm:
+- Chỉ gộp trong **cùng công ty** và **cùng loại** (`FG-VAL-001` nếu khác). Đối tác **công ty trong tập đoàn không gộp** (mỗi TK gốc là một đối tác). Không gộp đối tượng với chính nó.
+- Đích **phải đang hoạt động** (sẽ nhận phiếu / công nợ mới). Nguồn có thể đang ngừng giao dịch (thường là bản trùng cần dọn).
+- Sau gộp, **nguồn bị xoá khỏi danh bạ**; đích giữ lại mã, tên, loại, trạng thái của mình. Quyền: `partner:write`, như xoá.
+
+Chuyển tham chiếu (lọc theo nguồn, trong cùng công ty):
+- `documents.partner_id`; `documents.options.loan.lender_partner_id` (ngân hàng cho vay trên phiếu vay); `debt_vouchers.partner_id`; `bank_debts.partner_id`; `recurring_rules.partner_id`.
+- Phiếu / công nợ / khoản vay ghi thêm một mục lịch sử `action: partner.merge` với nhãn «mã · tên» từ → đến (`fields.changes`). Khoản chi định kỳ không có lịch sử nên không ghi.
+- Liên kết (`business_links`) không đổi: chúng trỏ tới phiếu / công nợ / khoản vay theo ID. Cache hiển thị trên công nợ / khoản vay (`party_name`, `bank_name`) không sửa, như khi đổi tên đối tác: đọc luôn lấy theo `partner_id`.
+
+Thông tin danh bạ của đích sau gộp (`mergedMasterFields`, thuần):
+- Giữ tên / loại / trạng thái của đích. MST trống ở đích lấy từ nguồn. Cặp NH + STK lấy từ nguồn chỉ khi đích chưa có STK. Ghi chú của nguồn nối vào cuối ghi chú đích (`Gộp từ <mã · tên>: …`), không mất.
+- Lịch sử đích có mục `changes.merged_from = {from: null, to: "<mã · tên nguồn>"}` cùng các trường đổi; audit `partner.merge` (subject = đích) ghi mã nguồn và số tham chiếu đã chuyển.
+
+Thứ tự thực hiện (không transaction, ADR-03):
+1. Đọc đích (kiểm phạm vi), rồi khoá `request_id` (`claimKeyOf('partner.merge', nguồn, request_id)`). Lượt lặp lại ⇒ trả lại kết quả cũ, không đọc nguồn (đã bị xoá).
+2. Đọc nguồn, kiểm `mergeProblems`. Lỗi ⇒ nhả khoá.
+3. Chuyển tham chiếu; đọc lại số tham chiếu còn trỏ về nguồn. Còn thì chuyển tiếp, tối đa 3 vòng (phiếu mới ghi đúng lúc vẫn được chuyển nốt).
+4. Ghi đích (CAS theo `updated_at`; xung đột ⇒ `FG-WF-011`), ghi audit.
+5. Xoá nguồn, kiểm lại. Nếu vẫn còn tham chiếu (có phiếu mới gắn vào nguồn đúng lúc xoá) ⇒ khôi phục đúng bản ghi nguồn và báo `FG-WF-011`: gửi lại để gộp nốt.
+
+Lỗi giữa chừng: các bước chuyển đều lọc theo nguồn nên gửi lại (cùng `request_id`) sẽ chuyển nốt phần còn lại; nguồn chưa bị xoá nên vẫn tìm thấy. Web (`MergePartnerDialog`) gửi một `request_id` cho mỗi lần mở hộp thoại.
+
+Chưa làm / lưu ý:
+- Không hoàn tác. Không gộp hàng loạt. Không gộp đối tác công ty trong tập đoàn.
+- `deletePartner` chỉ đếm phiếu / công nợ / khoản vay / khoản chi định kỳ theo `partner_id`, chưa đếm phiếu vay có `options.loan.lender_partner_id` trỏ tới ngân hàng. Gộp đã xử lý trường này (`remainingRefs`), còn xoá thường thì chưa.
+- Chưa chạy với MongoDB thật: test chỉ kiểm hàm thuần (`merge.test.ts`). Cần kiểm trên DB có dữ liệu trước khi dùng cho số liệu thật.
 
 ## 16. Dashboard · dòng tiền · cảnh báo · bản tin · báo cáo — backend v2 (agent DASH, v2/v2.md §4.2 BỎ, §12)
 

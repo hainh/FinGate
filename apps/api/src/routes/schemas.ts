@@ -63,7 +63,7 @@ import {
 } from '@fingate/shared';
 import { toJsonSchema } from '@fingate/shared';
 // [v2 — đối tác] hợp đồng dùng chung + hợp đồng riêng của API đối tác (domain/partner/contracts.ts)
-import { partnerCopyBody, partnerCreateBody, partnerDuplicateCheckBody, partnerUpdateBody } from '@fingate/shared';
+import { partnerCopyBody, partnerCreateBody, partnerDuplicateCheckBody, partnerMergeBody, partnerUpdateBody } from '@fingate/shared';
 import { partnerDirectoryQuery, partnerSettleBody, partnerTabQuery } from '../domain/partner/contracts.ts';
 
 const j = toJsonSchema;
@@ -137,6 +137,7 @@ export const searchQuerySchema = j(searchQuery);
 export const partnerCreateBodySchema = j(partnerCreateBody);
 export const partnerUpdateBodySchema = j(partnerUpdateBody);
 export const partnerCopyBodySchema = j(partnerCopyBody);
+export const partnerMergeBodySchema = j(partnerMergeBody);
 export const partnerDirectoryQuerySchema = j(partnerDirectoryQuery);
 export const partnerTabQuerySchema = j(partnerTabQuery);
 export const partnerSettleBodySchema = j(partnerSettleBody);

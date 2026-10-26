@@ -5,7 +5,7 @@
  * - Ghi nợ: KH/NCC → chọn Phải thu / Phải trả rồi tới form công nợ; NH → form khoản nợ ngân hàng.
  * - Trả nợ: danh sách khoản còn dư + số tiền phân bổ → `POST /partners/:id/settle` tạo phiếu NHÁP đã gắn
  *   liên kết → mở phiếu đầu tiên, các phiếu còn lại báo ở thông báo.
- * - Sao chép / ngừng / kích hoạt / xoá: hộp thoại tương ứng.
+ * - Sao chép / gộp / ngừng / kích hoạt / xoá: hộp thoại tương ứng.
  */
 
 import { useMemo, useState, type ReactNode } from 'react';
@@ -20,7 +20,9 @@ import {
   formatMoney,
   type DebtDirection,
   type Money,
+  type PartnerRef,
   type PartnerStatus,
+  type PartnerType,
 } from '@fingate/shared';
 import { ApiRequestError, uuid } from '../app/api.ts';
 import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
@@ -28,9 +30,11 @@ import {
   debtDirectionOf,
   useCopyPartners,
   useDeletePartner,
+  useMergePartner,
   usePartnerCopySource,
   usePartnerDebts,
   usePartnerLoans,
+  usePartnerOptions,
   useSetPartnerStatus,
   useSettlePartner,
   type PartnerCopyResult,
@@ -688,6 +692,130 @@ export function DeletePartnerDialog({
           Xoá <strong>{partner.name}</strong> khỏi danh bạ? Chỉ xoá được đối tác chưa phát sinh phiếu, công nợ hoặc nợ ngân hàng.
         </FgText>
         {formError ? <FgAlert tone="danger" title={formError} description="Đối tác đã phát sinh chỉ có thể ngừng giao dịch." /> : null}
+      </div>
+    </FgModal>
+  );
+}
+
+/* ================= Gộp vào đối tác khác (cùng công ty, cùng loại) ================= */
+
+const MERGE_OPTIONS_LIMIT = 50;
+
+/**
+ * Chọn đối tác ĐÍCH để gộp `partner` vào: chỉ đối tác cùng công ty, cùng loại, đang hoạt động.
+ * Đối tác nguồn bị xoá sau khi mọi phiếu / công nợ / khoản vay / khoản chi định kỳ đã chuyển sang đích.
+ */
+export function MergePartnerDialog({
+  partner,
+  onClose,
+  onMerged,
+}: {
+  partner: { _id: string; name: string; code: string; type: PartnerType; company_id: string };
+  onClose: () => void;
+  /** Sau khi gộp xong (đối tác nguồn đã bị xoá), ví dụ chuyển sang chi tiết đối tác đích. */
+  onMerged?: (targetId: string) => void;
+}): ReactNode {
+  const merge = useMergePartner();
+  const { message } = useToast();
+  const [search, setSearch] = useState('');
+  const searchDebounced = useDebounced(search.trim(), 300);
+  const [target, setTarget] = useState<PartnerRef | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  // một lần mở hộp thoại = một request_id: bấm lặp / gửi lại sau lỗi không gộp đôi
+  const [requestId] = useState(() => uuid());
+  const options = usePartnerOptions({
+    type: [partner.type],
+    company_id: partner.company_id,
+    status: 'active',
+    q: searchDebounced || undefined,
+    limit: MERGE_OPTIONS_LIMIT,
+  });
+  const candidates = (options.data?.items ?? []).filter((c) => c._id !== partner._id);
+
+  const columns: TableColumnsType<PartnerRef> = [
+    { title: 'Mã', key: 'code', render: (_v, r: PartnerRef) => <span className="fg-num">{r.code}</span> },
+    { title: 'Tên đối tác', key: 'name', render: (_v, r: PartnerRef) => r.name },
+    {
+      title: 'Ngân hàng · STK',
+      key: 'bank',
+      render: (_v, r: PartnerRef) => [r.bank_name, r.account_number].filter(Boolean).join(' · ') || '—',
+    },
+    { title: 'MST', key: 'tax', render: (_v, r: PartnerRef) => r.tax_code ?? '—' },
+  ];
+
+  const submit = (): void => {
+    if (!target) return;
+    setFormError(null);
+    merge.mutate(
+      { sourceId: partner._id, targetId: target._id, requestId },
+      {
+        onSuccess: () => {
+          message.success(`Đã gộp “${partner.name}” vào “${target.name}”`);
+          onMerged?.(target._id);
+          onClose();
+        },
+        onError: (e) => setFormError(problemTitleOf(e, 'Không gộp được đối tác')),
+      },
+    );
+  };
+
+  return (
+    <FgModal
+      open
+      title="Gộp đối tác vào đối tác khác"
+      onCancel={merge.isPending ? undefined : onClose}
+      width={820}
+      footer={
+        <>
+          <FgButton onClick={onClose} disabled={merge.isPending}>
+            Hủy
+          </FgButton>
+          <FgButton variant="primary" loading={merge.isPending} disabled={!target} onClick={submit}>
+            {target ? `Gộp vào “${target.name}”` : 'Gộp vào…'}
+          </FgButton>
+        </>
+      }
+    >
+      <div style={{ display: 'grid', gap: 'var(--fg-space-3)' }}>
+        {formError ? <FgAlert tone="danger" title={formError} /> : null}
+        <FgText style="bodyS" color="muted">
+          Chọn đối tác {PARTNER_TYPE_LABEL[partner.type]} trong công ty để giữ lại. “{partner.name}” sẽ được gộp vào đối tác này.
+        </FgText>
+        <FgInput
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Tìm theo tên, số tài khoản, MST…"
+          aria-label="Tìm đối tác để gộp vào"
+          allowClear
+        />
+        {options.error ? (
+          <FgAlert tone="danger" title="Không tải được danh sách đối tác" description={problemTitleOf(options.error, '')} />
+        ) : options.isPending ? (
+          <FgSkeletonTable rows={3} cols={4} />
+        ) : candidates.length === 0 ? (
+          <FgEmptyState
+            glyph="◇"
+            title={searchDebounced ? 'Không có đối tác phù hợp với từ khoá' : `Chưa có đối tác ${PARTNER_TYPE_LABEL[partner.type]} khác đang hoạt động`}
+          />
+        ) : (
+          <FgTable<PartnerRef>
+            rowKey="_id"
+            size="small"
+            mobileCards={false}
+            dataSource={candidates}
+            columns={columns}
+            pagination={false}
+            rowSelection={{ type: 'radio', selectedRowKeys: target ? [target._id] : [], onChange: (_keys, rows) => setTarget(rows[0] ?? null) }}
+            onRow={(r) => ({ onClick: () => setTarget(r) })}
+          />
+        )}
+        {target ? (
+          <FgAlert
+            tone="attention"
+            title={`Gộp “${partner.name}” vào “${target.name}”?`}
+            description={`Phiếu thu/chi, công nợ, khoản vay và khoản chi định kỳ của “${partner.name}” chuyển sang “${target.name}”. “${partner.name}” bị xoá khỏi danh bạ, không hoàn tác được.`}
+          />
+        ) : null}
       </div>
     </FgModal>
   );

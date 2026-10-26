@@ -93,6 +93,7 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'partner.delete': 'Xoá đối tác',
   'partner.settle': 'Trả nợ đối tác',
   'partner.copy': 'Sao chép đối tác',
+  'partner.merge': 'Gộp đối tác',
   'partner.deactivate': 'Ngừng giao dịch đối tác',
   'partner.reactivate': 'Kích hoạt lại đối tác',
   'counterparty.create': 'Tạo đối tác',
@@ -201,12 +202,14 @@ export const LOAN_HISTORY_ACTION_LABEL: Record<string, string> = {
   attachment_add: 'Thêm chứng từ',
   attachment_remove: 'Xoá chứng từ',
   migrate_v2: 'Chuyển dữ liệu từ v1',
+  'partner.merge': 'Gộp đối tác',
 };
 
 /** Hành động trong LỊCH SỬ KHOẢN CÔNG NỢ (`debt_vouchers.history[].action`, card "Lịch sử thay đổi"). */
 export const DEBT_HISTORY_ACTION_LABEL: Record<string, string> = {
   create: 'Tạo khoản công nợ',
   update: 'Sửa khoản công nợ',
+  'partner.merge': 'Gộp đối tác',
   cancel: 'Hủy khoản công nợ',
   attachment_add: 'Thêm chứng từ',
   attachment_remove: 'Xoá chứng từ',
