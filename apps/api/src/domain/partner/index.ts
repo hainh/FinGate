@@ -345,21 +345,26 @@ export async function setPartnerStatus(input: {
   return { partner: await loadPartner(input.id), warnings: [] };
 }
 
-/** Số lượng phiếu / công nợ / nợ NH / khoản chi định kỳ / liên kết đang tham chiếu đối tác. */
+/**
+ * Số lượng phiếu / công nợ / nợ NH / khoản chi định kỳ / liên kết đang tham chiếu đối tác, và số phiếu vay có
+ * đối tác này làm NGƯỜI CHO VAY (`options.loan.lender_partner_id`, không nằm ở `partner_id`).
+ */
 export interface PartnerUsageCounts {
   documents: number;
   debt_vouchers: number;
   bank_debts: number;
   recurring_rules: number;
   links: number;
+  lender_documents: number;
 }
 
 export async function partnerUsageCounts(companyId: string, partnerId: string): Promise<PartnerUsageCounts> {
-  const [documents, debt_vouchers, bank_debts, recurring_rules] = await Promise.all([
+  const [documents, debt_vouchers, bank_debts, recurring_rules, lender_documents] = await Promise.all([
     Models.Document.countDocuments({ company_id: companyId, partner_id: partnerId } as never).exec(),
     Models.DebtVoucher.countDocuments({ company_id: companyId, partner_id: partnerId } as never).exec(),
     Models.BankDebt.countDocuments({ company_id: companyId, partner_id: partnerId } as never).exec(),
     Models.RecurringRule.countDocuments({ company_id: companyId, partner_id: partnerId } as never).exec(),
+    Models.Document.countDocuments({ company_id: companyId, 'options.loan.lender_partner_id': partnerId } as never).exec(),
   ]);
   let links = 0;
   if (documents + debt_vouchers + bank_debts > 0) {
@@ -374,21 +379,23 @@ export async function partnerUsageCounts(companyId: string, partnerId: string): 
       } as never).exec();
     }
   }
-  return { documents, debt_vouchers, bank_debts, recurring_rules, links };
+  return { documents, debt_vouchers, bank_debts, recurring_rules, links, lender_documents };
 }
 
-const usageTotal = (u: PartnerUsageCounts): number => u.documents + u.debt_vouchers + u.bank_debts + u.recurring_rules + u.links;
+const usageTotal = (u: PartnerUsageCounts): number =>
+  u.documents + u.debt_vouchers + u.bank_debts + u.recurring_rules + u.links + u.lender_documents;
 
 function inUseError(usage: PartnerUsageCounts): ApiError {
   return new ApiError({
     code: 'FG-PARTNER-002',
-    detail: `Đối tác đã có phát sinh (${usage.documents} phiếu, ${usage.debt_vouchers} công nợ, ${usage.bank_debts} khoản vay, ${usage.recurring_rules} khoản chi định kỳ) — chỉ ngừng giao dịch`,
+    detail: `Đối tác đã có phát sinh (${usage.documents} phiếu, ${usage.debt_vouchers} công nợ, ${usage.bank_debts} khoản vay, ${usage.recurring_rules} khoản chi định kỳ, ${usage.lender_documents} phiếu vay làm người cho vay) — chỉ ngừng giao dịch`,
     data: { usage },
   });
 }
 
 /**
- * Xoá đối tác CHỈ khi chưa được dùng ở đâu (v2 §5.1). Đã phát sinh ⇒ FG-PARTNER-002 (chỉ ngừng giao dịch).
+ * Xoá đối tác CHỈ khi chưa được dùng ở đâu (v2 §5.1), kể cả khi chỉ là người cho vay trên phiếu vay.
+ * Đã phát sinh ⇒ FG-PARTNER-002 (chỉ ngừng giao dịch).
  * Kiểm lại SAU khi xoá: nếu có phiếu / công nợ / khoản vay vừa ghi (đua với lượt ghi khác) thì khôi phục
  * đúng bản ghi cũ và báo lỗi — không để lại tham chiếu treo.
  */
@@ -640,7 +647,7 @@ async function runMerge(input: {
       now,
     });
     for (const k of Object.keys(moved) as (keyof MergeMoved)[]) moved[k] += step[k];
-    left = await remainingRefs(companyId, sourceId);
+    left = usageTotal(await partnerUsageCounts(companyId, sourceId));
   } while (left > 0 && ++round < MERGE_ROUNDS);
   if (left > 0) {
     throw new ApiError({
@@ -676,7 +683,7 @@ async function runMerge(input: {
 
   // 3. Xoá nguồn. Phiếu mới gắn vào nguồn ngay trước khi xoá ⇒ khôi phục đúng nguồn cũ và báo lỗi (gửi lại để gộp nốt).
   await Models.Partner.deleteOne({ _id: sourceId, company_id: companyId } as never).exec();
-  const leftAfterDelete = await remainingRefs(companyId, sourceId);
+  const leftAfterDelete = usageTotal(await partnerUsageCounts(companyId, sourceId));
   if (leftAfterDelete > 0) {
     await Models.Partner.collection.insertOne(source as never); // khôi phục đúng bản ghi nguồn (cùng _id, lịch sử)
     throw new ApiError({
@@ -686,12 +693,6 @@ async function runMerge(input: {
     });
   }
   return { partner: partnerRefOf(await loadPartner(targetId)), moved };
-}
-
-/** Số tham chiếu còn trỏ về đối tác: phiếu / công nợ / khoản vay / khoản chi định kỳ / liên kết, và người cho vay trên phiếu vay. */
-async function remainingRefs(companyId: string, partnerId: string): Promise<number> {
-  const lenders = await Models.Document.countDocuments({ company_id: companyId, 'options.loan.lender_partner_id': partnerId } as never).exec();
-  return usageTotal(await partnerUsageCounts(companyId, partnerId)) + lenders;
 }
 
 /**

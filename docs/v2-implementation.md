@@ -105,7 +105,7 @@ Lưu ý: `PartnerSchema`, `TagSchema`, `BusinessLinkSchema`, `DomainEventSchema`
 | `domain_events` | `(processed_at, created_at)`; `processed_at` TTL 30 ngày | TTL chỉ dọn bản đã xử lý (null không bị xoá) |
 | `automation_rules` | `code` unique | |
 | `automation_runs` | `idem_key` unique; `(source_type, source_id)` | |
-| `documents` (thêm) | `(company_id, partner_id)`, `(company_id, tag_ids)` | tab đối tác; lọc theo tag |
+| `documents` (thêm) | `(company_id, partner_id)`, `(company_id, tag_ids)`, `(company_id, options.loan.lender_partner_id)` | tab đối tác; lọc theo tag; người cho vay trên phiếu chi vay (chặn xoá đối tác, `has_activity`) |
 | `debt_vouchers` (thêm) | `(company_id, partner_id)` | tab công nợ của đối tác |
 | `bank_debts` (thêm) | `(company_id, partner_id)` | tab nợ NH của đối tác |
 
@@ -660,7 +660,7 @@ Phạm vi: danh bạ đối tác THEO CÔNG TY (`partners`), lịch sử, cảnh
 - Domain (mới): `apps/api/src/domain/partner/` — `index.ts` (dịch vụ: tạo / sửa / trạng thái / xoá / sao chép / đọc), `rules.ts` (thuần: ảnh chụp, so sánh lịch sử, kiểm tra bản ghi), `duplicates.ts` (cảnh báo trùng), `type-guard.ts` (chặn đổi loại), `summary.ts` (số liệu tóm tắt + nạp sổ theo lô), `settle.ts` (trả nợ: kế hoạch thuần + thực thi), `voucher-draft.ts` (tạo phiếu nháp), `contracts.ts` (hợp đồng API riêng của màn Đối tác), `merge.ts` (gộp đối tác: điều kiện và thông tin danh bạ sau gộp, thuần).
 - Route (mới): `apps/api/src/routes/partners.ts`. Route cũ `routes/counterparty.ts` đã xoá; alias `/counterparties` đã gỡ (§20.1).
 - Shared-small-edit: `routes/index.ts` (đăng ký `partnerRoutes`), `routes/schemas.ts` (JSON Schema cho OpenAPI, chỉ thêm cuối file).
-- Test (72 test, vitest, thuần): `duplicates.test.ts`, `type-guard.test.ts`, `rules.test.ts`, `summary.test.ts`, `settle.test.ts`, `contracts.test.ts`, `merge.test.ts`.
+- Test (72 test, vitest, thuần): `duplicates.test.ts`, `type-guard.test.ts`, `rules.test.ts`, `summary.test.ts`, `settle.test.ts`, `contracts.test.ts`, `merge.test.ts`, `delete.test.ts`.
 
 ### 12.2 Endpoint (`/api/v1`)
 
@@ -673,7 +673,7 @@ Phạm vi: danh bạ đối tác THEO CÔNG TY (`partners`), lịch sử, cảnh
 | GET | `/partners/:id` | `partner:read` | Chi tiết = tóm tắt + `history` (mới nhất trước) |
 | PATCH | `/partners/:id` | `partner:write` | Sửa. Trả `{data: {partner, warnings}}` |
 | POST | `/partners/:id/deactivate` · `/reactivate` | `partner:write` | Ngừng / kích hoạt lại (có ghi lịch sử) |
-| DELETE | `/partners/:id` | `partner:write` | Chỉ khi chưa phát sinh, nếu không ⇒ `FG-PARTNER-002` |
+| DELETE | `/partners/:id` | `partner:write` | Chỉ khi chưa phát sinh (kể cả khi chỉ là người cho vay trên phiếu vay), nếu không ⇒ `FG-PARTNER-002` |
 | POST | `/partners/:id/merge` | `partner:write` | Gộp `:id` (nguồn, bị xoá) vào `target_id` (đích, giữ lại), cùng công ty và cùng loại (xem 12.10). 200 `{data: {partner, moved}}`; lặp lại cùng `request_id` ⇒ trả lại kết quả cũ |
 | GET | `/partners/:id/documents` | `partner:read` + `doc:read` | Tab Phiếu thu/chi. Lọc `status`, `kind`, `limit` |
 | GET | `/partners/:id/debts` | `partner:read` + `debt:read` | Tab Công nợ (còn lại, đã cấn trừ, quá hạn, trạng thái) |
@@ -694,7 +694,7 @@ Tiền trên wire: `{minor: "123", currency: "VND", decimals: 0}`. Cảnh báo t
 
 ### 12.4 Xoá và sao chép
 
-- Xoá ⇒ `FG-PARTNER-002` nếu còn phiếu / công nợ / khoản vay / khoản chi định kỳ / liên kết tham chiếu (liên kết tính qua các đối tượng nói trên).
+- Xoá ⇒ `FG-PARTNER-002` nếu còn phiếu / công nợ / khoản vay / khoản chi định kỳ / liên kết tham chiếu (liên kết tính qua các đối tượng nói trên), hoặc còn phiếu vay ghi đối tác làm người cho vay (`options.loan.lender_partner_id`). `partnerUsageCounts` là một hàm đếm dùng chung cho kiểm trước khi xoá, kiểm lại sau khi xoá, và việc gộp. `has_activity` ở danh sách và chi tiết tính theo cùng tiêu chí, nên nút «Xoá» tắt sẵn.
 - Sao chép: người gọi phải xem được công ty nguồn (toàn tập đoàn, hoặc công ty được gán); nguồn khác đích; mọi `partner_ids` phải thuộc công ty nguồn. Tạo bản sao MỚI (mã mới, `status: active`), ghi `copied_from` vào lịch sử, vẫn cảnh báo trùng.
 
 ### 12.5 Số liệu tóm tắt (không lưu, `domain/partner/summary.ts`)
@@ -759,8 +759,8 @@ Lỗi giữa chừng: các bước chuyển đều lọc theo nguồn nên gửi
 
 Chưa làm / lưu ý:
 - Không hoàn tác. Không gộp hàng loạt. Không gộp đối tác công ty trong tập đoàn.
-- `deletePartner` chỉ đếm phiếu / công nợ / khoản vay / khoản chi định kỳ theo `partner_id`, chưa đếm phiếu vay có `options.loan.lender_partner_id` trỏ tới ngân hàng. Gộp đã xử lý trường này (`remainingRefs`), còn xoá thường thì chưa.
-- Chưa chạy với MongoDB thật: test chỉ kiểm hàm thuần (`merge.test.ts`). Cần kiểm trên DB có dữ liệu trước khi dùng cho số liệu thật.
+- Lỗ hổng cũ đã sửa: trước đây xoá không đếm phiếu vay có người cho vay là đối tác, nên có thể xoá ngân hàng còn được ghi là người cho vay và để lại tham chiếu treo. Nay `partnerUsageCounts` đếm thêm `lender_documents` (xem 12.4). Tham chiếu treo đã tạo trước khi sửa KHÔNG được tự dọn; cần rà soát thủ công.
+- Kiểm trên MongoDB trong bộ nhớ bằng test tạm (không commit): index được tạo và được truy vấn dùng (IXSCAN), xoá bị chặn, đổi người cho vay rồi xoá được, gộp vẫn chuyển người cho vay. Chưa kiểm trên DB có dữ liệu thật. Test đơn vị giữ lại: `delete.test.ts`.
 
 ## 16. Dashboard · dòng tiền · cảnh báo · bản tin · báo cáo — backend v2 (agent DASH, v2/v2.md §4.2 BỎ, §12)
 

@@ -23,6 +23,8 @@ export const INDEXES: Record<string, IndexDef[]> = {
     // v2: tab "Phiếu thu/chi" của đối tác + lọc theo tag (v2 §5.3, §6.2)
     { key: { company_id: 1, partner_id: 1 } },
     { key: { company_id: 1, tag_ids: 1 } },
+    // v2: người cho vay trên phiếu chi vay để chi (`options.loan.lender_partner_id`): chặn xoá đối tác và has_activity
+    { key: { company_id: 1, 'options.loan.lender_partner_id': 1 } },
     // đối chiếu outbox sự kiện (domain/events reconcileTransitionEvents): phiếu đổi gần đây
     { key: { updated_at: -1 } },
   ],

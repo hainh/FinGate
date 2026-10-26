@@ -318,7 +318,7 @@ export async function loadPartnerLedgers(partners: readonly LedgerPartner[]): Pr
   const partnerByKey = new Map(partners.map((p) => [keyOf(p.company_id, p._id), p._id] as const));
   const scoped = { partner_id: { $in: partnerIds }, company_id: { $in: companyIds } };
 
-  const [debtRows, loanRows, docRows, usedDocPartners, usedRecurring] = await Promise.all([
+  const [debtRows, loanRows, docRows, usedDocPartners, usedRecurring, usedLenders] = await Promise.all([
     Models.DebtVoucher.find(scoped as never)
       .select({ code: 1, company_id: 1, partner_id: 1, direction: 1, side: 1, account_code: 1, contract_code: 1, priority: 1, value_minor: 1, due_date: 1 })
       .lean<DebtRaw[]>(),
@@ -334,6 +334,11 @@ export async function loadPartnerLedgers(partners: readonly LedgerPartner[]): Pr
       .lean<DocRaw[]>(),
     Models.Document.distinct('partner_id', scoped as never).exec(),
     Models.RecurringRule.distinct('partner_id', scoped as never).exec(),
+    // người cho vay trên phiếu chi vay để chi: không nằm ở partner_id nhưng vẫn là phát sinh (chặn xoá, has_activity)
+    Models.Document.distinct('options.loan.lender_partner_id', {
+      company_id: { $in: companyIds },
+      'options.loan.lender_partner_id': { $in: partnerIds },
+    } as never).exec(),
   ]);
 
   const debtIds = debtRows.map((d) => String(d._id));
@@ -436,7 +441,11 @@ export async function loadPartnerLedgers(partners: readonly LedgerPartner[]): Pr
     });
   }
 
-  const usedSet = new Set<string>([...usedDocPartners.map((x) => String(x)), ...usedRecurring.map((x) => String(x))]);
+  const usedSet = new Set<string>([
+    ...usedDocPartners.map((x) => String(x)),
+    ...usedRecurring.map((x) => String(x)),
+    ...usedLenders.map((x) => String(x)),
+  ]);
   for (const p of partners) {
     const ledger = out.get(p._id);
     if (!ledger) continue;
