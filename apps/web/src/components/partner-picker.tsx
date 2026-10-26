@@ -26,11 +26,12 @@ import {
   type PartnerType,
 } from '@fingate/shared';
 import { ApiRequestError, uuid } from '../app/api.ts';
-import { useBankAccounts } from '../app/queries.ts';
 import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
 import {
   partnerOptionsEmptyState,
   useCreatePartner,
+  useInternalAccounts,
+  useInternalCompanies,
   usePartner,
   usePartnerDuplicateCheck,
   usePartnerOptions,
@@ -40,7 +41,7 @@ import {
   type PartnerWriteBody,
 } from '../app/v2/partners.ts';
 import { useDebounced, useToast } from './pagekit.tsx';
-import { detailForValue, isSearchSettled, needsSelectedOption } from './partner-picker-options.ts';
+import { detailForValue, internalCompanyOptionsFor, isSearchSettled, needsSelectedOption } from './partner-picker-options.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgSelect, FgText, FgTextarea, FgTooltip } from './primitives.tsx';
 import { FgModal, FgSegmented } from './uitk.tsx';
 
@@ -117,7 +118,6 @@ export function PartnerFormModal({
   onSaved,
 }: PartnerFormModalProps): ReactNode {
   const isEdit = !!editing;
-  const { me } = useAuth();
   const currentCompanyId = useCurrentCompanyId();
   // "Công ty trong tập đoàn": đối tác = một TK ngân hàng của công ty khác; tên / NH / STK lấy từ TK gốc
   const editingInternal = editing?.type === 'internal';
@@ -136,19 +136,24 @@ export function PartnerFormModal({
   const [internalAccountId, setInternalAccountId] = useState('');
   const isInternal = type === 'internal';
   const homeCompanyId = companyId ?? currentCompanyId;
-  const internalCompanyOptions = (me?.companies ?? [])
-    .filter((c) => c.company_id !== homeCompanyId)
-    .map((c) => ({ value: c.company_id, label: c.company_name }));
-  const internalCompanyName = me?.companies.find((c) => c.company_id === internalCompanyId)?.company_name ?? '';
-  const internalAccounts = useBankAccounts(isInternal && !isEdit && internalCompanyId ? internalCompanyId : null);
-  const internalAccountRows = (internalAccounts.data?.items ?? []).filter(
-    (a) => a.company_id === internalCompanyId && a.kind === 'bank' && !a.is_group && a.status === 'active',
-  );
+  // Đối tác nội bộ: chọn MỌI công ty trong tập đoàn (không chỉ công ty được phân công) và TK ngân hàng của công ty đó
+  const creatingInternal = isInternal && !isEdit;
+  const internalCompanies = useInternalCompanies(creatingInternal);
+  const internalCompanyOptions = internalCompanyOptionsFor(internalCompanies.data?.items ?? [], homeCompanyId);
+  const internalCompanyName = internalCompanies.data?.items.find((c) => c._id === internalCompanyId)?.name ?? '';
+  const internalAccounts = useInternalAccounts(creatingInternal && internalCompanyId ? internalCompanyId : null);
+  const internalAccountRows = internalAccounts.data?.items ?? [];
   const internalAccountOptions = internalAccountRows.map((a) => ({
     value: a._id,
     label: `${a.account_name} · ${a.bank_name} · ${a.account_number_masked}`,
   }));
   const internalAccount = internalAccountRows.find((a) => a._id === internalAccountId);
+  // đã chọn công ty nhưng công ty đó không có TK ngân hàng dùng được (đã tải xong, danh sách rỗng)
+  const internalAccountHelp = !internalCompanyId
+    ? 'Chọn công ty trước'
+    : internalAccounts.isSuccess && !internalAccountRows.length
+      ? 'Công ty này chưa có tài khoản ngân hàng dùng được'
+      : undefined;
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<{ title: string; detail?: string } | null>(null);
   const create = useCreatePartner();
@@ -279,7 +284,7 @@ export function PartnerFormModal({
               label="Tài khoản ngân hàng"
               required
               error={errors.internal_account_id}
-              help={internalCompanyId ? undefined : 'Chọn công ty trước'}
+              help={internalAccountHelp}
             >
               <FgSelect
                 options={internalAccountOptions}

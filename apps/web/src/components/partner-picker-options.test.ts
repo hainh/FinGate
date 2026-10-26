@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { detailForValue, isSearchSettled, needsSelectedOption } from './partner-picker-options.ts';
+import { detailForValue, internalCompanyOptionsFor, isSearchSettled, needsSelectedOption } from './partner-picker-options.ts';
 
 const A = 'partner-a';
 const B = 'partner-b';
@@ -58,5 +58,25 @@ describe('needsSelectedOption — đối tác đang chọn có được đưa v�
 
   it('không gõ và A đã nằm trong kết quả ⇒ không thêm trùng', () => {
     expect(needsSelectedOption('', A, [A, B])).toBe(false);
+  });
+});
+
+describe('internalCompanyOptionsFor — công ty trong tập đoàn của đối tác nội bộ', () => {
+  const companies = [
+    { _id: 'g', name: 'Tập đoàn' },
+    { _id: 'a', name: 'Công ty A' },
+    { _id: 'b', name: 'Công ty B' },
+  ];
+
+  it('bỏ công ty đang tạo đối tác và giữ thứ tự danh sách', () => {
+    expect(internalCompanyOptionsFor(companies, 'a')).toEqual([
+      { value: 'g', label: 'Tập đoàn' },
+      { value: 'b', label: 'Công ty B' },
+    ]);
+  });
+
+  it('chưa rõ công ty đang tạo ⇒ giữ đủ mọi công ty', () => {
+    expect(internalCompanyOptionsFor(companies, null)).toHaveLength(3);
+    expect(internalCompanyOptionsFor(companies, undefined)).toHaveLength(3);
   });
 });

@@ -7,6 +7,8 @@
  *
  * Endpoint:
  *   GET    /partners/options              ô chọn đối tác → { items: PartnerRef[] }
+ *   GET    /partners/internal-companies   công ty trong tập đoàn để chọn đối tác nội bộ → { items }
+ *   GET    /partners/internal-accounts    TK của một công ty làm nguồn đối tác nội bộ → { items }
  *   GET    /partners                      danh sách màn Đối tác → { items, total, limit, offset, period }
  *   GET    /partners/:id                  chi tiết + lịch sử (tóm tắt theo tháng hiện tại phía server)
  *   POST   /partners                      tạo → { partner, warnings }
@@ -59,6 +61,22 @@ export interface PartnerListResult {
 /** GET /partners/:id — tóm tắt (tháng hiện tại) + lịch sử thay đổi. */
 export interface PartnerDetailData extends PartnerListRow {
   history: PartnerHistoryEntry[];
+}
+
+/** Công ty trong tập đoàn để chọn làm đối tác nội bộ (GET /partners/internal-companies). */
+export interface PartnerInternalCompany {
+  _id: string;
+  name: string;
+  code: string;
+  is_group: boolean;
+}
+
+/** TK ngân hàng của một công ty làm nguồn đối tác nội bộ (GET /partners/internal-accounts). STK đã che; không có số dư. */
+export interface PartnerInternalAccount {
+  _id: string;
+  bank_name: string;
+  account_name: string;
+  account_number_masked: string;
 }
 
 /** Body ghi đối tác. Tạo: `type` + `name` bắt buộc. Sửa: PATCH từng phần (gồm `status`). */
@@ -232,6 +250,30 @@ export function usePartnerOptions(params: PartnerOptionsParams, enabled = true) 
     // ("Đang tìm…") chứ không liệt kê đối tác không khớp chữ đang gõ (v2/v2.md §5.2). Cùng cách với tags.ts.
     placeholderData: undefined,
     queryFn: () => apiCall<{ items: PartnerRef[] }>('/partners/options', { query: { scope, ...params } }),
+  });
+}
+
+/** Công ty trong tập đoàn để chọn làm đối tác nội bộ — toàn tập đoàn, không theo phân công của người tạo. */
+export function useInternalCompanies(enabled = true) {
+  const { scope, can } = useAuth();
+  return useQuery({
+    queryKey: ['partner-internal-companies', scope],
+    enabled: enabled && can('partner:write'),
+    staleTime: 600_000,
+    queryFn: () => apiCall<{ items: PartnerInternalCompany[] }>('/partners/internal-companies', { query: { scope } }),
+  });
+}
+
+/** TK ngân hàng của một công ty trong tập đoàn, làm nguồn đối tác nội bộ. Chỉ tải khi đã chọn công ty. */
+export function useInternalAccounts(companyId: string | null) {
+  const { scope, can } = useAuth();
+  return useQuery({
+    queryKey: ['partner-internal-accounts', scope, companyId ?? ''],
+    enabled: !!companyId && can('partner:write'),
+    // Không giữ danh sách của công ty TRƯỚC khi công ty mới đang tải (placeholder mặc định của app)
+    placeholderData: undefined,
+    queryFn: () =>
+      apiCall<{ items: PartnerInternalAccount[] }>('/partners/internal-accounts', { query: { scope, company_id: companyId ?? undefined } }),
   });
 }
 

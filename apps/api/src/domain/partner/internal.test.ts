@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { internalPartnerName, internalSyncSnapshot, type InternalSource } from './internal.ts';
+import { internalPartnerName, internalSourceFilter, internalSyncSnapshot, type InternalSource } from './internal.ts';
 import { snapshotOf } from './rules.ts';
 
 const before = snapshotOf({ type: 'internal', name: 'Cty A · TK cũ', bank_name: 'VCB', account_number: '111', status: 'active' });
@@ -23,5 +23,11 @@ describe('đối tác công ty trong tập đoàn', () => {
   it('TK mở lại không tự bật lại đối tác đã ngừng', () => {
     const stopped = { ...before, status: 'inactive' as const };
     expect(internalSyncSnapshot(stopped, usable).status).toBe('inactive');
+  });
+});
+
+describe('danh sách TK chọn làm nguồn — khớp tiêu chí khi tạo đối tác', () => {
+  it('chỉ lấy TK ngân hàng, không phải TK nhóm, đang hoạt động, đúng công ty đã chọn', () => {
+    expect(internalSourceFilter('c1')).toEqual({ company_id: 'c1', kind: 'bank', is_group: { $ne: true }, status: 'active' });
   });
 });

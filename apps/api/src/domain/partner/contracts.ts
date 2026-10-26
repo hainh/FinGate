@@ -49,6 +49,9 @@ export const partnerTabQuery = z.object({
 });
 export type PartnerTabQuery = z.infer<typeof partnerTabQuery>;
 
+/** GET /partners/internal-accounts — TK của một công ty trong tập đoàn, làm nguồn đối tác nội bộ. */
+export const internalAccountsQuery = z.object({ company_id: objectId });
+
 const minorPositive = z.string().regex(/^[1-9]\d*$/, 'Số tiền phải là số nguyên lớn hơn 0 (minor units)');
 
 export const settleDebtItem = z.object({

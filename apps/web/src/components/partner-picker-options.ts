@@ -29,3 +29,14 @@ export function needsSelectedOption(typed: string, selectedId: string, resultIds
 export function detailForValue<T extends { _id: string }>(value: string | null | undefined, detail: T | undefined): T | undefined {
   return value && detail && detail._id === value ? detail : undefined;
 }
+
+/**
+ * Lựa chọn "Công ty trong tập đoàn" của đối tác nội bộ: mọi công ty trong danh sách, trừ công ty đang tạo đối tác
+ * (máy chủ cũng không ghép công ty với chính nó). Giữ nguyên thứ tự danh sách.
+ */
+export function internalCompanyOptionsFor(
+  companies: readonly { _id: string; name: string }[],
+  homeCompanyId: string | null | undefined,
+): { value: string; label: string }[] {
+  return companies.filter((c) => c._id !== homeCompanyId).map((c) => ({ value: c._id, label: c.name }));
+}

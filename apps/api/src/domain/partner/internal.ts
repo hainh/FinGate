@@ -6,6 +6,7 @@
 
 import { ApiError, normalizeNameKey } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
+import { maskAccount } from '../queries/index.ts';
 import { diffSnapshots, snapshotOf, type PartnerSnapshot } from './rules.ts';
 
 /** Tên hiển thị: "Tên công ty · Tên tài khoản" — để phân biệt các TK cùng một công ty. */
@@ -138,4 +139,50 @@ export async function syncInternalPartners(by: { companyId?: string; accountId?:
     changed++;
   }
   return changed;
+}
+
+/**
+ * Điều kiện TK gốc dùng được làm đối tác nội bộ — cùng tiêu chí với `usable` ở `loadInternalSource`, nên mọi TK
+ * hiện trong danh sách chọn đều tạo được đối tác.
+ */
+export function internalSourceFilter(companyId: string): Record<string, unknown> {
+  return { company_id: companyId, kind: 'bank', is_group: { $ne: true }, status: 'active' };
+}
+
+/** TK ngân hàng của một công ty để chọn làm nguồn đối tác nội bộ. STK đã che; không có số dư. */
+export interface InternalSourceAccountView {
+  _id: string;
+  bank_name: string;
+  account_name: string;
+  account_number_masked: string;
+}
+
+export async function internalSourceAccounts(companyId: string): Promise<InternalSourceAccountView[]> {
+  const rows = await Models.BankAccount.find(internalSourceFilter(companyId) as never)
+    .select({ bank_name: 1, account_name: 1, account_number: 1 })
+    .sort({ bank_name: 1, account_name: 1 })
+    .lean<{ _id: unknown; bank_name?: string; account_name?: string; account_number?: string }[]>();
+  return rows.map((a) => ({
+    _id: String(a._id),
+    bank_name: String(a.bank_name ?? ''),
+    account_name: String(a.account_name ?? ''),
+    account_number_masked: maskAccount(String(a.account_number ?? '')),
+  }));
+}
+
+/** Công ty trong tập đoàn để chọn làm đối tác nội bộ. */
+export interface InternalCompanyView {
+  _id: string;
+  name: string;
+  code: string;
+  is_group: boolean;
+}
+
+/** Mọi công ty đang hoạt động trong tập đoàn — không theo phân công của người tạo đối tác. */
+export async function internalCompanyChoices(): Promise<InternalCompanyView[]> {
+  const rows = await Models.Company.find({ status: 'active' } as never)
+    .select({ name: 1, code: 1, is_group: 1 })
+    .sort({ is_group: -1, code: 1 })
+    .lean<{ _id: unknown; name?: string; code?: string; is_group?: boolean }[]>();
+  return rows.map((c) => ({ _id: String(c._id), name: String(c.name ?? ''), code: String(c.code ?? ''), is_group: Boolean(c.is_group) }));
 }

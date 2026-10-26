@@ -29,7 +29,8 @@ import {
   partnerTabQuerySchema,
   partnerUpdateBodySchema,
 } from './schemas.ts';
-import { parseTypeParam, partnerDirectoryQuery, partnerSettleBody, partnerTabQuery } from '../domain/partner/contracts.ts';
+import { internalAccountsQuery, parseTypeParam, partnerDirectoryQuery, partnerSettleBody, partnerTabQuery } from '../domain/partner/contracts.ts';
+import { internalCompanyChoices, internalSourceAccounts } from '../domain/partner/internal.ts';
 import {
   checkPartnerDuplicates,
   copyPartners,
@@ -129,6 +130,33 @@ export function partnerRoutes(app: FastifyInstance): void {
           : undefined;
         const items = await partnerOptions({ companyIds: [companyId], type, status: q.status, q: q.q, limit: q.limit, codes });
         return ok(reply, { items });
+      },
+    }),
+  );
+
+  /* ------------------------------ đối tác công ty trong tập đoàn ------------------------------ */
+
+  // Người tạo đối tác nội bộ chọn được MỌI công ty trong tập đoàn, không chỉ công ty được phân công.
+  // Chỉ trả tên / mã và STK đã che, không có số dư. Công ty ghi vẫn là công ty đang làm việc (writeCompanyId).
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/partners/internal-companies',
+      config: { perms: ['partner:write'] as Permission[], screen: SCREEN, summary: 'Công ty trong tập đoàn để chọn làm đối tác nội bộ (toàn tập đoàn)' },
+      schema: { tags: ['partners'] },
+      handler: async (_req, reply) => ok(reply, { items: await internalCompanyChoices() }),
+    }),
+  );
+
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/partners/internal-accounts',
+      config: { perms: ['partner:write'] as Permission[], screen: SCREEN, summary: 'TK ngân hàng của một công ty trong tập đoàn, làm nguồn đối tác nội bộ' },
+      schema: { tags: ['partners'] },
+      handler: async (req, reply) => {
+        const q = validate(internalAccountsQuery, req.query ?? {});
+        return ok(reply, { items: await internalSourceAccounts(q.company_id) });
       },
     }),
   );
