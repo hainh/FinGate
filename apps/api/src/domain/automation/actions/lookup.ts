@@ -73,6 +73,14 @@ export interface VoucherRow {
       existing_loan_id?: unknown;
       terms?: { due_date?: string | null; term_months?: number | null; interest_rate?: string | null; repayment_period?: string | null; repayment_method?: string | null; contract_no?: string | null; collateral?: string | null } | null;
     } | null;
+    /** cấn trừ khoản vay (R7): khoản nợ ngân hàng hoặc công nợ phải trả. */
+    offset?: {
+      target?: string | null;
+      target_id?: unknown;
+      amount_minor?: unknown;
+      interest_minor?: unknown;
+      fee_minor?: unknown;
+    } | null;
   } | null;
   transfer_target?: { company_id?: unknown; account_id?: unknown } | null;
   approval?: { steps?: StepLike[] | null } | null;

@@ -625,6 +625,30 @@ export async function assertLoanDisbursementCapacity(input: { loanId: string; am
   assertWithinCapacity({ limit: loan.total_minor, committed, add: input.amountMinor, what: `Khoản vay ${loan.code}` });
 }
 
+/**
+ * Sức chứa TRẢ NỢ (gốc) của khoản vay — kiểm trước khi lưu phiếu chi cấn trừ khoản vay (R7), để lỗi hiện ngay trên
+ * form thay vì sau khi đã duyệt. Cùng quy tắc FG-LINK-002 như `createLink`; `excludeDocumentId` bỏ trả nợ của chính
+ * phiếu đang sửa (sẽ được thay khi duyệt).
+ */
+export async function assertLoanRepaymentCapacity(input: { loanId: string; principalMinor: bigint; excludeDocumentId?: string | null }): Promise<void> {
+  const loan = await loadEndpoint('bank_debt', input.loanId);
+  const links = await reservingLinks(await activeLinksWhere({ to_type: 'bank_debt', to_id: loan.id, relation: 'repayment' }));
+  const committed = links
+    .filter((l) => !(input.excludeDocumentId && l.from_id === input.excludeDocumentId))
+    .reduce((s, l) => s + principalPartOf(l), 0n);
+  assertWithinCapacity({ limit: loan.total_minor, committed, add: input.principalMinor, what: `Khoản vay ${loan.code}` });
+}
+
+/** Sức chứa CẤN TRỪ của khoản công nợ (giá trị) — kiểm trước khi lưu phiếu chi cấn trừ công nợ (R7). */
+export async function assertDebtOffsetCapacity(input: { debtVoucherId: string; amountMinor: bigint; excludeDocumentId?: string | null }): Promise<void> {
+  const debt = await loadEndpoint('debt_voucher', input.debtVoucherId);
+  const links = await reservingLinks(await activeLinksWhere({ to_type: 'debt_voucher', to_id: debt.id, relation: 'offset' }));
+  const committed = links
+    .filter((l) => !(input.excludeDocumentId && l.from_id === input.excludeDocumentId))
+    .reduce((s, l) => s + allocationOf(l), 0n);
+  assertWithinCapacity({ limit: debt.total_minor, committed, add: input.amountMinor, what: `Khoản công nợ ${debt.code}` });
+}
+
 /** Σ giải ngân đang giữ sức chứa của khoản vay, BỎ giải ngân của phiếu `excludeDocumentId` (phiếu đang sửa). */
 export function disbursedExcludingDocument(links: LinkRecord[], excludeDocumentId: string | null): bigint {
   return links

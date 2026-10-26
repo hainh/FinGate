@@ -102,8 +102,8 @@ export interface DomainDoc {
   partner_id?: string | null;
   /** ★ v2: tag gắn phiếu. */
   tag_ids?: string[];
-  /** ★ v2: tuỳ chọn vay (options.loan). */
-  options?: { loan?: DocLoanOptions | null } | null;
+  /** ★ v2: tuỳ chọn vay (options.loan) và cấn trừ khoản vay (options.offset, R7). */
+  options?: { loan?: DocLoanOptions | null; offset?: Record<string, unknown> | null } | null;
   /** ★ v2: chuyển nội bộ theo ID. */
   transfer_target?: { company_id: string; account_id?: string | null } | null;
   /** ★ v2: nguồn gốc — thủ công / tự động. */

@@ -579,7 +579,7 @@ test.describe('§11–13 Quy trình tự động', () => {
     await go(page, '/quantri/tu-dong');
     await expect(page.getByText('Quy trình tự động', { exact: true }).first()).toBeVisible({ timeout: 20_000 });
     const table = page.locator('.ant-table').first();
-    for (const code of ['R1', 'R2', 'R3', 'R4', 'R5', 'R6']) await expect(table, `quy tắc ${code}`).toContainText(code);
+    for (const code of ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7']) await expect(table, `quy tắc ${code}`).toContainText(code);
 
     await pickOption(page, page.locator('[aria-label="Công ty áp dụng quy tắc"]').first(), /CTA · Cty A/);
     await expect(page.getByText('Tại Cty A', { exact: true }).first()).toBeVisible({ timeout: 15_000 });

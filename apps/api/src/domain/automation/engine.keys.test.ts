@@ -69,10 +69,10 @@ describe('engine › đăng ký bộ xử lý', () => {
 describe('engine › định nghĩa quy tắc mặc định (v2 §11.3, §14.2)', () => {
   const def = (code: string) => DEFAULT_AUTOMATION_RULES.find((r) => r.code === code);
 
-  it('có đủ R1…R6; R4 tắt mặc định, các quy tắc còn lại bật', () => {
-    expect(DEFAULT_AUTOMATION_RULES.map((r) => r.code)).toEqual(['R1', 'R2', 'R3', 'R4', 'R5', 'R6']);
+  it('có đủ R1…R7; R4 tắt mặc định, các quy tắc còn lại bật', () => {
+    expect(DEFAULT_AUTOMATION_RULES.map((r) => r.code)).toEqual(['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7']);
     expect(def('R4')?.enabled).toBe(false);
-    for (const code of ['R1', 'R2', 'R3', 'R5', 'R6']) expect(def(code)?.enabled).toBe(true);
+    for (const code of ['R1', 'R2', 'R3', 'R5', 'R6', 'R7']) expect(def(code)?.enabled).toBe(true);
   });
 
   it('R2 nghe đủ sự kiện tạo / sửa / gửi / duyệt / thực thi phiếu thu đi vay', () => {

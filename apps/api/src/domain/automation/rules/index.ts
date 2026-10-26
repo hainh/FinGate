@@ -1,5 +1,5 @@
 /**
- * Điểm đăng ký bộ xử lý quy tắc tự động (v2/v2.md §11.3: R1–R6).
+ * Điểm đăng ký bộ xử lý quy tắc tự động (v2/v2.md §11.3: R1–R7).
  *
  * Mỗi quy tắc là MỘT module riêng gọi `registerRule(code, { steps, occurrenceEvents? })` khi được import.
  * File này là nơi TẬP TRUNG các import đó; `server.ts` import file này một lần lúc khởi động (trước khi chu kỳ
@@ -15,5 +15,6 @@ import './r3-fund-by-loan.ts';
 import './r4-loan-settled.ts';
 import './r5-recurring.ts';
 import './r6-cancel-generated.ts';
+import './r7-offset-on-approval.ts';
 
 export {};

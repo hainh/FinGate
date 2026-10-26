@@ -7,7 +7,7 @@
 
 import { ApiError } from '@fingate/shared';
 import { Models } from '../../../db/models.ts';
-import { createLink, listLinksFor, removeLink, RELATION_SPECS, type LinkObjectType, type LinkOrigin, type LinkRecord, type LinkRelation } from '../../links/index.ts';
+import { createLink, listLinksFor, removeLink, RELATION_SPECS, type LinkObjectType, type LinkOrigin, type LinkRecord, type LinkRelation, type LinkSplit } from '../../links/index.ts';
 import type { AutoActor } from './common.ts';
 
 /** Phiếu được phiếu nguồn sinh ra theo liên kết `generated` còn hiệu lực (VD R3: phiếu chi → phiếu thu giải ngân). */
@@ -31,6 +31,8 @@ interface EnsureLinkBase {
   relation: LinkRelation;
   /** Số tiền phân bổ (quan hệ có tiền); null cho `generated` / `internal_transfer`. */
   amountMinor: bigint | null;
+  /** Tách gốc / lãi / phí (trả nợ khoản vay ngân hàng); null = không tách. */
+  split?: LinkSplit | null;
   actor: AutoActor;
   requestId: string | null;
 }
@@ -79,8 +81,9 @@ async function ensureLink(input: EnsureLinkBase, source: LinkSource): Promise<Li
 
   const existing = await findActive();
   const origin: LinkOrigin = source.origin === 'manual' || existing?.origin === 'manual' ? 'manual' : 'automation';
+  const split = input.split ?? null;
   if (existing) {
-    const sameAmount = !RELATION_SPECS[input.relation].amount || existing.amount_minor === input.amountMinor;
+    const sameAmount = !RELATION_SPECS[input.relation].amount || (existing.amount_minor === input.amountMinor && sameSplit(existing.split, split));
     if (sameAmount && existing.origin === origin) return existing;
     await removeLink({
       link_id: existing._id,
@@ -99,6 +102,7 @@ async function ensureLink(input: EnsureLinkBase, source: LinkSource): Promise<Li
       to: input.to,
       relation: input.relation,
       amount_minor: input.amountMinor,
+      split,
       origin,
       ...run,
       actor: input.actor,
@@ -112,6 +116,12 @@ async function ensureLink(input: EnsureLinkBase, source: LinkSource): Promise<Li
     }
     throw err;
   }
+}
+
+/** Hai cách tách gốc / lãi / phí giống nhau (cả hai không tách — null hoặc thiếu — cũng coi là giống). */
+function sameSplit(a: LinkSplit | null | undefined, b: LinkSplit | null | undefined): boolean {
+  if (!a || !b) return !a && !b;
+  return a.principal === b.principal && a.interest === b.interest && a.fee === b.fee;
 }
 
 /** Gỡ một liên kết (có lý do). Đã gỡ trước đó ⇒ bỏ qua, không lỗi. */

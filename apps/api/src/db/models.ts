@@ -154,6 +154,20 @@ const loanOptionsEmbed = new Schema(
   { _id: false },
 );
 
+/** Cấn trừ khoản vay trên phiếu chi (`options.offset`, R7): khoản nợ ngân hàng hoặc công nợ phải trả. */
+const offsetOptionsEmbed = new Schema(
+  {
+    target: { type: String, enum: ['bank_debt', 'debt_voucher'], required: true },
+    target_id: { type: Schema.Types.ObjectId, required: true },
+    /** minor units; null = toàn bộ số tiền phiếu. */
+    amount_minor: { type: BigInt, default: null },
+    /** Chỉ khoản vay ngân hàng; null = không tách. */
+    interest_minor: { type: BigInt, default: null },
+    fee_minor: { type: BigInt, default: null },
+  },
+  { _id: false },
+);
+
 /** Chuyển nội bộ theo ID (thay `target` v1 — v2 §11.6). */
 const transferTargetEmbed = new Schema(
   {
@@ -429,9 +443,10 @@ export const DocumentSchema = new Schema(
     partner_id: { type: Schema.Types.ObjectId, default: null },
     /** ★ v2: tag gắn phiếu (thuộc danh bạ tag của công ty). */
     tag_ids: { type: [Schema.Types.ObjectId], default: [] },
-    /** ★ v2: tuỳ chọn tự động — `options.loan` (cờ đi vay / vay để chi + thông tin khoản vay dự kiến). */
+    /** ★ v2: tuỳ chọn tự động — `options.loan` (cờ đi vay / vay để chi + thông tin khoản vay dự kiến) · `options.offset` (cấn trừ khoản vay). */
     options: {
       loan: { type: loanOptionsEmbed, default: null },
+      offset: { type: offsetOptionsEmbed, default: null },
     },
     /** ★ v2: chuyển nội bộ theo ID (thay `target` v1 — giữ song song). */
     transfer_target: { type: transferTargetEmbed, default: null },

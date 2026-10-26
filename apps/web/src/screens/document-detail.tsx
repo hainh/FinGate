@@ -36,7 +36,7 @@ import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgModal, FgSkeletonParagraphs, FgSkeletonTable, FgTable, FgTabs } from '../components/uitk.tsx';
 import { AttachmentDeleteModal, AttachmentPreviewModal, AttachmentRow, AttachmentUploadModal, problemText } from '../components/attachments.tsx';
 import { FgApprovalTimeline, FgDecisionPack, OwnerLine, directionOf } from '../components/finance.tsx';
-import { AutomationPanel, LinksTab, LoanBanner, PartnerCard, TagsCard } from '../components/voucher-v2.tsx';
+import { AutomationPanel, LinksTab, LoanBanner, OffsetBanner, PartnerCard, TagsCard } from '../components/voucher-v2.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useToast } from '../components/pagekit.tsx';
 import { ApprovalConfirmModal, useTransitionRunner } from './approve-modal.tsx';
@@ -302,6 +302,7 @@ function SummaryTab({ doc }: { doc: DocumentDetail }): ReactNode {
   return (
     <>
       {doc.options?.loan ? <LoanBanner loan={doc.options.loan} style={{ marginBottom: 'var(--fg-space-4)' }} /> : null}
+      {doc.options?.offset ? <OffsetBanner offset={doc.options.offset} status={doc.status} style={{ marginBottom: 'var(--fg-space-4)' }} /> : null}
       {doc.kind === 'internal' && transfer ? (
         <FgAlert
           tone="info"

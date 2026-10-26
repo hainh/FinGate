@@ -81,7 +81,7 @@ describe('v2 — registry trạng thái & nhãn', () => {
   it('quan hệ liên kết, loại đối tác, quy tắc đều có nhãn', () => {
     for (const r of BUSINESS_LINK_RELATIONS) expect(BUSINESS_LINK_RELATION_LABEL[r].length).toBeGreaterThan(3);
     for (const t of PARTNER_TYPES) expect(PARTNER_TYPE_LABEL[t].length).toBeGreaterThan(3);
-    expect(AUTOMATION_RULE_CODES).toEqual(['R1', 'R2', 'R3', 'R4', 'R5', 'R6']);
+    expect(AUTOMATION_RULE_CODES).toEqual(['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7']);
     expect(AUTOMATION_RULE_LABEL.R3).toBe('Vay ngân hàng để chi');
   });
 

@@ -76,9 +76,14 @@ import {
   diffIds,
   manualLinkTargetType,
   parseIdList,
+  planToOffsetInput,
+  planToStoredOffset,
+  sameOffsetPlan,
+  storedOffsetToPlan,
   type StoredLoanChoice,
   type VoucherKind,
 } from '../domain/vouchers/rules.ts';
+import { isOffsetRuleLink, releaseOffsetRuleLinks } from '../domain/vouchers/offset.ts';
 import {
   mayChangeVoucherTags,
   roundLocksEdit,
@@ -93,6 +98,7 @@ import {
   planToLoanInput,
   planToStoredLoan,
   resolveLoanPlan,
+  resolveOffsetPlan,
   resolveTransferTarget,
   resolveVoucherPartner,
   resolveVoucherTagIds,
@@ -297,6 +303,7 @@ export function documentRoutes(app: FastifyInstance): void {
         const amountMinor = BigInt(body.amount.amount_minor);
         // [v2] đối tác CHỌN THEO ID (không nhập tự do, không tự tạo từ chuỗi). Phiếu thu/chi bắt buộc.
         const loanInput = body.options?.loan ?? null;
+        const offsetInput = body.options?.offset ?? null;
         if (!body.partner_id && (kind === 'spend' || kind === 'income')) {
           throw new ApiError({ code: 'FG-VAL-001', detail: 'Chọn đối tác', errors: { partner_id: 'Chọn đối tác (bắt buộc với phiếu thu/chi)' } });
         }
@@ -316,6 +323,18 @@ export function documentRoutes(app: FastifyInstance): void {
           voucherPartnerId: partner ? String(partner._id) : null,
           voucherAmountMinor: amountMinor,
           loan: loanInput,
+          previous: null,
+        });
+        // Cấn trừ khoản vay (R7): kiểm đối tác, khoản vay / công nợ và sức chứa ngay khi lưu — duyệt xong mới gán tự động.
+        const offset = await resolveOffsetPlan({
+          companyId,
+          voucherId: null,
+          voucherKind: kind as VoucherKind,
+          voucherPartnerId: partner ? String(partner._id) : null,
+          voucherPartnerType: partner ? String(partner.type) : null,
+          voucherAmountMinor: amountMinor,
+          voucherLoanKind: loanInput?.kind ?? null,
+          offset: offsetInput,
           previous: null,
         });
         // Chuyển nội bộ theo ID (§11.6): thay cho nhận diện theo chuỗi "Tên - NH - STK" (đã bỏ).
@@ -350,7 +369,7 @@ export function documentRoutes(app: FastifyInstance): void {
           // [v2] không ghi payee.* (nhập tự do đã bỏ) — đối tác theo ID, tag, tuỳ chọn vay, chuyển nội bộ theo ID
           partner_id: partner ? String(partner._id) : null,
           tag_ids: tagIds,
-          options: { loan: planToStoredLoan(loan) },
+          options: { loan: planToStoredLoan(loan), offset: planToStoredOffset(offset) },
           transfer_target: transfer,
           target: transfer, // v1 song song: bộ máy/ sổ cái v1 còn đọc `target` (sẽ bỏ khi migrate)
           amount: { minor: amountMinor, currency: body.amount.currency, decimals: currencyDecimals(body.amount.currency) },
@@ -473,9 +492,13 @@ export function documentRoutes(app: FastifyInstance): void {
         }
         const previousLoan = storedLoanToPlan(doc.options?.loan as unknown as Record<string, unknown> | null | undefined);
         const loanInput = body.options !== undefined ? (body.options?.loan ?? null) : previousLoan ? planToLoanInput(previousLoan) : null;
+        const previousOffset = storedOffsetToPlan(doc.options?.offset as unknown as Record<string, unknown> | null | undefined);
+        const offsetInput = body.options !== undefined ? (body.options?.offset ?? null) : previousOffset ? planToOffsetInput(previousOffset) : null;
+        let nextPartnerType: string | null = null;
         if (nextPartnerId) {
           // đối tác đã ngừng giao dịch chỉ bị chặn khi CHỌN MỚI; giữ nguyên thì dữ liệu cũ vẫn sửa được
-          await resolveVoucherPartner({ companyId, partnerId: nextPartnerId, kind, requireActive: partnerChanged, loanKind: loanInput?.kind ?? null });
+          const nextPartner = await resolveVoucherPartner({ companyId, partnerId: nextPartnerId, kind, requireActive: partnerChanged, loanKind: loanInput?.kind ?? null });
+          nextPartnerType = String(nextPartner.type);
         }
         if (kind === 'rollover') {
           // Phương án đảo hạn: khoản vay gắn (mới hoặc giữ nguyên) phải hợp lệ với công ty và ngân hàng đang chọn (v2 §10.3).
@@ -494,13 +517,28 @@ export function documentRoutes(app: FastifyInstance): void {
           previous: partnerChanged ? null : previousLoan,
           voucherId: params.id,
         });
+        const offset = await resolveOffsetPlan({
+          companyId,
+          voucherId: params.id,
+          voucherKind: kind,
+          voucherPartnerId: nextPartnerId,
+          voucherPartnerType: nextPartnerType,
+          voucherAmountMinor: amountMinorNext,
+          voucherLoanKind: loanInput?.kind ?? null,
+          offset: offsetInput,
+          // đổi đối tác ⇒ kiểm lại mọi tham chiếu cấn trừ (khoản cũ có thể thuộc ngân hàng / đối tác cũ)
+          previous: partnerChanged ? null : previousOffset,
+          previousVoucherAmountMinor: BigInt(String(doc.amount.minor)),
+        });
+        const offsetChanged = !sameOffsetPlan(previousOffset, BigInt(String(doc.amount.minor)), offset, amountMinorNext);
         // đổi đối tác: liên kết cấn trừ / trả nợ / giải ngân đang có phải còn khớp đối tác mới (v2 §9.2, §11.2).
         // Giải ngân tới khoản đã chọn trước đó sẽ được gỡ khi lưu này (linkChosenLoanOnSave) ⇒ không chặn.
         if (partnerChanged)
           await assertPartnerChangeKeepsLinks({
             documentId: params.id,
             nextPartnerId,
-            willRelease: (l) => disbursementReleasedByLoanChoice(l, previousLoan, loan),
+            // liên kết cấn trừ R7 cũ được gỡ ngay trong lần lưu này khi cấn trừ đổi (xem releaseOffsetRuleLinks)
+            willRelease: (l) => disbursementReleasedByLoanChoice(l, previousLoan, loan) || (offsetChanged && isOffsetRuleLink(l)),
           });
         // đổi số tiền: tổng phân bổ còn lại không được vượt số tiền mới (v2 §9.2). Giải ngân theo khoản vay đã chọn
         // và liên kết tự động của R2 được đồng bộ theo số tiền mới (linkChosenLoanOnSave / R2), nên không tính ở đây.
@@ -537,7 +575,7 @@ export function documentRoutes(app: FastifyInstance): void {
         if (body.partner_id !== undefined) set.partner_id = nextPartnerId;
         // lãi/gốc của khoản vay dự kiến đi theo đối tác (vay đi thu: NH cho vay = đối tác phiếu) và số tiền phiếu
         if (body.options !== undefined || partnerChanged || body.amount !== undefined) {
-          set.options = { loan: planToStoredLoan(loan) };
+          set.options = { loan: planToStoredLoan(loan), offset: planToStoredOffset(offset) };
         }
         if (transfer !== undefined) {
           set.transfer_target = transfer;
@@ -602,6 +640,15 @@ export function documentRoutes(app: FastifyInstance): void {
           actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
           requestId: body.request_id,
         });
+        // cấn trừ đổi ⇒ liên kết R7 đã gán khi duyệt trước đó được gỡ; duyệt lại sẽ gán theo lựa chọn mới
+        if (offsetChanged) {
+          await releaseOffsetRuleLinks({
+            documentId: params.id,
+            reason: 'Phiếu đổi cấn trừ khoản vay — sẽ gán lại khi duyệt',
+            actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+            requestId: body.request_id,
+          });
+        }
         await mirrorAudit({
           at: new Date(),
           actor: { user_id: actor.user_id, name: actor.name, role: actor.role },

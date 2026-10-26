@@ -18,7 +18,7 @@ import dayjs from 'dayjs';
 import { bankDebtStatusLabel, ddmmyyyy, formatMoney, money, moneyFromWire, statusLabel, type PartnerRef } from '@fingate/shared';
 import { apiData } from '../api.ts';
 import { useAuth } from '../store.tsx';
-import type { BankAccountRow, DocumentDetail } from '../types.ts';
+import type { BankAccountRow, DocumentDetail, MoneyWire } from '../types.ts';
 import { interestRateText, type LoanRow } from './debts.ts';
 
 /* ================= kiểu trên wire ================= */
@@ -55,6 +55,18 @@ export interface DocLoanView {
   existing_loan_id: string | null;
   existing_loan: { _id: string; code: string; status: string } | null;
   terms: LoanTermsWire | null;
+}
+
+/** `options.offset` khi đọc phiếu chi: khoản được cấn trừ (đã nạp mã) và số tiền hiệu lực. Tiền là chuỗi minor. */
+export interface DocOffsetView {
+  target: 'bank_debt' | 'debt_voucher';
+  target_id: string;
+  target_code: string | null;
+  /** null = toàn bộ số tiền phiếu. */
+  amount_minor: string | null;
+  effective_amount_minor: string;
+  interest_minor: string | null;
+  fee_minor: string | null;
 }
 
 /** Chuyển tiền nội bộ theo ID (`transfer_target`, đã nạp tên công ty và TK). */
@@ -319,6 +331,50 @@ export function loanOptionsBody(v: LoanFormValues | null): LoanOptionsBody | nul
     existing_loan_id: null,
     terms: loanTermsBody(v.terms),
   };
+}
+
+/** Form cấn trừ khoản vay trên phiếu chi (`options.offset`). Tiền là chuỗi minor; null = để trống. */
+export interface OffsetFormValues {
+  on: boolean;
+  target: 'bank_debt' | 'debt_voucher';
+  targetId: string;
+  amountMinor: string | null;
+  interestMinor: string | null;
+  feeMinor: string | null;
+}
+
+export interface OffsetOptionsBody {
+  target: 'bank_debt' | 'debt_voucher';
+  target_id: string;
+  amount_minor: string | null;
+  interest_minor: string | null;
+  fee_minor: string | null;
+}
+
+/**
+ * `options.offset` của phiếu chi. Không cấn trừ ⇒ null (server bỏ cấn trừ đã lưu). Lãi / phí chỉ gửi cho khoản vay
+ * ngân hàng; công nợ không tách (server chặn nếu gửi).
+ */
+export function offsetOptionsBody(v: OffsetFormValues | null): OffsetOptionsBody | null {
+  if (!v || !v.on) return null;
+  const bank = v.target === 'bank_debt';
+  return {
+    target: v.target,
+    target_id: v.targetId,
+    amount_minor: v.amountMinor,
+    interest_minor: bank ? v.interestMinor : null,
+    fee_minor: bank ? v.feeMinor : null,
+  };
+}
+
+/** Nhãn khoản vay trong ô cấn trừ: mã · còn có thể trả (gốc). */
+export function offsetLoanOptionLabel(l: { code: string; available_principal: MoneyWire | null }): string {
+  return `${l.code} · còn trả được ${formatMoney(moneyFromWire(l.available_principal) ?? money('0'), { mode: 'compact' })}`;
+}
+
+/** Nhãn công nợ phải trả trong ô cấn trừ: mã · còn có thể cấn trừ. */
+export function offsetDebtOptionLabel(d: { code: string; available: MoneyWire | null }): string {
+  return `${d.code} · còn cấn trừ được ${formatMoney(moneyFromWire(d.available) ?? money('0'), { mode: 'compact' })}`;
 }
 
 /** `transfer_target` (chuyển nội bộ theo ID): cần công ty và (khuyến nghị) TK; không bật ⇒ null. */

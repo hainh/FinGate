@@ -55,6 +55,7 @@ import {
   type DocLink,
   type DocLinkCounterpart,
   type DocLoanView,
+  type DocOffsetView,
   type ManualLinkRelation,
 } from '../app/v2/documents.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgToneChip } from './primitives.tsx';
@@ -119,6 +120,46 @@ export function LoanBanner({ loan, style }: { loan: DocLoanView; style?: CSSProp
 }
 
 /* ================= đối tác ================= */
+
+/** Phiếu đã duyệt xong (hoặc sau đó): cấn trừ đã được gán. */
+const OFFSET_ASSIGNED_STATUSES: readonly string[] = ['approved', 'processing', 'paid'];
+/** Phiếu đã huỷ / từ chối / hết hạn: cấn trừ không còn hiệu lực. */
+const OFFSET_RELEASED_STATUSES: readonly string[] = ['cancelled', 'rejected', 'expired'];
+
+/**
+ * Phiếu chi cấn trừ khoản vay (R7): khoản đã đánh dấu khi lập phiếu. Trước khi duyệt: sẽ tự gán khi duyệt xong;
+ * đã duyệt: đã gán (xem tab Liên kết); huỷ / từ chối: không còn hiệu lực.
+ */
+export function OffsetBanner({ offset, status, style }: { offset: DocOffsetView; status: string; style?: CSSProperties }): ReactNode {
+  const isLoan = offset.target === 'bank_debt';
+  const effective = BigInt(offset.effective_amount_minor);
+  const interest = BigInt(offset.interest_minor ?? '0');
+  const fee = BigInt(offset.fee_minor ?? '0');
+  const headline = `Cấn trừ ${isLoan ? 'khoản vay' : 'công nợ'} ${offset.target_code ?? ''} — ${formatMoney(money(effective), { mode: 'compact' })}`;
+  const lines: string[] = [];
+  if (isLoan && (interest > 0n || fee > 0n)) {
+    lines.push(
+      `Gốc ${formatMoney(money(effective - interest - fee), { mode: 'compact' })} · lãi ${formatMoney(money(interest), { mode: 'compact' })} · phí ${formatMoney(money(fee), { mode: 'compact' })}`,
+    );
+  }
+  if (OFFSET_RELEASED_STATUSES.includes(status)) lines.push('Phiếu đã huỷ hoặc từ chối — cấn trừ không còn hiệu lực');
+  else if (OFFSET_ASSIGNED_STATUSES.includes(status)) lines.push('Đã gán vào khoản này khi phiếu được duyệt xong — xem tab Liên kết');
+  else lines.push('Sẽ tự gán vào khoản này khi phiếu được duyệt xong');
+  return (
+    <FgAlert
+      tone={OFFSET_RELEASED_STATUSES.includes(status) ? 'neutral' : 'info'}
+      title={headline}
+      description={
+        <span style={{ display: 'grid', gap: 2 }}>
+          {lines.map((l) => (
+            <span key={l}>{l}</span>
+          ))}
+        </span>
+      }
+      style={style}
+    />
+  );
+}
 
 /** Thẻ đối tác: thông tin lấy từ đối tác hiện tại (không lưu bản sao trên phiếu). */
 export function PartnerCard({ doc }: { doc: DocumentDetail }): ReactNode {
