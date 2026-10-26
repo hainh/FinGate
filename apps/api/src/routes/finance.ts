@@ -19,6 +19,7 @@ import { Models } from '../db/models.ts';
 import { assertCompanyScope, defineRoute, requestCtx, requireActor, requireScope, validate } from '../lib/http.ts';
 import { ok } from '../lib/serialize.ts';
 import {
+  bankAccountListQuery,
   bankAccountUpdateBody,
   bankAccountUpsertBody,
   internalTransferBody,
@@ -28,7 +29,7 @@ import {
 import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, internalTransferBodySchema, statementImportBodySchema } from './schemas.ts';
 import { asBigInt, docHref, filterMaturityRows, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
 import { bookedBalance } from '../domain/ledger/index.ts';
-import { ledgerAccountViews } from '../domain/accounts.ts';
+import { ledgerAccountViews, pageAccountViews } from '../domain/accounts.ts';
 import { companyReachableByActor } from '../domain/entitlement/index.ts';
 import { loadPartnerRefs } from '../domain/reports/refs.ts';
 import { scopedFind } from '../lib/mongo.ts';
@@ -94,6 +95,7 @@ export function financeRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const scope = requireScope(req);
         const q = req.query as { include_closed?: string; for_company?: string };
+        const paging = validate(bankAccountListQuery, req.query);
         // for_company = công ty của phiếu (picker nguồn tiền khi tạo/sửa/duyệt):
         // chỉ trả tài khoản của đúng công ty đó — pháp nhân Tập đoàn → tài khoản
         // Tập đoàn; công ty con → KHÔNG thấy quỹ/tài khoản Tập đoàn (§VIII).
@@ -116,10 +118,12 @@ export function financeRoutes(app: FastifyInstance): void {
           includeGroup: !forCompanyOpt,
           forCompany: forCompanyOpt,
         });
+        // `totals` luôn trên MỌI tài khoản trong phạm vi; `items`/`total` theo loại TK và trang (nếu có).
+        const listed = pageAccountViews(rows, paging);
         return ok(
           reply,
           {
-            items: rows.map((r) => ({
+            items: listed.items.map((r) => ({
               _id: r.account_id,
               company_id: r.company_id,
               company_name: r.company_name,
@@ -144,6 +148,7 @@ export function financeRoutes(app: FastifyInstance): void {
               stale: false,
               balance_date: r.balance_date,
             })),
+            total: listed.total,
             totals: {
               balance: wire(rows.reduce((a, r) => a + r.actual, 0n)),
               projected: wire(rows.reduce((a, r) => a + r.projected, 0n)),

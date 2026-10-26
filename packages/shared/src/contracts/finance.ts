@@ -33,6 +33,16 @@ export const bankAccountUpsertBody = z.object({
 /** PATCH /bank-accounts/{id} — sửa tài khoản tiền. KHÔNG đổi công ty / tài khoản Tập đoàn. */
 export const bankAccountUpdateBody = bankAccountUpsertBody.omit({ company_id: true, is_group: true }).partial();
 
+/**
+ * GET /bank-accounts (BANK-01). `page`/`limit` bật phân trang phía máy chủ; bỏ trống cả hai ⇒ trả toàn bộ
+ * (bộ chọn tài khoản ở phiếu, duyệt và đối tác dùng kiểu này). `kind` lọc danh sách theo loại tài khoản.
+ */
+export const bankAccountListQuery = z.object({
+  page: z.coerce.number().int().min(1).max(10_000).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  kind: accountKind.optional(),
+});
+
 export const bankAccountRow = z.object({
   _id: objectId,
   company_id: objectId.nullable(),

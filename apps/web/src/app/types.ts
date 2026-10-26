@@ -543,6 +543,13 @@ export interface BankAccountRow {
   updated_at?: string | null;
 }
 
+/** GET /bank-accounts: `items` theo loại TK và trang (nếu có); `total` = số TK khớp loại; `totals` = trên mọi TK trong phạm vi. */
+export interface BankAccountListResult {
+  items: BankAccountRow[];
+  total: number;
+  totals?: { balance: MoneyWire; projected: MoneyWire };
+}
+
 export interface BankAccountDetail {
   _id: string;
   company_id: string | null;

@@ -882,6 +882,7 @@ Chỉ UI và hook phía web; không đổi API, contract hay shared. Đã đối
 ### 19.4 Tài khoản tiền (`/ngan-hang/taikhoan`)
 
 - Bỏ cột "Khả dụng" và trạng thái "Bị phong tỏa" nhập tay/tính cũ. Cột mới: "Số dư sổ cái" (đỏ nếu `breach`), "Dự kiến 30 ngày" (▲ nếu `breach_projected`). Trạng thái tài khoản vẫn có `Phong toả` (§4.1). KPI đầu bảng: `totals.balance`, `totals.projected`.
+- Phân trang phía máy chủ: `GET /bank-accounts?page=&limit=&kind=` (`page`/`limit` bật chế độ trang, mặc định 50 dòng/trang, tối đa 200; `kind` = `bank` | `cash`). `items` chỉ gồm một trang, `total` = số TK khớp `kind`. `totals` (KPI) luôn tính trên mọi TK trong phạm vi, không theo `kind` hay trang. Không gửi `page`/`limit` ⇒ trả toàn bộ (bộ chọn tài khoản ở phiếu, duyệt, đối tác dùng kiểu này). Lọc Tiền mặt / Ngân hàng chuyển lên máy chủ — trước đây lọc trên các dòng đã tải nên sai khi có nhiều trang.
 
 ### 19.5 Kiểu chung (`app/types.ts`, sửa tối thiểu)
 

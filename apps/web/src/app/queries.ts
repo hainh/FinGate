@@ -12,7 +12,7 @@ import type {
   AlertRow,
   ApprovalThresholdResult,
   BankAccountDetail,
-  BankAccountRow,
+  BankAccountListResult,
   CashflowHistoryResult,
   DashboardOverview,
   DecisionPack,
@@ -177,9 +177,18 @@ export function useBankAccounts(companyId?: string | null) {
   return useQuery({
     queryKey: ['bank-accounts', scope, companyId ?? null],
     queryFn: () =>
-      apiCall<{ items: BankAccountRow[]; totals?: { balance: import('./types.ts').MoneyWire; projected: import('./types.ts').MoneyWire } }>('/bank-accounts', {
+      apiCall<BankAccountListResult>('/bank-accounts', {
         query: companyId ? { scope, for_company: companyId } : { scope },
       }),
+  });
+}
+
+/** BANK-01 — một trang tài khoản tiền: phân trang và lọc loại TK ở máy chủ (`totals` vẫn trên mọi tài khoản). */
+export function useBankAccountsPage(filters: { page: number; limit: number; kind?: 'bank' | 'cash' }) {
+  const { scope } = useAuth();
+  return useQuery({
+    queryKey: ['bank-accounts', 'page', scope, filters],
+    queryFn: () => apiCall<BankAccountListResult>('/bank-accounts', { query: { scope, ...filters } }),
   });
 }
 

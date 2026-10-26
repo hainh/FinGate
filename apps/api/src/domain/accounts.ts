@@ -164,6 +164,24 @@ export async function ledgerAccountViews(
   });
 }
 
+/** Cỡ trang mặc định của danh sách tài khoản tiền khi chỉ gửi `page` (màn BANK-01). */
+export const BANK_ACCOUNT_PAGE_SIZE = 50;
+
+/**
+ * Lọc theo loại tài khoản (`kind`) rồi cắt một trang (`page` đánh số từ 1, `limit`). Không gửi cả `page` lẫn
+ * `limit` ⇒ trả toàn bộ. `total` là số tài khoản khớp `kind`, trước khi cắt trang.
+ */
+export function pageAccountViews(
+  rows: LedgerAccountView[],
+  opts: { kind?: string; page?: number; limit?: number } = {},
+): { items: LedgerAccountView[]; total: number } {
+  const listed = opts.kind ? rows.filter((r) => r.kind === opts.kind) : rows;
+  if (opts.page === undefined && opts.limit === undefined) return { items: listed, total: listed.length };
+  const page = opts.page ?? 1;
+  const limit = opts.limit ?? BANK_ACCOUNT_PAGE_SIZE;
+  return { items: listed.slice((page - 1) * limit, page * limit), total: listed.length };
+}
+
 /** Ép kiểu an toàn BigInt từ kết quả Mongo (lean/aggregate). */
 function big(v: unknown): bigint {
   if (typeof v === 'bigint') return v;
