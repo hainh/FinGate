@@ -47,6 +47,15 @@ describe('withPartner — đổi đối tác bỏ khoản vay của ngân hàng 
     const f = formWith('bank-A');
     expect(withPartner(f, 'bank-A')).toBe(f);
   });
+
+  it('đổi đối tác: bỏ khoản cấn trừ đã chọn (thuộc đối tác cũ), giữ cờ và loại khoản', () => {
+    const f = {
+      ...formWith('bank-A'),
+      offset: { on: true, target: 'bank_debt', targetId: 'loan-of-A', amount: null, interest: null, fee: null },
+    } as unknown as FormState;
+    const next = withPartner(f, 'bank-B');
+    expect(next.offset).toMatchObject({ on: true, target: 'bank_debt', targetId: '' });
+  });
 });
 
 describe('rateTextError — lãi suất nhập tay: số, tối đa 2 chữ số thập phân', () => {

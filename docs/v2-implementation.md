@@ -28,7 +28,7 @@ Hằng số enum + nhãn tiếng Việt (dùng lại ở contract, không import
 - Đối tác: `PARTNER_TYPES` (`bank|customer|supplier`) + `PARTNER_TYPE_LABEL`; `PARTNER_STATUSES` (`active|inactive`) + `PARTNER_STATUS_LABEL` (`Hoạt động` / `Ngừng giao dịch`); `PARTNER_CODE_PREFIX = 'DT'`.
 - Hướng công nợ: `DEBT_DIRECTIONS` (`receivable|payable`) + `DEBT_DIRECTION_LABEL`.
 - Liên kết: `BUSINESS_LINK_RELATIONS` (`offset|repayment|disbursement|funded_by|generated|internal_transfer`) + `BUSINESS_LINK_RELATION_LABEL`; `LINK_OBJECT_TYPES` (`document|debt_voucher|bank_debt`) + `LINK_OBJECT_TYPE_LABEL`; `LINK_ORIGINS` (`manual|automation`); `LINK_STATUSES` (`active|removed`); `LINK_SPLIT_KEYS` (`principal|interest|fee`).
-- Quy tắc & lượt: `AUTOMATION_RULE_CODES` (`R1..R6`) + `AUTOMATION_RULE_LABEL`; `AUTOMATION_RUN_STATUSES` (`pending|running|done|failed`) + `AUTOMATION_RUN_STATUS_REGISTRY`; `AUTOMATION_STEP_STATUSES` (`pending|done|failed|skipped`) + `AUTOMATION_STEP_STATUS_LABEL`.
+- Quy tắc & lượt: `AUTOMATION_RULE_CODES` (`R1..R7`) + `AUTOMATION_RULE_LABEL`; `AUTOMATION_RUN_STATUSES` (`pending|running|done|failed`) + `AUTOMATION_RUN_STATUS_REGISTRY`; `AUTOMATION_STEP_STATUSES` (`pending|done|failed|skipped`) + `AUTOMATION_STEP_STATUS_LABEL`.
 - Khoản nợ NH (registry riêng, không trộn workflow): `BANK_DEBT_STATUSES` = `pending_disbursement | active | overdue | settled | archived | cancelled`; `BANK_DEBT_STATUS_REGISTRY`, `BANK_DEBT_STATUS_KEYS`, `bankDebtStatusLabel(key)`, `bankDebtStatusTone(key)`. `pending_disbursement` = "Chờ giải ngân" (tone attention, không tính dư nợ); `cancelled` = "Đã huỷ".
 - Tuỳ chọn vay: `LOAN_KINDS` (`borrow|fund`) + `LOAN_KIND_LABEL`; `LOAN_MODES` (`new|existing|later`) + `LOAN_MODE_LABEL`; `REPAYMENT_PERIODS` + `REPAYMENT_PERIOD_LABEL`; `REPAYMENT_METHODS` (type `RepaymentMethodKey`) + `REPAYMENT_METHOD_LABEL`.
 - `TAG_COLOR_DEFAULT = '#64748b'`.
@@ -292,6 +292,7 @@ Chu kỳ: `startAutomationLoop(log, intervalMs = 5000)` (`jobs/index.ts`) gọi 
 | R4 | `loan.settled` | — | notify | — | ✘ |
 | R5 | `schedule.recurring` | — | create_voucher | — | ✔ |
 | R6 | `voucher.cancelled` (+ `voucher.rejected`) | `payload.loan_kind ≠ null` | alert, cancel_unpaid | — | ✔ |
+| R7 | `voucher.approved` | `payload.kind = spend` (bước gán chỉ làm khi phiếu có `options.offset`, §27) | link | — | ✔ |
 
 Seed chỉ INSERT quy tắc còn thiếu (`$setOnInsert`), không ghi đè chỉnh sửa của người dùng. Trường `steps` trong DB chỉ để hiển thị; bộ xử lý đăng ký trong code là nguồn thực thi.
 
@@ -825,6 +826,7 @@ Chưa làm / lưu ý:
   - R4 `r4-loan-settled.ts` — `loan.settled` ⇒ cảnh báo nhắc lưu trữ / giải chấp TSĐB. Tắt mặc định.
   - R5 `r5-recurring.ts` + `domain/recurring/index.ts` — tác vụ `recurring` nay chỉ phát `schedule.recurring` (mỗi khoản, mỗi kỳ; không phát trùng khi sự kiện đang chờ); R5 tạo phiếu nháp qua `createRecurringDraft` (idempotent theo lịch sử `recurring_materialize`, đối tác theo `partner_id`, đứng tên KTT của công ty). Nhắc 7/3/1 ngày vẫn ở tác vụ này.
   - R6 `r6-cancel-generated.ts` — `voucher.cancelled` / `rejected` (chỉ khi trạng thái hiện tại vẫn huỷ/từ chối; đã gửi lại thì bỏ qua): khoản do quy tắc sinh từ phiếu này và chưa có tiền ⇒ huỷ; khoản chỉ gắn THỦ CÔNG vào phiếu (tạo tay, không do phiếu sinh ra) ⇒ chỉ gỡ liên kết (liên kết của phiếu đã huỷ/từ chối không còn hiệu lực), không cảnh báo và không huỷ, kể cả khi khoản đã có tiền; khoản do quy tắc sinh từ phiếu này đã có tiền ⇒ chỉ cảnh báo KTT (`source_cancelled_with_money`), giữ liên kết, không tự huỷ (`decideOnSourceFinal`, `alertLoansOfSource`).
+  - R7 `r7-offset-on-approval.ts` — `voucher.approved` phiếu chi có cấn trừ khoản vay: gán liên kết tới khoản đã chọn khi duyệt xong (chi tiết §27).
 - **Thuần (có test)**: `policy.ts` — điều khoản mặc định (`resolveLoanTerms`), số tiền vay R3 (`resolveLoanAmount`), ngày duyệt cuối (`finalApprovalDateOf`), quyết định R6 (`decideOnSourceFinal`), thời điểm R2 (`mayCreateLoan`, `mayFollowLoanEdits`, `mayReviveLoan`); `params.ts` — tham số theo quy tắc (`checkRuleParams`).
 - **Khoá số tiền R3** (`automation/locks.ts`, dùng trong `workflow.transition`): sau khi R3 đã chạy, đổi `amount_minor` khi duyệt hoặc `actual_amount_minor` khi thực thi ⇒ `FG-VAL-001`.
 - **Route** (`routes/automation.ts`, đăng ký trong `routes/index.ts`):
@@ -1424,6 +1426,66 @@ Kiểm chứng: `e2e/fix4-verify.spec.ts` (spec riêng). Các thay đổi hành 
 - **Gỡ tay liên kết theo lựa chọn "Gắn khoản vay đã có"**: bị chặn FG-WF-005 như liên kết tự động. Muốn gỡ thì đổi lựa chọn vay trên phiếu.
 - **Ngày và lãi suất**: ô "Ngày thực hiện" / "Ngày đáo hạn mới" của kết quả đảo hạn là DatePicker DD/MM/YYYY (lưu YYYY-MM-DD). Lãi suất hiển thị theo dấu phẩy (`interestRateText`: `9,5`). Nhập theo lô và kết quả đảo hạn giữ dấu phẩy; `rolloverResultBody.new_rate` nhận cả `,` và `.`.
 - Spec đã cập nhật theo quy tắc trên: `e2e/v2-auto-r2.spec.ts` R2-33 (gỡ tay liên kết theo lựa chọn bị chặn 422 FG-WF-005) và `e2e/v2-loans.spec.ts` US-LOAN-04 (ô ngày gõ DD/MM/YYYY). R2-34 tạm `skip`: kịch bản tạo lượt R2 lỗi bằng cách lưu "vay mới" khi còn giải ngân thủ công không còn tạo được (lưu bị chặn, xem R2-32).
+
+## 27. Cấn trừ khoản vay trên phiếu chi — R7 (gán tự động khi duyệt xong)
+
+### 27.1 Yêu cầu & hành vi
+
+- Khi lập / sửa phiếu chi, người dùng đánh dấu **"Phiếu này cấn trừ khoản vay"** và chọn khoản cần cấn trừ:
+  - **khoản vay ngân hàng** (trả nợ): liên kết `repayment`, có thể tách lãi và phí;
+  - **công nợ phải trả** của KH/NCC: liên kết `offset`.
+- Khi phiếu được **duyệt xong** (sự kiện `voucher.approved`), quy tắc R7 tự gán phiếu vào khoản đã chọn. Liên kết có nguồn `Tự động` và mã `R7`, nên phân biệt được với liên kết người dùng gán tay trên tab Liên kết.
+- Chỉ phiếu chi. Không dùng cùng lúc với "Vay ngân hàng để chi" (R3): server chặn, form khoá checkbox.
+- **Số tiền cấn trừ**: để trống = toàn bộ số tiền phiếu, đọc tại thời điểm duyệt (nên cấp duyệt hạ tiền thì cấn trừ theo). Nhập số riêng = cấn một phần, phần còn lại là chi tiền thường.
+- **Chỉ tiêu**: liên kết được tạo khi duyệt nhưng chỉ trừ dư nợ / đã cấn trừ khi phiếu **đã thực thi** (`paid`), đúng cơ chế chung (`offsetEffectOf`: "Chờ thực thi — chưa trừ").
+
+### 27.2 Dữ liệu
+
+- `documents.options.offset` = `{ target: 'bank_debt' | 'debt_voucher', target_id, amount_minor, interest_minor, fee_minor }` (`db/models.ts`, `offsetOptionsEmbed`). `amount_minor` null = theo số tiền phiếu (lưu null khi nhập đúng bằng số tiền phiếu). `interest_minor` / `fee_minor` chỉ cho khoản vay ngân hàng; gốc = số tiền hiệu lực − lãi − phí.
+- Contract (`packages/shared/src/contracts/documents.ts`): `offsetOptions` trong `options` của phiếu (ghi); `offsetOptionsView` trong `documentDetail` (đọc).
+- Đọc phiếu: `buildVoucherRefView` trả `options.offset` = `{ target, target_id, target_code, amount_minor, effective_amount_minor, interest_minor, fee_minor }`.
+- Liên kết do R7 tạo: `repayment` (phiếu → `bank_debt`, có `split` principal/interest/fee) hoặc `offset` (phiếu → `debt_voucher`), `origin = automation`, `rule_code = R7`, `run_id` = lượt chạy.
+
+### 27.3 Kiểm khi lưu (không gán)
+
+- **Thuần** (`domain/vouchers/rules.ts`, `planOffsetOptions`, có test): chỉ phiếu chi; không cùng vay để chi; phiếu phải có đối tác; số tiền cấn trừ > 0 và ≤ số tiền phiếu; lãi / phí chỉ cho khoản vay; lãi + phí ≤ số tiền cấn trừ. Lỗi `FG-VAL-001` gắn đúng ô: `options.offset.<field>`.
+- **Bản ghi** (`domain/vouchers/refs.ts`, `resolveOffsetPlan`; chỉ chạy khi cấn trừ đổi so với lần lưu trước):
+  - khoản thuộc công ty của phiếu và **đúng đối tác** của phiếu;
+  - đối tác đúng loại: khoản vay ⇒ Ngân hàng; công nợ ⇒ KH/NCC;
+  - khoản vay phải **đang vay** (cùng quy tắc `assignRepayment`: `loanStatusOf` ∈ `active` / `overdue`) và còn sức chứa trả nợ (`assertLoanRepaymentCapacity`, không tính trả nợ của chính phiếu);
+  - công nợ phải **phải trả** (`assertOffsetDirection(…, 'spend')`), không phải công nợ nhân viên (TK 334), còn sức chứa (`assertDebtOffsetCapacity`);
+  - phiếu còn đủ tiền sau các liên kết gán tay khác của chính phiếu.
+- Lưu trước khi duyệt **chỉ kiểm, không gán**: liên kết chỉ tạo khi duyệt, để không giữ sức chứa của khoản cho phiếu chưa được duyệt.
+
+### 27.4 Khi duyệt (R7 — `domain/automation/rules/r7-offset-on-approval.ts`)
+
+- Trigger `voucher.approved`, điều kiện `payload.kind = spend`, `occurrenceEvents: ['voucher.approved']` (duyệt lại sau khi yêu cầu bổ sung ⇒ lượt mới). Một bước `link`.
+- Gỡ liên kết R7 cũ không còn khớp lựa chọn (đổi khoản, bỏ cấn trừ) bằng `unlinkAutomationLink`. Cùng khoản thì `ensureAutomationLink` đồng bộ số tiền / lãi / phí (gỡ rồi tạo lại khi khác).
+- Lỗi bước (lượt `Lỗi`, KTT sửa rồi chạy lại): khoản không còn đang vay; hết sức chứa (FG-LINK-002); lãi + phí vượt số tiền sau khi cấp duyệt hạ tiền. Phiếu đã duyệt vẫn giữ trạng thái duyệt; việc gán không làm hỏng luồng duyệt.
+- Bật / tắt và phạm vi công ty của R7 theo cấu hình quy tắc (màn Quy trình tự động). Tắt ⇒ không tự gán.
+
+### 27.5 Đổi cấn trừ sau khi lưu
+
+- Phiếu chỉ sửa được ở nháp / bổ sung / từ chối (và phiếu bị yêu cầu bổ sung sau duyệt). Khi cấn trừ đổi (khoản, số tiền, lãi, phí) hoặc phiếu đổi đối tác, PATCH **gỡ** liên kết R7 đã gán trước đó (`releaseOffsetRuleLinks`, có lý do). Lúc phiếu chờ duyệt lại không còn liên kết giữ sức chứa cũ; duyệt lại sẽ gán theo lựa chọn mới. Liên kết gán tay không bị đụng.
+- Phiếu đã huỷ / từ chối / hết hạn: liên kết R7 vẫn ở trạng thái hiệu lực trong DB nhưng không giữ sức chứa (`reservingLinks`) và không tính đã trả / đã cấn trừ, cùng cơ chế với liên kết khác.
+- R6 không đụng liên kết này: R6 chỉ xử lý khoản vay sinh ra từ phiếu (`disbursement` / `funded_by`).
+
+### 27.6 Giao diện
+
+- **Form phiếu chi** (`screens/create-form.tsx`, mục "Cấn trừ khoản vay"): checkbox; loại (khoản vay / công nợ phải trả); khoản (theo đối tác: khoản vay đang vay qua `usePartnerLoans`, công nợ phải trả còn dư qua `usePartnerDebts`); số tiền cấn trừ (trống = cả phiếu); lãi / phí (chỉ khoản vay); gốc tự tính. Bật "vay để chi" thì tắt cấn trừ. Đổi đối tác thì bỏ khoản đã chọn. Mọi lần lưu gửi `options.offset` (kể cả null) để sửa phiếu có thể bỏ cấn trừ đã lưu.
+- **Hồ sơ phiếu** (tab Tóm tắt): `OffsetBanner` (`components/voucher-v2.tsx`): "sẽ tự gán khi duyệt xong" / "đã gán — xem tab Liên kết" / "không còn hiệu lực" (huỷ, từ chối, hết hạn).
+
+### 27.7 Kiểm thử
+
+- API: `domain/vouchers/offset-rules.test.ts` (kiểm thuần: `planOffsetOptions`, `offsetLinkSpecOf`, lưu / đọc, `sameOffsetPlan`). Cập nhật danh sách quy tắc R1..R7 trong `engine.test.ts` / `engine.keys.test.ts`.
+- Web: `app/v2/offset-options.test.ts` (form → body, nhãn ô chọn); `screens/create-form.test.ts` (đổi đối tác bỏ cấn trừ).
+- **Chưa có** test tích hợp DB cho luồng lưu → duyệt → R7 và chưa có E2E cho kịch bản này. Cần kiểm trên app đang chạy.
+
+### 27.8 Chưa làm / lưu ý
+
+- Mỗi phiếu chỉ cấn trừ **một** khoản. Muốn cấn nhiều khoản: tách phiếu, hoặc gán tay thêm liên kết trong phần sức chứa còn lại.
+- Sửa cấn trừ sau khi đã duyệt: phiếu phải được yêu cầu bổ sung (về bước sửa), sửa rồi duyệt lại.
+- Lãi / phí chỉ cho khoản vay ngân hàng; công nợ không tách.
 
 ## Quyết định thiết kế bổ sung (chờ duyệt đưa vào v2/v2.md)
 

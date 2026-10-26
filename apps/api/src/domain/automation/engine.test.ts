@@ -178,11 +178,11 @@ describe('automation › đăng ký bộ xử lý (registerRule)', () => {
 });
 
 describe('automation › quy tắc mặc định (seed)', () => {
-  it('R1,R2,R3,R5,R6 bật; R4 tắt; tham số R2/R3 đúng v2 §11', () => {
+  it('R1,R2,R3,R5,R6,R7 bật; R4 tắt; tham số R2/R3 đúng v2 §11', () => {
     const byCode = Object.fromEntries(DEFAULT_AUTOMATION_RULES.map((r) => [r.code, r]));
-    expect(Object.keys(byCode).sort()).toEqual(['R1', 'R2', 'R3', 'R4', 'R5', 'R6']);
+    expect(Object.keys(byCode).sort()).toEqual(['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7']);
     expect(byCode.R4?.enabled).toBe(false);
-    for (const code of ['R1', 'R2', 'R3', 'R5', 'R6']) expect(byCode[code]?.enabled).toBe(true);
+    for (const code of ['R1', 'R2', 'R3', 'R5', 'R6', 'R7']) expect(byCode[code]?.enabled).toBe(true);
     expect(byCode.R2?.params).toMatchObject({ term_months: 12, due_offset_months: 11, r2_create_at: 'save' });
     expect(byCode.R3?.params).toMatchObject({ term_months: 12, due_offset_months: 11 });
     expect(byCode.R3?.trigger_event).toBe('voucher.approved');

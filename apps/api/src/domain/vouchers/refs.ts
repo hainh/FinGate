@@ -11,11 +11,15 @@
  * làm trực tiếp trên collection `tags` theo `company_id`.
  */
 
-import { ApiError, AUTOMATION_RULE_LABEL, type AutomationRuleCode } from '@fingate/shared';
+import { ApiError, AUTOMATION_RULE_LABEL, formatMoney, money, type AutomationRuleCode } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
 import {
+  allocationOf,
+  assertDebtOffsetCapacity,
   assertDocumentFreeForNewLoan,
   assertLoanDisbursementCapacity,
+  assertLoanRepaymentCapacity,
+  documentAllocatedTotalOf,
   listLinksFor,
   removeLink,
   type LinkActor,
@@ -23,7 +27,9 @@ import {
   type LinkObjectType,
 } from '../links/index.ts';
 import { ensureManualLink } from '../automation/actions/link.ts';
+import { assertOffsetDirection, directionOf, isReadOnlyDebt } from '../debt/rules.ts';
 import { bankAccountLabelOf } from '../queries/index.ts';
+import { loanOpenForRepayment, offsetRuleLinksOf } from './offset.ts';
 import {
   assertAmountEditAllowed,
   assertLenderBank,
@@ -33,14 +39,23 @@ import {
   assertVoucherPartner,
   dedupeIds,
   effectiveLoanAmount,
+  effectiveOffsetAmount,
   LOAN_ATTACHABLE_STATUSES,
   MAX_TAGS_PER_VOUCHER,
+  offsetError,
+  offsetLinkSpecOf,
   planLoanOptions,
+  planOffsetOptions,
+  sameOffsetPlan,
+  storedOffsetToPlan,
   type LoanInput,
   type LoanKind,
   type LoanMode,
   type LoanPlan,
   type LoanTermsPlan,
+  type OffsetInput,
+  type OffsetPlan,
+  type OffsetTarget,
   type PartnerFacts,
   type VoucherKind,
 } from './rules.ts';
@@ -326,6 +341,117 @@ export async function resolveLoanPlan(input: {
   return plan;
 }
 
+/**
+ * Cấn trừ khoản vay (R7): kiểm quy tắc thuần (`planOffsetOptions`) rồi kiểm BẢN GHI khi lưu — khoản nợ ngân hàng / công nợ
+ * thuộc công ty và ĐÚNG đối tác của phiếu, khoản vay còn đang vay, công nợ phải trả còn dư, và phiếu còn đủ số tiền sau
+ * các liên kết KHÁC của chính phiếu. Sức chứa không tính liên kết R7 của chính phiếu (sẽ được thay khi duyệt).
+ * Lần lưu không đổi cấn trừ so với `previous` thì bỏ qua kiểm bản ghi (như vay): sửa phiếu khác không bị chặn vì khoản cũ.
+ */
+export async function resolveOffsetPlan(input: {
+  companyId: string;
+  voucherId: string | null;
+  voucherKind: VoucherKind;
+  voucherPartnerId: string | null;
+  /** loại đối tác của phiếu (`bank` / `customer` / `supplier`…) — quyết định khoản nào được cấn trừ. */
+  voucherPartnerType: string | null;
+  voucherAmountMinor: bigint;
+  /** tuỳ chọn vay cùng phiếu (vay để chi không được cấn trừ cùng lúc). */
+  voucherLoanKind?: LoanKind | null;
+  offset: OffsetInput | null;
+  previous: OffsetPlan | null;
+  /** số tiền phiếu ở lần lưu trước (để nhận ra cấn trừ theo phiếu vừa đổi số tiền). */
+  previousVoucherAmountMinor?: bigint | null;
+}): Promise<OffsetPlan | null> {
+  const plan = planOffsetOptions(input.offset, {
+    voucherKind: input.voucherKind,
+    voucherPartnerId: input.voucherPartnerId,
+    voucherAmountMinor: input.voucherAmountMinor,
+    voucherLoanKind: input.voucherLoanKind ?? null,
+  });
+  if (!plan || !input.voucherPartnerId) return plan;
+  const spec = offsetLinkSpecOf(plan, input.voucherAmountMinor);
+
+  // phần phân bổ KHÁC của phiếu (gán tay) + số tiền cấn trừ không được vượt số tiền phiếu
+  const ruleLinks = input.voucherId ? await offsetRuleLinksOf(input.voucherId) : [];
+  const allocatedTotal = input.voucherId ? await documentAllocatedTotalOf(input.voucherId) : 0n;
+  const otherAllocated = allocatedTotal - ruleLinks.reduce((s, l) => s + allocationOf(l), 0n);
+  if (otherAllocated + spec.amount_minor > input.voucherAmountMinor) {
+    throw offsetError(
+      'amount_minor',
+      `Phiếu đã phân bổ ${formatMoney(money(otherAllocated, 'VND'), { mode: 'compact' })} cho liên kết khác — không đủ để cấn trừ ${formatMoney(money(spec.amount_minor, 'VND'), { mode: 'compact' })}`,
+    );
+  }
+
+  const unchanged = sameOffsetPlan(input.previous, input.previousVoucherAmountMinor ?? input.voucherAmountMinor, plan, input.voucherAmountMinor);
+  if (!unchanged) {
+    const partner = { companyId: input.companyId, voucherId: input.voucherId, partnerId: input.voucherPartnerId, partnerType: input.voucherPartnerType };
+    if (plan.target === 'bank_debt') {
+      await assertLoanOffset({ ...partner, loanId: plan.target_id, principalMinor: spec.split?.principal ?? 0n });
+    } else {
+      await assertDebtOffset({ ...partner, debtId: plan.target_id, amountMinor: spec.amount_minor });
+    }
+  }
+  return plan;
+}
+
+/** Khoản vay được cấn trừ: thuộc công ty, đúng ngân hàng của phiếu, còn đang vay, còn sức chứa trả nợ. */
+async function assertLoanOffset(input: {
+  companyId: string;
+  voucherId: string | null;
+  partnerId: string;
+  partnerType: string | null;
+  loanId: string;
+  principalMinor: bigint;
+}): Promise<void> {
+  const loan = OBJECT_ID_RE.test(input.loanId)
+    ? await Models.BankDebt.findOne({ _id: input.loanId, company_id: input.companyId } as never)
+        .select({ code: 1, partner_id: 1 })
+        .lean<{ code?: string; partner_id?: unknown } | null>()
+    : null;
+  if (!loan || String(loan.partner_id ?? '') !== input.partnerId) {
+    throw offsetError('target_id', 'Khoản vay không thuộc ngân hàng của phiếu');
+  }
+  if (input.partnerType !== 'bank') throw offsetError('target_id', 'Cấn trừ khoản vay ngân hàng: đối tác của phiếu phải là Ngân hàng');
+  if (!(await loanOpenForRepayment(input.loanId))) {
+    throw offsetError('target_id', `Khoản vay ${loan.code ?? ''} không còn đang vay — không cấn trừ được`);
+  }
+  await assertLoanRepaymentCapacity({ loanId: input.loanId, principalMinor: input.principalMinor, excludeDocumentId: input.voucherId });
+}
+
+/** Công nợ được cấn trừ: thuộc công ty, đúng đối tác (KH / NCC) của phiếu, phải trả (phiếu chi), còn dư. */
+async function assertDebtOffset(input: {
+  companyId: string;
+  voucherId: string | null;
+  partnerId: string;
+  partnerType: string | null;
+  debtId: string;
+  amountMinor: bigint;
+}): Promise<void> {
+  const debt = OBJECT_ID_RE.test(input.debtId)
+    ? await Models.DebtVoucher.findOne({ _id: input.debtId, company_id: input.companyId } as never)
+        .select({ partner_id: 1, party_type: 1, direction: 1, side: 1 })
+        .lean<{ partner_id?: unknown; party_type?: string | null; direction?: string | null; side?: string | null } | null>()
+    : null;
+  if (!debt || String(debt.partner_id ?? '') !== input.partnerId) throw offsetError('target_id', 'Công nợ không thuộc đối tác của phiếu');
+  if (input.partnerType !== 'customer' && input.partnerType !== 'supplier') {
+    throw offsetError('target_id', 'Cấn trừ công nợ: đối tác của phiếu phải là khách hàng hoặc nhà cung cấp');
+  }
+  if (isReadOnlyDebt(debt.party_type)) throw offsetError('target_id', 'Công nợ nhân viên (TK 334) chỉ đọc — không cấn trừ được');
+  assertOffsetDirection(directionOf(debt), 'spend');
+  await assertDebtOffsetCapacity({ debtVoucherId: input.debtId, amountMinor: input.amountMinor, excludeDocumentId: input.voucherId });
+}
+
+/** Mã khoản được cấn trừ (trong công ty của phiếu) — để hiển thị; không có ⇒ null. */
+async function offsetTargetCodeOf(plan: OffsetPlan, companyId: string): Promise<string | null> {
+  if (!OBJECT_ID_RE.test(plan.target_id)) return null;
+  const filter = { _id: plan.target_id, company_id: companyId } as never;
+  const row =
+    plan.target === 'bank_debt'
+      ? await Models.BankDebt.findOne(filter).select({ code: 1 }).lean<{ code?: string } | null>()
+      : await Models.DebtVoucher.findOne(filter).select({ code: 1 }).lean<{ code?: string } | null>();
+  return row?.code ? String(row.code) : null;
+}
+
 export interface TransferTargetPlan {
   company_id: string;
   account_id: string | null;
@@ -484,6 +610,19 @@ export interface LoanView {
   terms: LoanTermsPlan | null;
 }
 
+/** Cấn trừ khoản vay đã lưu trên phiếu chi (`options.offset`), kèm mã khoản và số tiền hiệu lực. */
+export interface OffsetView {
+  target: OffsetTarget;
+  target_id: string;
+  target_code: string | null;
+  /** Số tiền đã ghi (null = toàn bộ số tiền phiếu). */
+  amount_minor: string | null;
+  /** Số tiền cấn trừ hiệu lực (đã ghi, hoặc số tiền phiếu hiện tại). */
+  effective_amount_minor: string;
+  interest_minor: string | null;
+  fee_minor: string | null;
+}
+
 export interface TransferView {
   company_id: string;
   company_name: string | null;
@@ -567,7 +706,7 @@ export interface VoucherRefView {
   payee: Record<string, unknown>;
   tag_ids: string[];
   tags: TagView[];
-  options: { loan: LoanView | null };
+  options: { loan: LoanView | null; offset: OffsetView | null };
   transfer_target: TransferView | null;
   origin: OriginView;
   links: LinkView[];
@@ -763,6 +902,8 @@ export async function buildVoucherRefView(doc: Record<string, unknown>, scopeCom
   const tagIds = ((doc.tag_ids ?? []) as unknown[]).map(String);
   const loanStored = ((doc.options as { loan?: Record<string, unknown> | null } | null | undefined)?.loan ?? null) as Record<string, unknown> | null;
   const loanPlan = storedLoanToPlan(loanStored);
+  const offsetStored = ((doc.options as { offset?: Record<string, unknown> | null } | null | undefined)?.offset ?? null) as Record<string, unknown> | null;
+  const offsetPlan = storedOffsetToPlan(offsetStored);
   const legacyTarget = (doc.target ?? null) as { company_id?: unknown; account_id?: unknown } | null;
   const v2Target = (doc.transfer_target ?? null) as { company_id?: unknown; account_id?: unknown } | null;
   const targetRaw = v2Target?.company_id ? v2Target : legacyTarget?.company_id ? legacyTarget : null;
@@ -836,6 +977,18 @@ export async function buildVoucherRefView(doc: Record<string, unknown>, scopeCom
       }
     : null;
 
+  const offset: OffsetView | null = offsetPlan
+    ? {
+        target: offsetPlan.target,
+        target_id: offsetPlan.target_id,
+        target_code: await offsetTargetCodeOf(offsetPlan, companyId),
+        amount_minor: offsetPlan.amount_minor === null ? null : offsetPlan.amount_minor.toString(),
+        effective_amount_minor: effectiveOffsetAmount(offsetPlan, amountMinor).toString(),
+        interest_minor: offsetPlan.interest_minor === null ? null : offsetPlan.interest_minor.toString(),
+        fee_minor: offsetPlan.fee_minor === null ? null : offsetPlan.fee_minor.toString(),
+      }
+    : null;
+
   const targetCompany = targetRaw?.company_id ? targetCompanyMap.get(String(targetRaw.company_id)) : undefined;
   const transfer_target: TransferView | null = targetRaw?.company_id
     ? {
@@ -854,7 +1007,7 @@ export async function buildVoucherRefView(doc: Record<string, unknown>, scopeCom
     payee,
     tag_ids: tags.map((t) => t._id),
     tags,
-    options: { loan },
+    options: { loan, offset },
     transfer_target,
     origin: {
       kind: origin.kind === 'automation' ? 'automation' : 'manual',

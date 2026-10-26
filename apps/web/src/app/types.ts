@@ -9,6 +9,7 @@ import type {
   AutomationRunView,
   DocLink,
   DocLoanView,
+  DocOffsetView,
   DocOrigin,
   DocTagRef,
   DocTransferView,
@@ -307,7 +308,7 @@ export interface DocumentDetail {
   tag_ids?: string[];
   tags?: DocTagRef[];
   /** [v2] tuỳ chọn vay: `borrow` (phiếu thu đi vay) hoặc `fund` (phiếu chi vay để chi). */
-  options?: { loan: DocLoanView | null } | null;
+  options?: { loan: DocLoanView | null; offset?: DocOffsetView | null } | null;
   /** [v2] chuyển nội bộ theo ID (đích nhận tiền). */
   transfer_target?: DocTransferView | null;
   /** [v2] nguồn gốc: thủ công / tự động (quy tắc + lượt chạy). */

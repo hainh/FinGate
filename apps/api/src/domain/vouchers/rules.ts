@@ -268,6 +268,178 @@ export function effectiveLoanAmount(plan: { amount_minor: bigint | null }, vouch
 }
 
 /* ================================================================== *
+ * Cấn trừ khoản vay trên phiếu chi (R7: duyệt xong thì tự gán)
+ * ================================================================== */
+
+/** Đích cấn trừ (khớp `offsetTarget` ở contract): khoản nợ ngân hàng hoặc công nợ phải trả. */
+export type OffsetTarget = 'bank_debt' | 'debt_voucher';
+
+/** Đầu vào cấn trừ (từ contract hoặc từ bản đã lưu). */
+export interface OffsetInput {
+  target: OffsetTarget;
+  target_id?: string | null;
+  amount_minor?: string | bigint | null;
+  interest_minor?: string | bigint | null;
+  fee_minor?: string | bigint | null;
+}
+
+/** Kế hoạch cấn trừ đã chuẩn hoá (lưu vào `documents.options.offset`). Trường null = không áp dụng / theo phiếu. */
+export interface OffsetPlan {
+  target: OffsetTarget;
+  target_id: string;
+  /** null = toàn bộ số tiền phiếu (đọc tại thời điểm duyệt). */
+  amount_minor: bigint | null;
+  /** null = không tách. Chỉ khoản vay ngân hàng. */
+  interest_minor: bigint | null;
+  fee_minor: bigint | null;
+}
+
+export interface OffsetContext {
+  voucherKind: VoucherKind;
+  /** Đối tác của phiếu (null khi chưa chọn). */
+  voucherPartnerId: string | null;
+  voucherAmountMinor: bigint;
+  /** Tuỳ chọn vay của chính phiếu (nếu có). */
+  voucherLoanKind?: LoanKind | null;
+}
+
+/** Lỗi cấn trừ gắn đúng ô trên form (`options.offset.<field>`). */
+export function offsetError(field: string, detail: string): ApiError {
+  return new ApiError({ code: 'FG-VAL-001', detail, errors: { [`options.offset.${field}`]: detail } });
+}
+
+function offsetFail(field: string, detail: string): never {
+  throw offsetError(field, detail);
+}
+
+function offsetMinorOrNull(value: string | bigint | null | undefined, field: string): bigint | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'bigint') return value;
+  if (/^\d+$/.test(value)) return BigInt(value);
+  return offsetFail(field, 'Số tiền phải là số nguyên không âm');
+}
+
+/**
+ * Chuẩn hoá & kiểm tra cấn trừ khoản vay theo loại phiếu. Thuần — việc kiểm bản ghi (khoản vay / công nợ thuộc công ty
+ * và đúng đối tác, còn đang vay / còn dư, sức chứa) làm ở `refs.resolveOffsetPlan`.
+ * - chỉ phiếu chi, và phiếu phải có đối tác;
+ * - số tiền cấn trừ (nếu ghi) > 0 và ≤ số tiền phiếu; đúng bằng số tiền phiếu ⇒ null (theo phiếu khi duyệt);
+ * - lãi / phí chỉ cho khoản vay ngân hàng; lãi + phí ≤ số tiền cấn trừ (phần còn lại là gốc).
+ */
+export function planOffsetOptions(input: OffsetInput | null | undefined, ctx: OffsetContext): OffsetPlan | null {
+  if (!input) return null;
+  if (ctx.voucherKind !== 'spend') offsetFail('target', 'Chỉ phiếu chi mới cấn trừ khoản vay');
+  // vay để chi tạo khoản MỚI từ chính phiếu này; cùng lúc cấn trừ khoản cũ là hai nghiệp vụ trái nhau ⇒ chặn
+  if (ctx.voucherLoanKind === 'fund') offsetFail('target', 'Phiếu vay ngân hàng để chi không cấn trừ khoản vay cùng lúc');
+  if (!ctx.voucherPartnerId) offsetFail('target_id', 'Chọn đối tác trên phiếu trước khi cấn trừ');
+  if (!input.target_id || !OBJECT_ID_RE.test(input.target_id)) offsetFail('target_id', 'Chọn khoản vay hoặc công nợ cần cấn trừ');
+  const amount = offsetMinorOrNull(input.amount_minor, 'amount_minor');
+  if (amount !== null && (amount <= 0n || amount > ctx.voucherAmountMinor)) {
+    offsetFail('amount_minor', 'Số tiền cấn trừ phải lớn hơn 0 và không vượt số tiền phiếu chi');
+  }
+  const interest = offsetMinorOrNull(input.interest_minor, 'interest_minor') ?? 0n;
+  const fee = offsetMinorOrNull(input.fee_minor, 'fee_minor') ?? 0n;
+  if (input.target === 'debt_voucher' && (interest > 0n || fee > 0n)) {
+    offsetFail('interest_minor', 'Chỉ khoản vay ngân hàng mới tách lãi / phí');
+  }
+  if (interest + fee > (amount ?? ctx.voucherAmountMinor)) {
+    offsetFail('interest_minor', 'Lãi + phí không được vượt số tiền cấn trừ');
+  }
+  return {
+    target: input.target,
+    target_id: input.target_id,
+    // bằng đúng số tiền phiếu ⇒ null để đi theo số tiền đã chốt khi duyệt (như vay để chi)
+    amount_minor: amount === null || amount === ctx.voucherAmountMinor ? null : amount,
+    interest_minor: interest > 0n ? interest : null,
+    fee_minor: fee > 0n ? fee : null,
+  };
+}
+
+/** Số tiền cấn trừ hiệu lực: số đã ghi, hoặc toàn bộ số tiền phiếu (đọc tại thời điểm duyệt). */
+export function effectiveOffsetAmount(plan: { amount_minor: bigint | null }, voucherAmountMinor: bigint): bigint {
+  return plan.amount_minor ?? voucherAmountMinor;
+}
+
+/** Quan hệ liên kết cấn trừ tạo ra: khoản vay ngân hàng ⇒ trả nợ (`repayment`); công nợ ⇒ cấn trừ (`offset`). */
+export function offsetRelationOf(target: OffsetTarget): 'repayment' | 'offset' {
+  return target === 'bank_debt' ? 'repayment' : 'offset';
+}
+
+/** Đặc tả liên kết mà R7 gán khi duyệt: phiếu → khoản, số tiền hiệu lực; khoản vay ngân hàng tách gốc / lãi / phí. */
+export interface OffsetLinkSpec {
+  relation: 'repayment' | 'offset';
+  to_type: OffsetTarget;
+  to_id: string;
+  amount_minor: bigint;
+  split: { principal: bigint; interest: bigint; fee: bigint } | null;
+}
+
+export function offsetLinkSpecOf(plan: OffsetPlan, voucherAmountMinor: bigint): OffsetLinkSpec {
+  const amount = effectiveOffsetAmount(plan, voucherAmountMinor);
+  const base = { relation: offsetRelationOf(plan.target), to_type: plan.target, to_id: plan.target_id, amount_minor: amount };
+  if (plan.target === 'debt_voucher') return { ...base, split: null };
+  const interest = plan.interest_minor ?? 0n;
+  const fee = plan.fee_minor ?? 0n;
+  // đã kiểm lúc lưu; số tiền phiếu đổi sau đó (vd cấp duyệt hạ tiền) có thể làm lãi + phí vượt ⇒ báo rõ
+  if (interest + fee > amount) {
+    throw new ApiError({ code: 'FG-VAL-001', detail: 'Số tiền phiếu không đủ cho lãi + phí đã tách của khoản cấn trừ' });
+  }
+  return { ...base, split: { principal: amount - interest - fee, interest, fee } };
+}
+
+/** Biểu diễn đã lưu của `options.offset` → kế hoạch (BigInt, chuỗi ID). */
+export function storedOffsetToPlan(stored: Record<string, unknown> | null | undefined): OffsetPlan | null {
+  if (!stored || !stored.target || stored.target_id === null || stored.target_id === undefined) return null;
+  const minor = (v: unknown): bigint | null => (v === null || v === undefined ? null : BigInt(String(v)));
+  return {
+    target: String(stored.target) as OffsetTarget,
+    target_id: String(stored.target_id),
+    amount_minor: minor(stored.amount_minor),
+    interest_minor: minor(stored.interest_minor),
+    fee_minor: minor(stored.fee_minor),
+  };
+}
+
+/** Kế hoạch → đầu vào (chuỗi) để chạy lại kiểm tra khi phiếu đổi đối tác / số tiền. */
+export function planToOffsetInput(plan: OffsetPlan): OffsetInput {
+  const text = (v: bigint | null): string | null => (v === null ? null : v.toString());
+  return {
+    target: plan.target,
+    target_id: plan.target_id,
+    amount_minor: text(plan.amount_minor),
+    interest_minor: text(plan.interest_minor),
+    fee_minor: text(plan.fee_minor),
+  };
+}
+
+/** Kế hoạch → subdocument `options.offset` để ghi (Mongoose ép chuỗi ID → ObjectId, BigInt giữ nguyên). */
+export function planToStoredOffset(plan: OffsetPlan | null): Record<string, unknown> | null {
+  if (!plan) return null;
+  return {
+    target: plan.target,
+    target_id: plan.target_id,
+    amount_minor: plan.amount_minor,
+    interest_minor: plan.interest_minor,
+    fee_minor: plan.fee_minor,
+  };
+}
+
+/**
+ * Hai kế hoạch cấn trừ cho cùng một kết quả (cùng khoản, cùng số tiền hiệu lực, cùng lãi / phí). Dùng để biết lần lưu
+ * có đổi cấn trừ hay không: đổi ⇒ liên kết R7 đã gán trước đó phải gỡ, duyệt lại sẽ gán theo lựa chọn mới.
+ */
+export function sameOffsetPlan(a: OffsetPlan | null, aVoucherAmountMinor: bigint, b: OffsetPlan | null, bVoucherAmountMinor: bigint): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.target === b.target &&
+    a.target_id === b.target_id &&
+    effectiveOffsetAmount(a, aVoucherAmountMinor) === effectiveOffsetAmount(b, bVoucherAmountMinor) &&
+    (a.interest_minor ?? 0n) === (b.interest_minor ?? 0n) &&
+    (a.fee_minor ?? 0n) === (b.fee_minor ?? 0n)
+  );
+}
+
+/* ================================================================== *
  * Chuyển nội bộ theo ID (§11.6)
  * ================================================================== */
 

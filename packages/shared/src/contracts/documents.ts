@@ -88,6 +88,45 @@ export const loanOptions = z
   });
 export type LoanOptions = z.infer<typeof loanOptions>;
 
+/** Số tiền minor từ chuỗi đã kiểm định dạng; sai / trống ⇒ 0 (không ném lỗi trong superRefine). */
+const minorOrZero = (v: string | null | undefined): bigint => (v && /^\d+$/.test(v) ? BigInt(v) : 0n);
+
+/** Đích cấn trừ: khoản nợ ngân hàng (trả nợ, quan hệ `repayment`) hoặc công nợ phải trả (cấn trừ, quan hệ `offset`). */
+export const offsetTarget = z.enum(['bank_debt', 'debt_voucher']);
+export type OffsetTarget = z.infer<typeof offsetTarget>;
+
+/**
+ * `options.offset` — đánh dấu CẤN TRỪ KHOẢN VAY trên phiếu chi. Khi phiếu được duyệt xong, quy tắc R7 tự gán phiếu
+ * vào khoản đã chọn (liên kết nguồn Tự động · R7). `amount_minor` bỏ trống = toàn bộ số tiền phiếu.
+ * Lãi / phí (chỉ khoản vay ngân hàng) tách từ số tiền cấn trừ; phần còn lại là gốc (làm giảm dư nợ).
+ */
+export const offsetOptions = z
+  .object({
+    target: offsetTarget,
+    target_id: objectId.describe('Khoản nợ ngân hàng, hoặc công nợ phải trả, cùng đối tác với phiếu'),
+    amount_minor: minorNonNeg.nullable().optional().describe('Số tiền cấn trừ — bỏ trống = toàn bộ số tiền phiếu'),
+    interest_minor: minorNonNeg.nullable().optional().describe('Trong đó lãi (chỉ khoản vay ngân hàng)'),
+    fee_minor: minorNonNeg.nullable().optional().describe('Trong đó phí (chỉ khoản vay ngân hàng)'),
+  })
+  .superRefine((v, ctx) => {
+    if (v.target === 'debt_voucher' && (minorOrZero(v.interest_minor) > 0n || minorOrZero(v.fee_minor) > 0n)) {
+      ctx.addIssue({ code: 'custom', path: ['interest_minor'], message: 'Chỉ khoản vay ngân hàng mới tách lãi / phí' });
+    }
+  });
+export type OffsetOptions = z.infer<typeof offsetOptions>;
+
+/** Dạng ĐỌC `options.offset` (server nạp mã khoản và số tiền hiệu lực). */
+export const offsetOptionsView = z.object({
+  target: offsetTarget,
+  target_id: objectId,
+  target_code: z.string().nullable(),
+  amount_minor: minorNonNeg.nullable(),
+  effective_amount_minor: minorNonNeg,
+  interest_minor: minorNonNeg.nullable(),
+  fee_minor: minorNonNeg.nullable(),
+});
+export type OffsetOptionsView = z.infer<typeof offsetOptionsView>;
+
 /** Chuyển tiền nội bộ: công ty / tài khoản đích theo ID (v2 §11.6 — không nhận diện theo chuỗi). Dạng ĐỌC (dữ liệu cũ có thể thiếu TK). */
 export const transferTarget = z.object({
   company_id: objectId,
@@ -199,8 +238,8 @@ const documentFields = z.object({
     partner_id: objectId.nullable().optional().describe('Đối tác (danh bạ công ty) — v2'),
     /** ★ v2 [MỚI]: tag gắn phiếu (tối đa 50). */
     tag_ids: z.array(objectId).max(50).optional(),
-    /** ★ v2 [MỚI]: tuỳ chọn tự động — `options.loan`. */
-    options: z.object({ loan: loanOptions.nullable().optional() }).nullable().optional(),
+    /** ★ v2 [MỚI]: tuỳ chọn tự động — `options.loan` (vay) và `options.offset` (cấn trừ khoản vay, R7). */
+    options: z.object({ loan: loanOptions.nullable().optional(), offset: offsetOptions.nullable().optional() }).nullable().optional(),
     /** ★ v2 [MỚI]: chuyển tiền nội bộ theo ID — thay dần `target` (v1). */
     transfer_target: transferTargetInput.nullable().optional(),
     evidence_required: z
@@ -493,8 +532,8 @@ export const documentDetail = z.object({
   /** ★ v2: tag gắn phiếu. */
   tag_ids: z.array(objectId).default([]),
   tags: z.array(z.object({ _id: objectId, name: z.string(), color: z.string() })).optional(),
-  /** ★ v2: tuỳ chọn tự động (vay). */
-  options: z.object({ loan: loanOptions.nullable().optional() }).nullable().optional(),
+  /** ★ v2: tuỳ chọn tự động (vay, cấn trừ khoản vay). */
+  options: z.object({ loan: loanOptions.nullable().optional(), offset: offsetOptionsView.nullable().optional() }).nullable().optional(),
   /** ★ v2: chuyển nội bộ theo ID. */
   transfer_target: transferTarget.nullable().optional(),
   /** ★ v2: nguồn gốc — thủ công / tự động (quy tắc + lượt chạy). */
