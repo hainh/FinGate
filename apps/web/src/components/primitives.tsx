@@ -614,7 +614,7 @@ export function FgAlert({
       showIcon
       closable={closable}
       action={action}
-      message={title}
+      title={title}
       description={description}
       style={{ borderRadius: 'var(--fg-radius-md)', ...style }}
       banner={false}
