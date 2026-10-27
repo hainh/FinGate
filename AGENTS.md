@@ -3,7 +3,7 @@ backend app port 8024
 
 không tự chạy pnpm dev để test, phải yêu cầu người dùng tự chạy.
 
-Commit và push sau khi làm xong
+Commit vào main sau khi làm xong
 
 tài liệu trong thư mục docs/
 
