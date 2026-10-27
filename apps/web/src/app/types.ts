@@ -178,7 +178,7 @@ export interface DashboardPartnersWire {
 export interface DashboardLoansPendingWire {
   count: number;
   total: MoneyWire;
-  items: { id: string; code: string; company_id: string; partner_name: string; principal: MoneyWire; created_at: string | null; href: string }[];
+  items: { id: string; code: string; company_id: string; partner_id: string | null; partner_name: string; principal: MoneyWire; created_at: string | null; href: string }[];
 }
 
 export interface DashboardAutomationWire {
@@ -451,6 +451,8 @@ export interface MaturityRowWire {
   contract_code: string;
   company_id: string;
   company_name: string;
+  /** Ngân hàng cho vay (đối tác) — link tới trang đối tác. */
+  partner_id: string | null;
   bank_name: string;
   outstanding: MoneyWire;
   interest_to_due: MoneyWire;
@@ -588,6 +590,8 @@ export interface BankTransactionRow {
   currency: string;
   content: string;
   counterparty: string;
+  /** Đối tác của phiếu (nếu có) — link tới trang đối tác. */
+  partner_id: string | null;
   reason: string;
   document: { id: string; code: string; kind: string; href: string } | null;
 }

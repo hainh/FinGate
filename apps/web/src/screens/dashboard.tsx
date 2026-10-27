@@ -164,7 +164,13 @@ function LoansPendingCard({ data }: { data: DashboardLoansPendingWire | null | u
                   </Link>
                   <br />
                   <FgText style="caption" color="muted">
-                    {l.partner_name}
+                    {l.partner_id ? (
+                      <Link to={`/doi-tac/${l.partner_id}`} className="fg-link">
+                        {l.partner_name}
+                      </Link>
+                    ) : (
+                      l.partner_name
+                    )}
                   </FgText>
                 </div>
                 <FgMoneyStack value={moneyFromWire(l.principal)} />
@@ -479,7 +485,13 @@ export function DashboardScreen(): ReactNode {
                         {ro.items.slice(0, 5).map((m) => (
                           <div key={m.loan_id} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                             <FgText style="bodyS" color="muted">
-                              {m.bank_name}
+                              {m.partner_id ? (
+                                <Link to={`/doi-tac/${m.partner_id}`} className="fg-link">
+                                  {m.bank_name}
+                                </Link>
+                              ) : (
+                                m.bank_name
+                              )}
                             </FgText>
                             <span className="fg-chip" style={{ color: `var(--fg-status-${m.tone}-text)`, borderColor: `var(--fg-status-${m.tone}-border)`, background: `var(--fg-status-${m.tone}-bg)` }}>
                               {m.label}

@@ -61,7 +61,18 @@ function BankTotalsSection(): ReactNode {
                 // hàng nhiều ngân hàng: phân trang bảng (không render cả danh sách một lượt)
                 pagination={{ pageSize: 20, size: 'small', hideOnSinglePage: true }}
                 columns={[
-                  { title: 'Ngân hàng', key: 'bn', render: (_v, r: BankTotalRow) => r.bank_name },
+                  {
+                    title: 'Ngân hàng',
+                    key: 'bn',
+                    render: (_v, r: BankTotalRow) =>
+                      r.partner_id ? (
+                        <Link className="fg-link" to={`/doi-tac/${r.partner_id}`}>
+                          {r.bank_name}
+                        </Link>
+                      ) : (
+                        r.bank_name
+                      ),
+                  },
                   { title: 'Số khoản', key: 'cnt', align: 'right', render: (_v, r: BankTotalRow) => r.count },
                   { title: 'Dư nợ', key: 'od', align: 'right', render: (_v, r: BankTotalRow) => <FgMoneyStack value={moneyOf(r.outstanding)} emphasis /> },
                   { title: 'Đáo hạn ≤ 7 ngày', key: 'd7', align: 'right', render: (_v, r: BankTotalRow) => <FgMoneyStack value={moneyOf(r.due7)} /> },
@@ -137,7 +148,18 @@ function PendingDisbursementSection(): ReactNode {
                     ),
                   },
                   { title: 'Công ty', dataIndex: 'company_name', key: 'co' },
-                  { title: 'Ngân hàng', key: 'bn', render: (_v, r: LoanRow) => r.partner?.name ?? r.bank_name },
+                  {
+                    title: 'Ngân hàng',
+                    key: 'bn',
+                    render: (_v, r: LoanRow) =>
+                      r.partner_id ? (
+                        <Link className="fg-link" to={`/doi-tac/${r.partner_id}`}>
+                          {r.partner?.name ?? r.bank_name}
+                        </Link>
+                      ) : (
+                        (r.partner?.name ?? r.bank_name)
+                      ),
+                  },
                   { title: 'Gốc', dataIndex: 'principal', key: 'pr', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
                   { title: 'Đã gán giải ngân', dataIndex: 'disbursement_planned', key: 'dp', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
                   { title: 'Chưa gán', dataIndex: 'undisbursed', key: 'ud', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} emphasis /> },
@@ -214,7 +236,18 @@ export function RolloversScreen(): ReactNode {
                   columns={[
                     { title: 'Mã khoản', dataIndex: 'contract_code', key: 'cc' },
                     { title: 'Công ty', dataIndex: 'company_name', key: 'co' },
-                    { title: 'Ngân hàng', dataIndex: 'bank_name', key: 'bn' },
+                    {
+                      title: 'Ngân hàng',
+                      key: 'bn',
+                      render: (_v, r) =>
+                        r.partner_id ? (
+                          <Link className="fg-link" to={`/doi-tac/${r.partner_id}`}>
+                            {r.bank_name}
+                          </Link>
+                        ) : (
+                          r.bank_name
+                        ),
+                    },
                     { title: 'Dư nợ', dataIndex: 'outstanding', key: 'od', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} emphasis /> },
                     { title: 'Lãi dự kiến', dataIndex: 'interest_to_due', key: 'int', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },
                     { title: 'Cần chuẩn bị', dataIndex: 'need_prepare', key: 'np', align: 'right', render: (v) => <FgMoneyStack value={moneyFromWire(v)} /> },

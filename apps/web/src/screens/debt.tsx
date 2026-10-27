@@ -235,7 +235,15 @@ function DebtAgingPanel({ direction }: { direction?: DebtDirection }): ReactNode
             key: 'cp',
             render: (_v, r: DebtAgingRow) => (
               <div>
-                <div>{r.counterparty || '—'}</div>
+                <div>
+                  {r.partner_id ? (
+                    <Link className="fg-link" to={`/doi-tac/${r.partner_id}`}>
+                      {r.counterparty || '—'}
+                    </Link>
+                  ) : (
+                    r.counterparty || '—'
+                  )}
+                </div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                   <FgText style="caption" color="muted">
                     {r.company_name}

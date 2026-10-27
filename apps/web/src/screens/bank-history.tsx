@@ -116,7 +116,17 @@ export function BankAccountHistoryScreen(): ReactNode {
                   {
                     title: 'Đơn vị (nhận/nộp)',
                     key: 'cp',
-                    render: (_v, r) => <span>{r.counterparty || '—'}</span>,
+                    render: (_v, r) => (
+                      <span>
+                        {r.partner_id ? (
+                          <Link to={`/doi-tac/${r.partner_id}`} className="fg-link">
+                            {r.counterparty}
+                          </Link>
+                        ) : (
+                          r.counterparty || '—'
+                        )}
+                      </span>
+                    ),
                   },
                   {
                     title: 'Chi tiết',

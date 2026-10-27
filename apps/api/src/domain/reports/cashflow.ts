@@ -209,6 +209,7 @@ export interface ForecastDisbursementItem {
   kind: 'receipt' | 'pending_loan';
   code: string;
   company_id: string;
+  partner_id: string | null;
   partner_name: string;
   date: string | null;
   amount: WireAmount;
@@ -219,6 +220,7 @@ export interface ForecastRepaymentItem {
   bank_debt_id: string;
   code: string;
   company_id: string;
+  partner_id: string | null;
   partner_name: string;
   due_date: string;
   principal: WireAmount;
@@ -364,6 +366,7 @@ export async function cashflowForecast(
         bank_debt_id: id,
         code: String(l.code ?? ''),
         company_id: String(l.company_id ?? ''),
+        partner_id: l.partner_id ? String(l.partner_id) : null,
         partner_name: partnerName,
         due_date: row.due_date,
         principal: w(row.principal),
@@ -407,6 +410,7 @@ export async function cashflowForecast(
       kind: 'receipt',
       code: f.code,
       company_id: f.company_id,
+      partner_id: partnerId ? String(partnerId) : null,
       partner_name: partnerNameOf(receiptPartners, partnerId, 'Chưa gán ngân hàng'),
       date: f.date,
       amount: w(f.amount),
@@ -425,6 +429,7 @@ export async function cashflowForecast(
       kind: 'pending_loan' as const,
       code: String(p.code ?? ''),
       company_id: String(p.company_id ?? ''),
+      partner_id: p.partner_id ? String(p.partner_id) : null,
       partner_name: partnerNameOf(pendingPartners, p.partner_id ? String(p.partner_id) : null, 'Chưa gán ngân hàng'),
       date: null,
       amount: w(toBig(p.principal_minor)),

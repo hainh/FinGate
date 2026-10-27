@@ -274,7 +274,13 @@ function DisbursementRow({ item }: { item: ForecastDisbursementItem }): ReactNod
         )}
         <br />
         <FgText style="caption" color="muted">
-          {item.partner_name}
+          {item.partner_id ? (
+            <Link to={`/doi-tac/${item.partner_id}`} className="fg-link">
+              {item.partner_name}
+            </Link>
+          ) : (
+            item.partner_name
+          )}
           {item.date ? ` · ${dayMonthYear(item.date)}` : ''}
         </FgText>
       </div>
@@ -327,7 +333,14 @@ function RepaymentCard({ rows, total }: { rows: ForecastRepaymentItem[]; total: 
                 </Link>
                 <br />
                 <FgText style="caption" color="muted">
-                  {r.partner_name} · đến hạn {dayMonthYear(r.due_date)} · gốc <FgMoney value={moneyFromWire(r.principal)} mode="compact" /> · lãi{' '}
+                  {r.partner_id ? (
+                    <Link to={`/doi-tac/${r.partner_id}`} className="fg-link">
+                      {r.partner_name}
+                    </Link>
+                  ) : (
+                    r.partner_name
+                  )}{' '}
+                  · đến hạn {dayMonthYear(r.due_date)} · gốc <FgMoney value={moneyFromWire(r.principal)} mode="compact" /> · lãi{' '}
                   <FgMoney value={moneyFromWire(r.interest)} mode="compact" />
                 </FgText>
               </div>

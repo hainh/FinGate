@@ -48,6 +48,7 @@ export interface ForecastDisbursementItem {
   kind: 'receipt' | 'pending_loan';
   code: string;
   company_id: string;
+  partner_id: string | null;
   partner_name: string;
   date: string | null;
   amount: MoneyWire;
@@ -58,6 +59,7 @@ export interface ForecastRepaymentItem {
   bank_debt_id: string;
   code: string;
   company_id: string;
+  partner_id: string | null;
   partner_name: string;
   due_date: string;
   principal: MoneyWire;

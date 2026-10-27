@@ -51,7 +51,7 @@ export interface DashboardExtras {
   loans_pending: {
     count: number;
     total: WireAmount;
-    items: { id: string; code: string; company_id: string; partner_name: string; principal: WireAmount; created_at: string | null; href: string }[];
+    items: { id: string; code: string; company_id: string; partner_id: string | null; partner_name: string; principal: WireAmount; created_at: string | null; href: string }[];
   };
   automation: {
     failed_count: number;
@@ -246,6 +246,7 @@ async function pendingLoans(scope: ScopeLike): Promise<DashboardExtras['loans_pe
       id: String(r._id),
       code: String(r.code ?? ''),
       company_id: String(r.company_id ?? ''),
+      partner_id: r.partner_id ? String(r.partner_id) : null,
       partner_name: partnerNameOf(partners, r.partner_id ? String(r.partner_id) : null, 'Chưa gán ngân hàng'),
       principal: wire(toBig(r.principal_minor)),
       created_at: r.created_at ? dayOf(r.created_at) : null,

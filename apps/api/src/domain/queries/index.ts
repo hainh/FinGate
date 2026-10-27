@@ -625,6 +625,8 @@ export interface MaturityRow {
   contract_code: string;
   company_id: string;
   company_name: string;
+  /** Ngân hàng cho vay (đối tác) — để link tới trang đối tác. */
+  partner_id: string | null;
   bank_name: string;
   outstanding: WireAmount;
   interest_to_due: WireAmount;
@@ -649,7 +651,7 @@ export async function maturityLadder(
       maturity_date: { $lte: addDays(today(), horizon) },
     }) as never,
   )
-    .select({ company_id: 1, bank_name: 1, code: 1, principal_minor: 1, maturity_date: 1, next_due_date: 1, currency: 1, interest_rate: 1 })
+    .select({ company_id: 1, partner_id: 1, bank_name: 1, code: 1, principal_minor: 1, maturity_date: 1, next_due_date: 1, currency: 1, interest_rate: 1 })
     .sort({ maturity_date: 1 })
     .lean();
 
@@ -687,6 +689,7 @@ export async function maturityLadder(
       contract_code: String((l as { code?: unknown }).code ?? ''),
       company_id: String(l.company_id),
       company_name: cname.get(String(l.company_id)) ?? '—',
+      partner_id: l.partner_id ? String(l.partner_id) : null,
       bank_name: String(l.bank_name),
       outstanding: wire(outstanding, String(l.currency ?? 'VND')),
       interest_to_due: wire(interest, String(l.currency ?? 'VND')),

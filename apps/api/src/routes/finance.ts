@@ -507,6 +507,7 @@ export function financeRoutes(app: FastifyInstance): void {
               currency: String(account.currency ?? 'VND'),
               content: doc ? String(doc.purpose ?? doc.title ?? '') : '',
               counterparty,
+              partner_id: partnerId,
               reason: String(entry.reason ?? 'paid'),
               document: doc
                 ? {

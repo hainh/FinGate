@@ -583,6 +583,7 @@ export function newRequestId(): string {
 
 export interface BankTotalRow {
   key: string;
+  partner_id: string | null;
   bank_name: string;
   count: number;
   /** Dư nợ (chỉ khoản đang vay / quá hạn). */
@@ -600,6 +601,7 @@ export interface BankTotalRow {
 export function bankTotalsFromWire(rows: LoanBankTotalWire[]): BankTotalRow[] {
   return rows.map((r) => ({
     key: r.key,
+    partner_id: r.partner_id,
     bank_name: r.bank_name,
     count: r.count,
     outstanding: minorOf(r.outstanding),

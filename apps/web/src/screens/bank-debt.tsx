@@ -134,7 +134,19 @@ function loanColumns(): TableColumnsType<LoanRow> {
         </Link>
       ),
     },
-    { title: 'Ngân hàng', key: 'bank', sorter: (a, b) => bankNameOf(a).localeCompare(bankNameOf(b), 'vi'), render: (_v, r: LoanRow) => bankNameOf(r) },
+    {
+      title: 'Ngân hàng',
+      key: 'bank',
+      sorter: (a, b) => bankNameOf(a).localeCompare(bankNameOf(b), 'vi'),
+      render: (_v, r: LoanRow) =>
+        r.partner_id ? (
+          <Link className="fg-link" to={`/doi-tac/${r.partner_id}`}>
+            {bankNameOf(r)}
+          </Link>
+        ) : (
+          bankNameOf(r)
+        ),
+    },
     { title: 'Công ty', dataIndex: 'company_name', key: 'co', sorter: (a, b) => a.company_name.localeCompare(b.company_name, 'vi') },
     {
       title: 'Số tiền vay',

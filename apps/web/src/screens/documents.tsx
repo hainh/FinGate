@@ -142,7 +142,17 @@ export function useDocColumns(sortable = false, showCreatedAt = false): TableCol
           title: 'Đối tác',
           key: 'partner',
           ellipsis: true,
-          render: (_v: unknown, r: QueueRow) => <FgText style="bodyS">{r.partner_name ?? r.payee_name}</FgText>,
+          render: (_v: unknown, r: QueueRow) => (
+            <FgText style="bodyS">
+              {r.partner_id ? (
+                <Link to={`/doi-tac/${r.partner_id}`} className="fg-link">
+                  {r.partner_name ?? r.payee_name}
+                </Link>
+              ) : (
+                (r.partner_name ?? r.payee_name)
+              )}
+            </FgText>
+          ),
         },
         {
           title: 'Tag',

@@ -440,7 +440,16 @@ export function LinksTab({ doc }: { doc: DocumentDetail }): ReactNode {
             )}
             <br />
             <FgText style="caption" color="muted">
-              {[cp.partner_name, st].filter(Boolean).join(' · ') || '—'}
+              {cp.partner_id && cp.partner_name ? (
+                <Link to={`/doi-tac/${cp.partner_id}`} className="fg-link">
+                  {cp.partner_name}
+                </Link>
+              ) : (
+                cp.partner_name
+              )}
+              {cp.partner_name && st ? ' · ' : ''}
+              {st}
+              {!cp.partner_name && !st ? '—' : null}
             </FgText>
           </div>
         );
