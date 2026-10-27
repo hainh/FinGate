@@ -1,9 +1,9 @@
 /**
- * R7 — Cấn trừ khoản vay khi duyệt xong phiếu chi (đánh dấu lúc lập phiếu, v2 §11.2–§11.4).
+ * R7 — Cấn trừ khoản vay khi duyệt xong phiếu thu / phiếu chi (đánh dấu lúc lập phiếu, v2 §11.2–§11.4).
  *
- * Kích hoạt: `voucher.approved` (mỗi lần duyệt xong là một lượt). Điều kiện: phiếu chi.
- * Phiếu có `options.offset` (đã kiểm khi lưu): khoản nợ ngân hàng ⇒ liên kết trả nợ `repayment` (tách gốc / lãi / phí);
- * công nợ phải trả ⇒ liên kết cấn trừ `offset`. Số tiền = số tiền cấn trừ hiệu lực: toàn bộ phiếu nếu để trống, đọc tại
+ * Kích hoạt: `voucher.approved` (mỗi lần duyệt xong là một lượt). Điều kiện: phiếu thu hoặc phiếu chi (engine.ts).
+ * Phiếu có `options.offset` (đã kiểm khi lưu): khoản nợ ngân hàng ⇒ liên kết trả nợ `repayment` (tách gốc / lãi / phí, chỉ phiếu chi);
+ * công nợ (phải trả với phiếu chi, phải thu với phiếu thu) ⇒ liên kết cấn trừ `offset`. Số tiền = số tiền cấn trừ hiệu lực: toàn bộ phiếu nếu để trống, đọc tại
  * thời điểm duyệt. Liên kết mang nguồn Tự động · R7 (khác với liên kết người dùng gán tay trên tab Liên kết).
  *
  * Duyệt lại sau khi phiếu đổi cấn trừ: liên kết R7 không còn khớp được gỡ trước, rồi gán theo lựa chọn hiện tại.
@@ -27,7 +27,7 @@ registerRule(RULE, {
 
 async function linkStep(ctx: StepContext): Promise<StepOutput> {
   const doc = await loadVoucher(ctx.event.subject_id);
-  if (!doc || doc.kind !== 'spend') return { skipped: true };
+  if (!doc || (doc.kind !== 'spend' && doc.kind !== 'income')) return { skipped: true };
   const documentId = String(doc._id);
   const actor = actorOfEvent(ctx.event);
   const amountMinor = big(doc.amount.minor);

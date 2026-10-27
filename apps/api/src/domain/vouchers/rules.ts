@@ -268,7 +268,7 @@ export function effectiveLoanAmount(plan: { amount_minor: bigint | null }, vouch
 }
 
 /* ================================================================== *
- * Cấn trừ khoản vay trên phiếu chi (R7: duyệt xong thì tự gán)
+ * Cấn trừ khoản vay trên phiếu thu / phiếu chi (R7: duyệt xong thì tự gán)
  * ================================================================== */
 
 /** Đích cấn trừ (khớp `offsetTarget` ở contract): khoản nợ ngân hàng hoặc công nợ phải trả. */
@@ -322,15 +322,21 @@ function offsetMinorOrNull(value: string | bigint | null | undefined, field: str
 /**
  * Chuẩn hoá & kiểm tra cấn trừ khoản vay theo loại phiếu. Thuần — việc kiểm bản ghi (khoản vay / công nợ thuộc công ty
  * và đúng đối tác, còn đang vay / còn dư, sức chứa) làm ở `refs.resolveOffsetPlan`.
- * - chỉ phiếu chi, và phiếu phải có đối tác;
+ * - chỉ phiếu thu / phiếu chi, và phiếu phải có đối tác;
+ * - phiếu thu chỉ cấn trừ công nợ PHẢI THU (không có khoản vay ngân hàng để trả); phiếu chi cấn trừ được cả hai;
  * - số tiền cấn trừ (nếu ghi) > 0 và ≤ số tiền phiếu; đúng bằng số tiền phiếu ⇒ null (theo phiếu khi duyệt);
  * - lãi / phí chỉ cho khoản vay ngân hàng; lãi + phí ≤ số tiền cấn trừ (phần còn lại là gốc).
  */
 export function planOffsetOptions(input: OffsetInput | null | undefined, ctx: OffsetContext): OffsetPlan | null {
   if (!input) return null;
-  if (ctx.voucherKind !== 'spend') offsetFail('target', 'Chỉ phiếu chi mới cấn trừ khoản vay');
+  if (ctx.voucherKind !== 'spend' && ctx.voucherKind !== 'income') offsetFail('target', 'Chỉ phiếu thu hoặc phiếu chi mới cấn trừ khoản vay');
+  if (ctx.voucherKind === 'income' && input.target !== 'debt_voucher') {
+    offsetFail('target', 'Phiếu thu chỉ cấn trừ khoản phải thu (công nợ)');
+  }
   // vay để chi tạo khoản MỚI từ chính phiếu này; cùng lúc cấn trừ khoản cũ là hai nghiệp vụ trái nhau ⇒ chặn
   if (ctx.voucherLoanKind === 'fund') offsetFail('target', 'Phiếu vay ngân hàng để chi không cấn trừ khoản vay cùng lúc');
+  // phiếu thu đi vay: gốc khoản vay = số tiền phiếu, nên cấn trừ cùng lúc sẽ mâu thuẫn với gốc ⇒ chặn
+  if (ctx.voucherLoanKind === 'borrow') offsetFail('target', 'Phiếu thu đi vay không cấn trừ khoản phải thu cùng lúc');
   if (!ctx.voucherPartnerId) offsetFail('target_id', 'Chọn đối tác trên phiếu trước khi cấn trừ');
   if (!input.target_id || !OBJECT_ID_RE.test(input.target_id)) offsetFail('target_id', 'Chọn khoản vay hoặc công nợ cần cấn trừ');
   const amount = offsetMinorOrNull(input.amount_minor, 'amount_minor');

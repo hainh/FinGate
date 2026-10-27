@@ -1,5 +1,5 @@
 /**
- * Cấn trừ khoản vay trên phiếu chi — phần ĐỌC / GHI DB dùng chung cho lưu phiếu (`refs.ts`) và quy tắc R7.
+ * Cấn trừ khoản vay trên phiếu thu / phiếu chi — phần ĐỌC / GHI DB dùng chung cho lưu phiếu (`refs.ts`) và quy tắc R7.
  *
  * Liên kết cấn trừ do R7 gán khi duyệt mang nguồn `Tự động` + mã `R7`, nên phân biệt được với liên kết người dùng
  * gán tay trên tab Liên kết của phiếu (nguồn `Thủ công`, không bị R7 gỡ).

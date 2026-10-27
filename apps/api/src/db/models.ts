@@ -154,7 +154,7 @@ const loanOptionsEmbed = new Schema(
   { _id: false },
 );
 
-/** Cấn trừ khoản vay trên phiếu chi (`options.offset`, R7): khoản nợ ngân hàng hoặc công nợ phải trả. */
+/** Cấn trừ khoản vay trên phiếu thu / chi (`options.offset`, R7): khoản nợ ngân hàng (chỉ phiếu chi) hoặc công nợ (phải trả với phiếu chi, phải thu với phiếu thu). */
 const offsetOptionsEmbed = new Schema(
   {
     target: { type: String, enum: ['bank_debt', 'debt_voucher'], required: true },

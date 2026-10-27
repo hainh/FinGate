@@ -934,8 +934,8 @@ export const DEFAULT_AUTOMATION_RULES: readonly DefaultRuleDef[] = [
     name: AUTOMATION_RULE_LABEL.R7,
     trigger_event: 'voucher.approved',
     trigger_events: [],
-    // mọi phiếu chi duyệt xong: bước gán chỉ làm với phiếu có cấn trừ khoản vay (còn lại là lượt bỏ qua, như R1)
-    condition: { 'payload.kind': 'spend' },
+    // mọi phiếu thu / chi duyệt xong: bước gán chỉ làm với phiếu có cấn trừ khoản vay (còn lại là lượt bỏ qua, như R1)
+    condition: { 'payload.kind': { $in: ['spend', 'income'] } },
     steps: ['link'],
     params: {},
     enabled: true,

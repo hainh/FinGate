@@ -343,7 +343,7 @@ export async function resolveLoanPlan(input: {
 
 /**
  * Cấn trừ khoản vay (R7): kiểm quy tắc thuần (`planOffsetOptions`) rồi kiểm BẢN GHI khi lưu — khoản nợ ngân hàng / công nợ
- * thuộc công ty và ĐÚNG đối tác của phiếu, khoản vay còn đang vay, công nợ phải trả còn dư, và phiếu còn đủ số tiền sau
+ * thuộc công ty và ĐÚNG đối tác của phiếu, khoản vay còn đang vay, công nợ (phải trả với phiếu chi, phải thu với phiếu thu) còn dư, và phiếu còn đủ số tiền sau
  * các liên kết KHÁC của chính phiếu. Sức chứa không tính liên kết R7 của chính phiếu (sẽ được thay khi duyệt).
  * Lần lưu không đổi cấn trừ so với `previous` thì bỏ qua kiểm bản ghi (như vay): sửa phiếu khác không bị chặn vì khoản cũ.
  */
@@ -388,7 +388,7 @@ export async function resolveOffsetPlan(input: {
     if (plan.target === 'bank_debt') {
       await assertLoanOffset({ ...partner, loanId: plan.target_id, principalMinor: spec.split?.principal ?? 0n });
     } else {
-      await assertDebtOffset({ ...partner, debtId: plan.target_id, amountMinor: spec.amount_minor });
+      await assertDebtOffset({ ...partner, voucherKind: input.voucherKind, debtId: plan.target_id, amountMinor: spec.amount_minor });
     }
   }
   return plan;
@@ -418,10 +418,11 @@ async function assertLoanOffset(input: {
   await assertLoanRepaymentCapacity({ loanId: input.loanId, principalMinor: input.principalMinor, excludeDocumentId: input.voucherId });
 }
 
-/** Công nợ được cấn trừ: thuộc công ty, đúng đối tác (KH / NCC) của phiếu, phải trả (phiếu chi), còn dư. */
+/** Công nợ được cấn trừ: thuộc công ty, đúng đối tác (KH / NCC) của phiếu, đúng hướng với phiếu (thu ↔ phải thu, chi ↔ phải trả), còn dư. */
 async function assertDebtOffset(input: {
   companyId: string;
   voucherId: string | null;
+  voucherKind: VoucherKind;
   partnerId: string;
   partnerType: string | null;
   debtId: string;
@@ -437,7 +438,7 @@ async function assertDebtOffset(input: {
     throw offsetError('target_id', 'Cấn trừ công nợ: đối tác của phiếu phải là khách hàng hoặc nhà cung cấp');
   }
   if (isReadOnlyDebt(debt.party_type)) throw offsetError('target_id', 'Công nợ nhân viên (TK 334) chỉ đọc — không cấn trừ được');
-  assertOffsetDirection(directionOf(debt), 'spend');
+  assertOffsetDirection(directionOf(debt), input.voucherKind);
   await assertDebtOffsetCapacity({ debtVoucherId: input.debtId, amountMinor: input.amountMinor, excludeDocumentId: input.voucherId });
 }
 

@@ -96,7 +96,7 @@ export const offsetTarget = z.enum(['bank_debt', 'debt_voucher']);
 export type OffsetTarget = z.infer<typeof offsetTarget>;
 
 /**
- * `options.offset` — đánh dấu CẤN TRỪ KHOẢN VAY trên phiếu chi. Khi phiếu được duyệt xong, quy tắc R7 tự gán phiếu
+ * `options.offset` — đánh dấu CẤN TRỪ KHOẢN VAY trên phiếu thu (khoản phải thu) hoặc phiếu chi. Khi phiếu được duyệt xong, quy tắc R7 tự gán phiếu
  * vào khoản đã chọn (liên kết nguồn Tự động · R7). `amount_minor` bỏ trống = toàn bộ số tiền phiếu.
  * Lãi / phí (chỉ khoản vay ngân hàng) tách từ số tiền cấn trừ; phần còn lại là gốc (làm giảm dư nợ).
  */

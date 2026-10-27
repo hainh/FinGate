@@ -95,7 +95,7 @@ interface LoanState {
 /** Cấn trừ khoản vay trên phiếu chi (R7): khi duyệt xong, phiếu tự gán vào khoản đã chọn. */
 interface OffsetState {
   on: boolean;
-  /** Nợ ngân hàng (trả nợ, tách lãi / phí) hoặc công nợ phải trả của KH/NCC (cấn trừ). */
+  /** Nợ ngân hàng (trả nợ, tách lãi / phí — chỉ phiếu chi) hoặc công nợ của KH/NCC: phải trả (phiếu chi), phải thu (phiếu thu). */
   target: 'bank_debt' | 'debt_voucher';
   targetId: string;
   /** null = toàn bộ số tiền phiếu. */
@@ -127,7 +127,7 @@ export interface FormState {
   note: string;
   tagIds: string[];
   loan: LoanState;
-  /** Cấn trừ khoản vay (chỉ phiếu chi). */
+  /** Cấn trừ khoản vay (phiếu chi; phiếu thu chỉ cấn trừ công nợ phải thu). */
   offset: OffsetState;
   /** Chuyển nội bộ theo ID (luôn bật với phiếu chuyển nội bộ; phiếu chi suy từ đối tác). */
   transferOn: boolean;
@@ -347,8 +347,11 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
   );
   const openLoans = (loansQ.data?.items ?? []).filter((l) => LOAN_OPEN_STATUSES.includes(l.status));
 
-  // Cấn trừ khoản vay (phiếu chi): khoản còn trả được của ngân hàng đối tác, hoặc công nợ phải trả của đối tác (KH/NCC).
-  const offsetPartnerId = kind === 'spend' && f.offset.on && f.partnerId ? f.partnerId : undefined;
+  // Cấn trừ khoản vay: phiếu chi — khoản còn trả được của ngân hàng đối tác, hoặc công nợ phải trả của KH/NCC;
+  // phiếu thu — chỉ công nợ phải thu của KH/NCC (không có khoản vay ngân hàng để trả).
+  const offsetEnabled = kind === 'spend' || kind === 'income';
+  const offsetDirection = kind === 'income' ? 'receivable' : 'payable';
+  const offsetPartnerId = offsetEnabled && f.offset.on && f.partnerId ? f.partnerId : undefined;
   const offsetLoansQ = usePartnerLoans(f.offset.target === 'bank_debt' ? offsetPartnerId : undefined);
   const offsetDebtsQ = usePartnerDebts(f.offset.target === 'debt_voucher' ? offsetPartnerId : undefined);
   const offsetCandidates: { value: string; label: string }[] =
@@ -357,7 +360,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
           .filter((l) => canAssignRepayment(l.status) && l.company_id === currentCompany)
           .map((l) => ({ value: l._id, label: offsetLoanOptionLabel(l) }))
       : (offsetDebtsQ.data?.items ?? [])
-          .filter((d) => d.direction === 'payable' && d.status !== 'settled' && d.company_id === currentCompany)
+          .filter((d) => d.direction === offsetDirection && d.status !== 'settled' && d.company_id === currentCompany)
           .map((d) => ({ value: d._id, label: offsetDebtOptionLabel(d) }));
   // sửa phiếu: khoản đã chọn không còn trong danh sách (đã tất toán, huỷ…) vẫn hiện tên để thấy lý do khi lưu
   const savedOffset = existing.data?.options?.offset ?? null;
@@ -463,9 +466,9 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
               terms: termsOf(f.loan),
             })
           : null;
-    // cấn trừ khoản vay chỉ phiếu chi; luôn gửi (kể cả null) để sửa phiếu bỏ được cấn trừ đã lưu
+    // cấn trừ khoản vay chỉ phiếu thu / chi; luôn gửi (kể cả null) để sửa phiếu bỏ được cấn trừ đã lưu
     const offsetBody =
-      kind === 'spend'
+      offsetEnabled
         ? offsetOptionsBody({
             on: f.offset.on,
             target: f.offset.target,
@@ -540,7 +543,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
     }
     if (isFund && !f.loan.lenderId) clientErrors['options.loan.lender_partner_id'] = 'Chọn ngân hàng cho vay';
     if (isFund && !f.loan.receiveAccountId) clientErrors['options.loan.receive_account_id'] = 'Chọn tài khoản nhận giải ngân';
-    if (kind === 'spend' && f.offset.on) {
+    if (offsetEnabled && f.offset.on) {
       if (!f.offset.targetId) clientErrors['options.offset.target_id'] = 'Chọn khoản vay hoặc công nợ cần cấn trừ';
       if (f.offset.target === 'bank_debt' && offsetTotal > 0n && offsetPrincipal === null) {
         clientErrors['options.offset.interest_minor'] = 'Lãi + phí không được vượt số tiền cấn trừ';
@@ -861,7 +864,11 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                   type="checkbox"
                   checked={f.loan.on}
                   // bật "đi vay" ⇒ bên nộp tiền phải là Ngân hàng: effect ở trên bỏ đối tác không phải ngân hàng
-                  onChange={(e) => setLoan({ on: e.target.checked })}
+                  // đi vay và cấn trừ khoản phải thu không đi cùng nhau: bật đi vay thì tắt cấn trừ
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setF((s) => ({ ...s, loan: { ...s.loan, on }, offset: on && s.offset.on ? { ...s.offset, on: false } : s.offset }));
+                  }}
                   style={{ width: 18, height: 18, marginTop: 1 }}
                   disabled={!canEdit}
                 />
@@ -1008,49 +1015,56 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
             </Section>
           ) : null}
 
-          {/* ---------- Phiếu chi: cấn trừ khoản vay (R7 — gán tự động khi duyệt xong) ---------- */}
-          {kind === 'spend' ? (
+          {/* ---------- Phiếu thu / chi: cấn trừ khoản vay (R7 — gán tự động khi duyệt xong) ---------- */}
+          {offsetEnabled ? (
             <Section title="Cấn trừ khoản vay">
               <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, cursor: canEdit && !f.loan.on ? 'pointer' : 'not-allowed' }}>
                 <input
                   type="checkbox"
                   checked={f.offset.on}
-                  onChange={(e) => setOffset({ on: e.target.checked })}
+                  // phiếu thu chỉ cấn trừ công nợ phải thu: bật thì đích là công nợ
+                  onChange={(e) => setOffset({ on: e.target.checked, ...(kind === 'income' ? { target: 'debt_voucher' as const } : {}) })}
                   style={{ width: 18, height: 18, marginTop: 1 }}
                   disabled={!canEdit || f.loan.on}
                 />
                 <span>
-                  Phiếu này cấn trừ khoản vay
+                  {kind === 'income' ? 'Phiếu này cấn trừ khoản vay phải thu' : 'Phiếu này cấn trừ khoản vay'}
                   <br />
                   <span style={{ color: 'var(--fg-text-muted)' }}>
-                    Khi phiếu được duyệt xong, hệ thống tự gán phiếu vào khoản đã chọn: trả nợ ngân hàng (có thể tách lãi, phí) hoặc cấn trừ công nợ phải trả.
-                    {f.loan.on ? ' Không dùng cùng lúc với "Vay ngân hàng để chi".' : ''}
+                    {kind === 'income'
+                      ? 'Khi phiếu được duyệt xong, hệ thống tự gán phiếu vào khoản phải thu (công nợ) của đối tác đã chọn: khách hàng trả bằng cách cấn trừ vào khoản đang nợ công ty.'
+                      : 'Khi phiếu được duyệt xong, hệ thống tự gán phiếu vào khoản đã chọn: trả nợ ngân hàng (có thể tách lãi, phí) hoặc cấn trừ công nợ phải trả.'}
+                    {f.loan.on ? (kind === 'income' ? ' Không dùng cùng lúc với "Đây là khoản vay ngân hàng (đi vay)".' : ' Không dùng cùng lúc với "Vay ngân hàng để chi".') : ''}
                   </span>
                 </span>
               </label>
               {f.offset.on ? (
                 <div style={{ display: 'grid', gap: 'var(--fg-space-3)', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', marginTop: 'var(--fg-space-3)' }}>
-                  <FgField label="Cấn trừ với">
-                    <FgSelect
-                      options={[
-                        { value: 'bank_debt', label: 'Khoản vay ngân hàng' },
-                        { value: 'debt_voucher', label: 'Công nợ phải trả' },
-                      ]}
-                      value={f.offset.target}
-                      onChange={(v) => setOffset({ target: v === 'debt_voucher' ? 'debt_voucher' : 'bank_debt', targetId: '', interest: null, fee: null })}
-                      style={{ width: '100%' }}
-                      disabled={!canEdit}
-                    />
-                  </FgField>
+                  {kind === 'spend' ? (
+                    <FgField label="Cấn trừ với">
+                      <FgSelect
+                        options={[
+                          { value: 'bank_debt', label: 'Khoản vay ngân hàng' },
+                          { value: 'debt_voucher', label: 'Công nợ phải trả' },
+                        ]}
+                        value={f.offset.target}
+                        onChange={(v) => setOffset({ target: v === 'debt_voucher' ? 'debt_voucher' : 'bank_debt', targetId: '', interest: null, fee: null })}
+                        style={{ width: '100%' }}
+                        disabled={!canEdit}
+                      />
+                    </FgField>
+                  ) : null}
                   <FgField
-                    label="Khoản vay / công nợ *"
+                    label={kind === 'income' ? 'Khoản phải thu *' : 'Khoản vay / công nợ *'}
                     error={errors['options.offset.target_id'] ?? null}
                     help={
                       !f.partnerId
-                        ? 'Chọn đối tác bên nhận tiền trước'
+                        ? 'Chọn đối tác trước'
                         : f.offset.target === 'bank_debt'
                           ? 'Khoản vay của ngân hàng này, còn đang vay'
-                          : 'Công nợ phải trả của đối tác này, còn dư'
+                          : kind === 'income'
+                            ? 'Công nợ phải thu của đối tác này, còn dư'
+                            : 'Công nợ phải trả của đối tác này, còn dư'
                     }
                   >
                     <FgSelect

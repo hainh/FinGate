@@ -503,7 +503,7 @@ export const AUTOMATION_RULE_LABEL: Record<AutomationRuleCode, string> = {
   R4: 'Khoản vay tất toán → nhắc lưu trữ / giải chấp TSĐB',
   R5: 'Khoản chi định kỳ → phiếu nháp',
   R6: 'Huỷ phiếu nguồn → cảnh báo / huỷ đối tượng sinh chưa phát sinh tiền',
-  R7: 'Phiếu chi cấn trừ khoản vay → gán khi duyệt xong',
+  R7: 'Phiếu thu/chi cấn trừ khoản vay → gán khi duyệt xong',
 };
 
 /** Trạng thái lượt chạy quy tắc tự động (v2 §11.2 — lỗi ⇒ Chạy lại). */

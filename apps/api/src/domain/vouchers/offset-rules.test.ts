@@ -36,9 +36,41 @@ describe('cấn trừ khoản vay › kiểm khi lưu (planOffsetOptions)', () =
     expect(planOffsetOptions(undefined, spendCtx)).toBeNull();
   });
 
-  it('chỉ phiếu chi mới cấn trừ khoản vay', () => {
-    const err = errorOf(() => planOffsetOptions({ target: 'bank_debt', target_id: LOAN }, { ...spendCtx, voucherKind: 'income' }));
+  it('phiếu thu chỉ cấn trừ khoản phải thu (công nợ), không cấn trừ khoản vay ngân hàng', () => {
+    const incomeCtx = { ...spendCtx, voucherKind: 'income' as const };
+    const err = errorOf(() => planOffsetOptions({ target: 'bank_debt', target_id: LOAN }, incomeCtx));
     expect(err).toEqual({ code: 'FG-VAL-001', field: 'options.offset.target' });
+    expect(planOffsetOptions({ target: 'debt_voucher', target_id: DEBT }, incomeCtx)).toEqual({
+      target: 'debt_voucher',
+      target_id: DEBT,
+      amount_minor: null,
+      interest_minor: null,
+      fee_minor: null,
+    });
+  });
+
+  it('phiếu thu không tách lãi / phí (công nợ không tách) và không cấn trừ quá số tiền phiếu', () => {
+    const incomeCtx = { ...spendCtx, voucherKind: 'income' as const };
+    expect(errorOf(() => planOffsetOptions({ target: 'debt_voucher', target_id: DEBT, fee_minor: '1000' }, incomeCtx))).toEqual({
+      code: 'FG-VAL-001',
+      field: 'options.offset.interest_minor',
+    });
+    expect(errorOf(() => planOffsetOptions({ target: 'debt_voucher', target_id: DEBT, amount_minor: (VOUCHER + 1n).toString() }, incomeCtx))).toEqual({
+      code: 'FG-VAL-001',
+      field: 'options.offset.amount_minor',
+    });
+  });
+
+  it('phiếu thu đi vay không cấn trừ khoản phải thu cùng lúc (gốc khoản vay = số tiền phiếu)', () => {
+    const err = errorOf(() =>
+      planOffsetOptions({ target: 'debt_voucher', target_id: DEBT }, { ...spendCtx, voucherKind: 'income', voucherLoanKind: 'borrow' }),
+    );
+    expect(err).toEqual({ code: 'FG-VAL-001', field: 'options.offset.target' });
+  });
+
+  it('phiếu chi vẫn cấn trừ được cả khoản vay ngân hàng và công nợ phải trả', () => {
+    expect(planOffsetOptions({ target: 'bank_debt', target_id: LOAN }, spendCtx)?.target).toBe('bank_debt');
+    expect(planOffsetOptions({ target: 'debt_voucher', target_id: DEBT }, spendCtx)?.target).toBe('debt_voucher');
   });
 
   it('vay ngân hàng để chi không cấn trừ khoản vay cùng lúc (hai nghiệp vụ trái nhau)', () => {

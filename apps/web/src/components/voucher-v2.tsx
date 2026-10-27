@@ -127,7 +127,7 @@ const OFFSET_ASSIGNED_STATUSES: readonly string[] = ['approved', 'processing', '
 const OFFSET_RELEASED_STATUSES: readonly string[] = ['cancelled', 'rejected', 'expired'];
 
 /**
- * Phiếu chi cấn trừ khoản vay (R7): khoản đã đánh dấu khi lập phiếu. Trước khi duyệt: sẽ tự gán khi duyệt xong;
+ * Phiếu thu / chi cấn trừ khoản vay (R7): khoản đã đánh dấu khi lập phiếu. Trước khi duyệt: sẽ tự gán khi duyệt xong;
  * đã duyệt: đã gán (xem tab Liên kết); huỷ / từ chối: không còn hiệu lực.
  */
 export function OffsetBanner({ offset, status, style }: { offset: DocOffsetView; status: string; style?: CSSProperties }): ReactNode {
