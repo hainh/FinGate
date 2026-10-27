@@ -7,21 +7,13 @@
 
 import type { ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import dayjs from 'dayjs';
 import { useBankAccount, useBankAccountTransactions } from '../app/queries.ts';
-import { FgButton, FgMoney } from '../components/primitives.tsx';
+import { FgButton, FgDateTime, FgMoney } from '../components/primitives.tsx';
 import { FgEmptyState, FgSkeletonTable, FgTable, FgTag } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery } from '../components/pagekit.tsx';
 import type { BankAccountDetail, BankTransactionRow } from '../app/types.ts';
 import { bankAccountOptionLabel } from '../app/v2/documents.ts';
-
-/** Ngày giờ chính xác tới giây (giờ địa phương). */
-function atLabel(at: string | null): string {
-  if (!at) return '—';
-  const d = dayjs(at);
-  return d.isValid() ? d.format('DD/MM/YYYY HH:mm:ss') : '—';
-}
 
 /**
  * Tên TK trong tiêu đề BANK-05, ví dụ "BIDV · 122983878772 · TK lịch sử A": CÓ TÊN TK theo cùng quy ước
@@ -85,7 +77,8 @@ export function BankAccountHistoryScreen(): ReactNode {
                     title: 'Thời điểm',
                     dataIndex: 'at',
                     key: 'at',
-                    render: (v: string | null) => <span className="fg-num">{atLabel(v)}</span>,
+                    align: 'right',
+                    render: (v: string | null) => <FgDateTime value={v} seconds />,
                   },
                   {
                     title: 'Loại',

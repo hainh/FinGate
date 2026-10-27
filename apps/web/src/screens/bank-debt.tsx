@@ -66,7 +66,7 @@ import {
 } from '../app/v2/debts.ts';
 import { PartnerPicker } from '../components/partner-picker.tsx';
 import { FgMaturityCell } from '../components/finance.tsx';
-import { FgAlert, FgButton, FgField, FgInput, FgMoneyInput, FgMoneyStack, FgSelect, FgText, FgTextarea, FgToneChip } from '../components/primitives.tsx';
+import { FgAlert, FgButton, FgDateTime, FgField, FgInput, FgMoneyInput, FgMoneyStack, FgSelect, FgText, FgTextarea, FgToneChip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgDescriptions, FgEmptyState, FgModal, FgPagination, FgSkeletonTable, FgTable, FgTag } from '../components/uitk.tsx';
 import { ChangeHistoryCard } from '../components/change-history.tsx';
@@ -192,8 +192,9 @@ function loanColumns(): TableColumnsType<LoanRow> {
       dataIndex: 'created_at',
       key: 'created_at',
       defaultSortOrder: 'descend',
+      align: 'right',
       sorter: (a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''),
-      render: (v: string | null) => (v ? <span className="fg-num">{dayjs(v).format('DD/MM/YYYY HH:mm')}</span> : '—'),
+      render: (v: string | null) => <FgDateTime value={v} />,
     },
   ];
 }

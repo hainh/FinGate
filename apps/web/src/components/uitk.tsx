@@ -329,7 +329,8 @@ export function FgTable<T extends object>({ size, mobileCards = true, dataSource
     <Table<T>
       size={size ?? (density === 'compact' ? 'small' : 'middle')}
       pagination={false}
-      tableLayout="fixed"
+      // auto: cột theo nội dung, bảng full width (CSS .fg-table); cột cần cố định thì đặt width
+      tableLayout="auto"
       className={`fg-table${className ? ` ${className}` : ''}`}
       dataSource={dataSource}
       {...props}

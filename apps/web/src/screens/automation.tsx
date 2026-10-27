@@ -44,7 +44,7 @@ import {
   type AutomationRun,
   type RuleParamField,
 } from '../app/v2/exec.ts';
-import { FgAlert, FgButton, FgField, FgInput, FgSelect, FgText } from '../components/primitives.tsx';
+import { FgAlert, FgButton, FgDateTime, FgField, FgInput, FgSelect, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgDrawer, FgEmptyState, FgModal, FgSkeletonTable, FgTable, FgTabs, FgTag } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
@@ -491,7 +491,7 @@ function RunsTab({ access }: { access: Access }): ReactNode {
                 dataSource={list}
                 pagination={list.length > 25 ? { pageSize: 25, size: 'small' } : false}
                 columns={[
-                  { title: 'Thời điểm', dataIndex: 'created_at', key: 'at', render: (v: string) => <span className="fg-num">{dateTimeOf(v)}</span> },
+                  { title: 'Thời điểm', dataIndex: 'created_at', key: 'at', align: 'right', render: (v: string) => <FgDateTime value={v} /> },
                   {
                     title: 'Quy tắc',
                     key: 'rule',

@@ -60,7 +60,7 @@ import {
   type OffsetLinkRow,
 } from '../app/v2/debts.ts';
 import { PartnerPicker } from '../components/partner-picker.tsx';
-import { FgAlert, FgButton, FgField, FgInput, FgMoneyInput, FgMoneyStack, FgSelect, FgText, FgTextarea, FgToneChip } from '../components/primitives.tsx';
+import { FgAlert, FgButton, FgDateTime, FgField, FgInput, FgMoneyInput, FgMoneyStack, FgSelect, FgText, FgTextarea, FgToneChip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgDescriptions, FgEmptyState, FgModal, FgPagination, FgSegmented, FgSkeletonTable, FgTable, FgTag } from '../components/uitk.tsx';
 import { ChangeHistoryCard } from '../components/change-history.tsx';
@@ -134,7 +134,7 @@ function debtColumns(): TableColumnsType<DebtRow> {
       key: 'code',
       sorter: (a, b) => a.code.localeCompare(b.code),
       render: (v: string, r: DebtRow) => (
-        <Link className="fg-link" to={`/cong-no/phieu/${r._id}`}>
+        <Link className="fg-link" to={`/cong-no/phieu/${r._id}`} style={{ whiteSpace: 'nowrap' }}>
           {v}
         </Link>
       ),
@@ -160,14 +160,14 @@ function debtColumns(): TableColumnsType<DebtRow> {
       sorter: (a, b) => a.direction.localeCompare(b.direction),
       render: (v: DebtDirection) => <FgToneChip tone={DIRECTION_TONE[v]}>{DEBT_DIRECTION_LABEL[v]}</FgToneChip>,
     },
-    { title: 'TK', dataIndex: 'account_code', key: 'acct', sorter: (a, b) => a.account_code.localeCompare(b.account_code) },
+    { title: 'TK', dataIndex: 'account_code', key: 'acct', width: 90, sorter: (a, b) => a.account_code.localeCompare(b.account_code) },
     {
       title: 'Giá trị',
       dataIndex: 'value',
       key: 'value',
       align: 'right',
       sorter: (a, b) => cmpBig(minorOf(a.value), minorOf(b.value)),
-      render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} />,
+      render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} style={{ whiteSpace: 'nowrap' }} />,
     },
     {
       title: 'Đã cấn trừ',
@@ -175,7 +175,7 @@ function debtColumns(): TableColumnsType<DebtRow> {
       key: 'applied',
       align: 'right',
       sorter: (a, b) => cmpBig(minorOf(a.offset_applied), minorOf(b.offset_applied)),
-      render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} />,
+      render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} style={{ whiteSpace: 'nowrap' }} />,
     },
     {
       title: 'Còn lại',
@@ -183,16 +183,17 @@ function debtColumns(): TableColumnsType<DebtRow> {
       key: 'remaining',
       align: 'right',
       sorter: (a, b) => cmpBig(minorOf(a.remaining), minorOf(b.remaining)),
-      render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} emphasis />,
+      render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} emphasis style={{ whiteSpace: 'nowrap' }} />,
     },
     {
       // hạn và số ngày quá hạn gộp một cột; badge quá hạn nằm dòng dưới ngày
       title: 'Hạn',
       dataIndex: 'due_date',
       key: 'due',
+      width: 140,
       sorter: (a, b) => a.due_date.localeCompare(b.due_date),
       render: (v: string, r: DebtRow) => (
-        <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+        <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, whiteSpace: 'nowrap' }}>
           <span className="fg-num">{ddmmyyyy(v)}</span>
           {r.days_overdue > 0 ? (
             <FgToneChip tone="danger">⛔ {r.days_overdue} ngày</FgToneChip>
@@ -208,8 +209,9 @@ function debtColumns(): TableColumnsType<DebtRow> {
       title: 'Ngày tạo',
       dataIndex: 'created_at',
       key: 'created_at',
+      align: 'right',
       sorter: (a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''),
-      render: (v: string | null) => (v ? <span className="fg-num">{dayjs(v).format('DD/MM/YYYY HH:mm')}</span> : '—'),
+      render: (v: string | null) => <FgDateTime value={v} />,
     },
   ];
 }
@@ -415,7 +417,7 @@ export function DebtListScreen(): ReactNode {
                   <KpiCard label="Còn lại" value={data.totals.remaining} emphasis />
                 </div>
                 <div className="fg-card" style={{ padding: 0 }}>
-                  <FgTable rowKey="_id" dataSource={open} columns={debtColumns()} />
+                  <FgTable rowKey="_id" tableLayout="auto" dataSource={open} columns={debtColumns()} />
                 </div>
                 {settled.length ? (
                   <div style={{ marginTop: 'var(--fg-space-4)' }}>
@@ -424,7 +426,7 @@ export function DebtListScreen(): ReactNode {
                     </FgButton>
                     {showSettled ? (
                       <div className="fg-card" style={{ padding: 0, marginTop: 'var(--fg-space-2)' }}>
-                        <FgTable rowKey="_id" size="small" dataSource={settled} columns={debtColumns()} />
+                        <FgTable rowKey="_id" size="small" tableLayout="auto" dataSource={settled} columns={debtColumns()} />
                       </div>
                     ) : null}
                   </div>

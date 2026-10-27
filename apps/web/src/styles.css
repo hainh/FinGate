@@ -220,7 +220,8 @@ body {
 .fg-content {
   flex: 1;
   width: 100%;
-  max-width: var(--fg-content-max);
+  /* full width: không giới hạn 1440px (--fg-content-max) để bảng dài ngang được dùng hết màn hình */
+  max-width: none;
   margin-inline: auto;
   padding: var(--fg-space-6);
 }
@@ -622,7 +623,7 @@ body {
   z-index: var(--fg-z-table-sticky);
 }
 
-/* ---------------- bảng: luôn vừa 100% khung chứa, cell tự xuống dòng (không scroll ngang) ---------------- */
+/* ---------------- bảng: luôn full width; layout auto (cột theo nội dung, FgTable), cell tự xuống dòng ---------------- */
 
 .fg-table,
 .fg-table .ant-table,
@@ -632,21 +633,16 @@ body {
   width: 100%;
 }
 
-.fg-table table {
-  table-layout: fixed;
-}
-
+/* break-word (không phải anywhere): không làm cột co về một ký tự khi layout auto */
 .fg-table .ant-table-cell {
   white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
-/* số/tiền trong bảng được phép xuống dòng để không kéo bảng rộng ra */
 .fg-table .ant-table-cell .fg-money,
 .fg-table .ant-table-cell .fg-num {
   white-space: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 /* ---------------- bulk bar ---------------- */

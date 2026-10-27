@@ -11,11 +11,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Select, type TableColumnsType } from 'antd';
-import dayjs from 'dayjs';
 import {
   STATUS_KEYS,
   daysBetween,
-  deadlineLabel,
   formatMoney,
   isDeadlinePast,
   money,
@@ -26,7 +24,7 @@ import {
 } from '@fingate/shared';
 import { useDocuments, useProcessed, useQueue, type DocListFilters, type QueueFilters } from '../app/queries.ts';
 import type { QueueRow } from '../app/types.ts';
-import { FgButton, FgMoneyStack, FgSelect, FgStatusChip, FgText } from '../components/primitives.tsx';
+import { FgButton, FgDateTime, FgMoneyStack, FgSelect, FgStatusChip, FgText } from '../components/primitives.tsx';
 import { FgEmptyState, FgPagination, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useDebounced } from '../components/pagekit.tsx';
@@ -183,11 +181,12 @@ export function useDocColumns(sortable = false, showCreatedAt = false): TableCol
           dataIndex: 'planned_date',
           key: 'planned_date',
           sorter: sortable ? (a: QueueRow, b: QueueRow) => (a.planned_date ?? '').localeCompare(b.planned_date ?? '') : undefined,
+          align: 'right',
           render: (v: string, r: QueueRow) => {
             const late = isDeadlinePast(v) && !['paid', 'cancelled', 'rejected'].includes(r.status);
             return (
-              <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
-                <span className="fg-num">{deadlineLabel(v)}</span>
+              <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                <FgDateTime value={v} />
                 {late ? (
                   <span className="fg-chip" style={{ borderColor: 'var(--fg-status-danger-border)', color: 'var(--fg-status-danger-text)', background: 'var(--fg-status-danger-bg)' }}>
                     Quá hạn
@@ -203,8 +202,9 @@ export function useDocColumns(sortable = false, showCreatedAt = false): TableCol
                 title: 'Ngày tạo',
                 dataIndex: 'created_at',
                 key: 'created_at',
+                align: 'right',
                 sorter: sortable ? (a: QueueRow, b: QueueRow) => (a.created_at ?? '').localeCompare(b.created_at ?? '') : undefined,
-                render: (v: string | null | undefined) => (v ? <span className="fg-num">{dayjs(v).format('DD/MM/YYYY HH:mm')}</span> : '—'),
+                render: (v: string | null | undefined) => <FgDateTime value={v} />,
               },
             ]
           : []),

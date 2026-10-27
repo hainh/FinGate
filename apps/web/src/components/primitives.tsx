@@ -9,6 +9,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Alert, Button, Input, InputNumber, Select, Tooltip, Typography } from 'antd';
 import type { ButtonProps, InputRef, RefSelectProps } from 'antd';
+import dayjs from 'dayjs';
 import {
   STATUS_REGISTRY,
   formatMoney,
@@ -445,6 +446,27 @@ export function FgMoneyStack({
   );
 }
 
+/**
+ * Ngày giờ trong ô bảng: ngày ở dòng 1, giờ ở dòng 2 (chỉ khi có giờ), căn phải.
+ * `value` là ISO (`…T…`) hoặc `YYYY-MM-DD`; trống/không hợp lệ → `—`.
+ */
+export function FgDateTime({ value, seconds = false }: { value: string | null | undefined; seconds?: boolean }): ReactNode {
+  if (!value) return '—';
+  const d = dayjs(value);
+  if (!d.isValid()) return '—';
+  const hasTime = value.includes('T');
+  return (
+    <span className="fg-num" style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.35, whiteSpace: 'nowrap' }}>
+      <span>{d.format('DD/MM/YYYY')}</span>
+      {hasTime ? (
+        <span style={{ fontSize: 'var(--fg-font-caption-size)', lineHeight: 'var(--fg-font-caption-line)', color: 'var(--fg-text-muted)' }}>
+          {d.format(seconds ? 'HH:mm:ss' : 'HH:mm')}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 /** Input số tiền: hiển thị theo vi-VN, parse qua `parseMoneyInput` (cấm Number()/parseFloat). */
 export function FgMoneyInput({
   value,
@@ -614,7 +636,7 @@ export function FgAlert({
       showIcon
       closable={closable}
       action={action}
-      message={title}
+      title={title}
       description={description}
       style={{ borderRadius: 'var(--fg-radius-md)', ...style }}
       banner={false}

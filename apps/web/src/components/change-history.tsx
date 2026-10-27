@@ -4,11 +4,10 @@
  */
 
 import type { ReactNode } from 'react';
-import dayjs from 'dayjs';
 import { historyRowsOf, historyValueText, type HistoryRow } from '../app/v2/debts.ts';
 import { debtHistoryActionLabel, loanHistoryActionLabel } from './labels.ts';
 import { FgCard } from './cards.tsx';
-import { FgText } from './primitives.tsx';
+import { FgDateTime, FgText } from './primitives.tsx';
 import { FgEmptyState, FgTable, type TableColumnsType } from './uitk.tsx';
 
 function changeColumns(): TableColumnsType<HistoryRow> {
@@ -17,7 +16,8 @@ function changeColumns(): TableColumnsType<HistoryRow> {
       title: 'Thời điểm',
       key: 'at',
       width: 150,
-      render: (_v, r: HistoryRow) => (r.at ? dayjs(r.at).format('DD/MM/YYYY HH:mm') : '—'),
+      align: 'right',
+      render: (_v, r: HistoryRow) => <FgDateTime value={r.at} />,
     },
     {
       title: 'Người thực hiện',
