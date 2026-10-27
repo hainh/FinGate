@@ -637,6 +637,7 @@ body {
 .fg-table .ant-table-cell {
   white-space: normal;
   overflow-wrap: break-word;
+  max-width: 300px;
 }
 
 .fg-table .ant-table-cell .fg-money,
