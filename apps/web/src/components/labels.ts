@@ -37,6 +37,7 @@ export const DOC_HISTORY_ACTION_LABEL: Record<string, string> = {
   expire: 'Hết hiệu lực',
   opinion: 'Ghi ý kiến',
   tags_update: 'Sửa tag',
+  partner_update: 'Đổi đối tác',
   tag_merge: 'Gộp tag',
   attachment_add: 'Thêm chứng từ',
   attachment_remove: 'Xoá chứng từ',
@@ -83,6 +84,7 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   // mã cũ (v1: `counterparty` là đối tác, `auto_income` là phiếu thu tự động) còn trong audit_log
   'document.auto_income': 'Tự động tạo phiếu thu',
   'document.tags_update': 'Sửa tag phiếu',
+  'document.partner_update': 'Đổi đối tác phiếu',
   'document.tag_merge': 'Gộp tag phiếu',
   'document.attachment_confirm': 'Thêm chứng từ',
   'document.attachment_remove': 'Xoá chứng từ',

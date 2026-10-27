@@ -706,6 +706,14 @@ export const documentTagsBody = z.object({
 });
 export type DocumentTagsBody = z.infer<typeof documentTagsBody>;
 
+/** PATCH /documents/{id}/partner — Chủ tịch đổi đối tác (bên nộp / nhận tiền) của phiếu thu/chi ở mọi trạng thái, ghi lịch sử `partner_update`. */
+export const documentPartnerBody = z.object({
+  partner_id: objectId,
+  if_match: docVersion,
+  request_id: uuid,
+});
+export type DocumentPartnerBody = z.infer<typeof documentPartnerBody>;
+
 /**
  * POST /documents/{id}/links — gán liên kết thủ công từ PHIẾU (quyền `link:manage`):
  * `offset` → khoản công nợ · `repayment` (phiếu chi) / `disbursement` (phiếu thu) → khoản nợ ngân hàng.

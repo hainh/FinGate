@@ -1488,6 +1488,35 @@ Kiểm chứng: `e2e/fix4-verify.spec.ts` (spec riêng). Các thay đổi hành 
 - Sửa cấn trừ sau khi đã duyệt: phiếu phải được yêu cầu bổ sung (về bước sửa), sửa rồi duyệt lại.
 - Lãi / phí chỉ cho khoản vay ngân hàng; công nợ không tách.
 
+## 28. Chủ tịch đổi đối tác của phiếu thu / chi
+
+Chủ tịch (`chairman`) đổi lại bên nộp tiền (phiếu thu) hoặc bên nhận tiền (phiếu chi) của một phiếu, ở **mọi trạng thái** kể cả đã thực thi. Vai trò được khai báo ở `PARTNER_REASSIGN_ROLES` (`domain/entitlement/index.ts`), cùng kiểu với `UNRESTRICTED_DELETE_ROLES`.
+
+### 28.1 Backend
+
+- `PATCH /documents/:id/partner` (`routes/documents.ts`), body `documentPartnerBody` (`partner_id`, `if_match`, `request_id`). Không cần step-up: đây không phải thao tác phá huỷ.
+- Chặn: actor không phải Chủ tịch (FG-RBAC-001); kind khác thu / chi (FG-VAL-001); phiếu còn `options.loan` / `options.offset` (gỡ trước); đối tác không cùng công ty, ngừng giao dịch, hoặc loại không hợp lệ (qua `resolveVoucherPartner`); liên kết cấn trừ / trả nợ / giải ngân khớp đối tác cũ (FG-LINK-001, qua `assertPartnerChangeKeepsLinks`); phiếu chuyển nội bộ **đã thực thi** đổi sang / khỏi "Công ty trong tập đoàn".
+- Phiếu chi: đích chuyển nội bộ tính lại theo đối tác mới (`resolveTransferTarget`, cùng cách PATCH thường).
+- Không đụng số tiền và sổ cái: sổ không lưu đối tác, số liệu công nợ và đối tác tính sống theo `partner_id`.
+- Ghi lịch sử `partner_update` (`fields.from` / `fields.to` = `{id, name}`), audit `document.partner_update`, idempotent theo `request_id`, CAS theo `version`.
+- `can.partner_change` (`documentPermissions`): true khi actor thuộc `PARTNER_REASSIGN_ROLES`, phiếu thu / chi, trong phạm vi công ty.
+
+### 28.2 Giao diện
+
+- Tab Tóm tắt, thẻ "Đối tác" (`PartnerCard`, `components/voucher-v2.tsx`): nút **Đổi đối tác** đặt cạnh **Sửa đối tác**; mở `ChangePartnerModal` với `PartnerPicker` (phiếu thu: ngân hàng / khách hàng / NCC; phiếu chi: mọi loại).
+- Lịch sử hồ sơ hiển thị "Đối tác: cũ → mới" (`historyDetailText`, `screens/document-detail.tsx`); nhãn `partner_update` / `document.partner_update` trong `components/labels.ts`.
+- Hook `useChangeDocumentPartner` (`app/v2/documents.ts`) làm tươi công nợ, khoản vay, đối tác và phiếu.
+
+### 28.3 Kiểm thử
+
+- `domain/entitlement/document-v2-permissions.test.ts`: cờ `partner_change` theo vai trò, loại phiếu, phạm vi công ty.
+- **Chưa có** test tích hợp DB hoặc E2E cho luồng đổi đối tác trên phiếu đã thực thi. Cần kiểm trên app đang chạy.
+
+### 28.4 Lưu ý
+
+- Phiếu đang có khoản vay / cấn trừ không đổi được đối tác qua API này: phải gỡ trước. Hiện chưa có nút gỡ trên phiếu đã thực thi, nên các phiếu này phải xử lý riêng nếu cần.
+- Liên kết do quy trình tự động tạo không được kiểm tra khi đổi đối tác (giống luồng sửa phiếu thường).
+
 ## Quyết định thiết kế bổ sung (chờ duyệt đưa vào v2/v2.md)
 
 Các điểm agent phát hiện khi triển khai, spec chưa nêu:

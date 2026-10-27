@@ -395,6 +395,8 @@ export interface DocumentDetail {
     tag?: boolean;
     /** [v2] gán / gỡ liên kết thủ công (link:manage). */
     link?: boolean;
+    /** [v2] Chủ tịch đổi đối tác (bên nộp / nhận) của phiếu thu/chi ở mọi trạng thái. */
+    partner_change?: boolean;
   };
 }
 

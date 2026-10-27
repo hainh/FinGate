@@ -527,6 +527,19 @@ export function useSetDocumentTags(documentId: string) {
   });
 }
 
+/** Chủ tịch đổi đối tác (bên nộp / nhận) của phiếu thu/chi — mọi trạng thái. Server ghi lịch sử `partner_update`. */
+export function useChangeDocumentPartner(documentId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { partner_id: string; if_match: number }) =>
+      apiData<unknown>(`/documents/${documentId}/partner`, { method: 'PATCH', body }),
+    onSuccess: () => {
+      invalidateLinkConsumers(qc);
+      for (const key of ['partners', 'partner-options']) void qc.invalidateQueries({ queryKey: [key] });
+    },
+  });
+}
+
 export interface DocumentLinkInput {
   relation: ManualLinkRelation;
   to_id: string;

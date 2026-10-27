@@ -50,6 +50,7 @@ import {
   useCreateDocumentLink,
   useRemoveDocumentLink,
   useRerunAutomationRun,
+  useChangeDocumentPartner,
   useSetDocumentTags,
   type AutomationRunView,
   type DocLink,
@@ -61,7 +62,7 @@ import {
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgToneChip } from './primitives.tsx';
 import { FgCard } from './cards.tsx';
 import { FgEmptyState, FgModal, FgTable, type TableColumnsType } from './uitk.tsx';
-import { PartnerFormModal, notifyPartnerWarnings } from './partner-picker.tsx';
+import { PartnerFormModal, PartnerPicker, notifyPartnerWarnings, partnerTypesFor } from './partner-picker.tsx';
 import { TagInput } from './tag-input.tsx';
 import { problemText } from './attachments.tsx';
 import { useToast } from './pagekit.tsx';
@@ -167,19 +168,30 @@ export function PartnerCard({ doc }: { doc: DocumentDetail }): ReactNode {
   const qc = useQueryClient();
   const { notification } = useToast();
   const [editing, setEditing] = useState(false);
+  const [changing, setChanging] = useState(false);
   // Bản đầy đủ (có ghi chú) chỉ tải khi mở popup sửa — tránh ghi đè ghi chú bằng rỗng.
   const full = usePartner(editing ? doc.partner_id : null);
   const p = doc.partner ?? null;
   const canEdit = can('partner:write') && !!p;
+  const canChange = !!doc.can.partner_change;
 
   return (
     <FgCard
       title={UI.partner.title}
       extra={
-        canEdit ? (
-          <FgButton size="small" onClick={() => setEditing(true)}>
-            {UI.partner.edit}
-          </FgButton>
+        canEdit || canChange ? (
+          <div style={{ display: 'flex', gap: 'var(--fg-space-2)' }}>
+            {canChange ? (
+              <FgButton size="small" onClick={() => setChanging(true)}>
+                Đổi đối tác
+              </FgButton>
+            ) : null}
+            {canEdit ? (
+              <FgButton size="small" onClick={() => setEditing(true)}>
+                {UI.partner.edit}
+              </FgButton>
+            ) : null}
+          </div>
         ) : null
       }
     >
@@ -222,7 +234,62 @@ export function PartnerCard({ doc }: { doc: DocumentDetail }): ReactNode {
           }}
         />
       ) : null}
+      {changing ? <ChangePartnerModal doc={doc} onClose={() => setChanging(false)} /> : null}
     </FgCard>
+  );
+}
+
+/**
+ * Chủ tịch đổi lại đối tác (bên nộp tiền của phiếu thu / bên nhận tiền của phiếu chi) — mọi trạng thái, kể cả đã thực thi.
+ * Số tiền và sổ cái không đổi; công nợ, số liệu đối tác tính theo đối tác mới. Server kiểm các điều kiện chặn.
+ */
+function ChangePartnerModal({ doc, onClose }: { doc: DocumentDetail; onClose: () => void }): ReactNode {
+  const { message } = useToast();
+  const change = useChangeDocumentPartner(doc._id);
+  const [picked, setPicked] = useState<string | null>(doc.partner_id ?? null);
+  const unchanged = !picked || picked === (doc.partner_id ?? null);
+
+  const save = async (): Promise<void> => {
+    if (!picked) return;
+    try {
+      await change.mutateAsync({ partner_id: picked, if_match: doc.version });
+      message.success('Đã đổi đối tác của phiếu');
+      onClose();
+    } catch (e) {
+      message.error(problemText(e, 'Không đổi được đối tác'));
+    }
+  };
+
+  return (
+    <FgModal
+      open
+      title={`Đổi đối tác — ${doc.code}`}
+      onCancel={onClose}
+      footer={
+        <>
+          <FgButton onClick={onClose}>Hủy</FgButton>
+          <FgButton variant="primary" loading={change.isPending} disabled={unchanged} onClick={() => void save()}>
+            Lưu đối tác
+          </FgButton>
+        </>
+      }
+    >
+      <FgAlert
+        tone="info"
+        title="Đổi đối tác không đổi số tiền hay sổ cái"
+        description="Công nợ và số liệu của đối tác sẽ tính theo đối tác mới. Phiếu đang gắn khoản vay / cấn trừ hoặc liên kết với đối tác cũ phải gỡ trước."
+      />
+      <div style={{ marginTop: 16 }}>
+        <PartnerPicker
+          value={picked}
+          onChange={(id) => setPicked(id)}
+          allowedTypes={partnerTypesFor(doc.kind === 'income' ? ['bank', 'customer', 'supplier'] : null)}
+          companyId={doc.company_id}
+          label={doc.kind === 'income' ? 'Bên nộp tiền' : 'Bên nhận tiền'}
+          required
+        />
+      </div>
+    </FgModal>
   );
 }
 

@@ -71,3 +71,39 @@ describe('documentPermissions — đưa vào hàng thanh toán (v2 §7.1: DaDuye
     expect(perms(['doc:read', 'payment:mark'], { status: 'paid' }).queue_payment).toBe(false);
   });
 });
+
+describe('documentPermissions — partner_change (đổi đối tác phiếu thu/chi)', () => {
+  function partnerPerms(role: 'chairman' | 'chief_accountant', kind: string, opts: { status?: string; inCompany?: boolean } = {}) {
+    // ngoài công ty: không có doc:read (doc:read tự cấp phạm vi xem mọi công ty)
+    const permissions = opts.inCompany === false ? ['doc:create'] : ['doc:read', 'doc:create'];
+    return documentPermissions(
+      { user_id: 'u1', permissions, amount_limit_minor: 0n, role },
+      {
+        status: opts.status ?? 'paid',
+        kind,
+        created_by: 'u2',
+        amount_minor: 1_000n,
+        steps: [],
+        evidence_missing: [],
+        company_id: 'A',
+        actor_companies: opts.inCompany === false ? [] : ['A'],
+        delegatedStepOrders: [],
+        approved_from_ktt_up: true,
+      },
+    );
+  }
+
+  it('Chủ tịch đổi được đối tác phiếu thu / chi ở mọi trạng thái, kể cả đã thực thi', () => {
+    expect(partnerPerms('chairman', 'income', { status: 'paid' }).partner_change).toBe(true);
+    expect(partnerPerms('chairman', 'spend', { status: 'draft' }).partner_change).toBe(true);
+  });
+
+  it('vai trò khác (kể cả kế toán trưởng) không đổi được đối tác', () => {
+    expect(partnerPerms('chief_accountant', 'income').partner_change).toBe(false);
+  });
+
+  it('phiếu không phải thu / chi (đảo hạn) hoặc ngoài phạm vi công ty ⇒ không đổi được', () => {
+    expect(partnerPerms('chairman', 'rollover').partner_change).toBe(false);
+    expect(partnerPerms('chairman', 'spend', { inCompany: false }).partner_change).toBe(false);
+  });
+});

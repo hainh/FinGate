@@ -210,6 +210,8 @@ export interface DocPermissions {
   tag: boolean;
   /** v2: gán / gỡ liên kết thủ công từ phiếu — cần `link:manage`. */
   link: boolean;
+  /** v2: đổi đối tác (bên nộp / nhận) của phiếu thu/chi ở mọi trạng thái — chỉ `PARTNER_REASSIGN_ROLES` (Chủ tịch). */
+  partner_change: boolean;
   reason?: string;
   amount_limit_minor: string;
   over_limit: boolean;
@@ -229,6 +231,9 @@ const CANCELLABLE_STATUSES: readonly string[] = ['draft', 'changes_requested', '
 
 /** Vai trò xoá được phiếu ở BẤT KỲ thời điểm/trạng thái, không vướng gate người lập hay "chưa ai duyệt". */
 export const UNRESTRICTED_DELETE_ROLES: readonly Role[] = ['chairman'];
+
+/** Vai trò đổi được đối tác (bên nộp / nhận tiền) của phiếu thu/chi ở MỌI trạng thái, kể cả đã thực thi. */
+export const PARTNER_REASSIGN_ROLES: readonly Role[] = ['chairman'];
 
 /**
  * Đã có ai từ Kế toán trưởng trở lên **duyệt** trong VÒNG DUYỆT HIỆN TẠI chưa?
@@ -338,6 +343,7 @@ export function documentPermissions(
     export: has('report:export'),
     tag: inScope && has('doc:read') && (has('doc:create') || has('tag:create')),
     link: has('link:manage') && inScope,
+    partner_change: inScope && PARTNER_REASSIGN_ROLES.includes(actor.role) && (doc.kind === 'income' || doc.kind === 'spend'),
     amount_limit_minor: actor.amount_limit_minor.toString(),
     over_limit: overLimit,
     step_order: iAmStep[0]?.order ?? null,

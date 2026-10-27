@@ -47,6 +47,7 @@ import {
   queueProcessedQuery,
   documentUpdateBody,
   documentTagsBody,
+  documentPartnerBody,
   documentLinkCreateBody,
   linkRemoveBody,
   opinionBody,
@@ -60,7 +61,13 @@ import {
 } from '@fingate/shared';
 import { loadDoc, transition, assertStepUp } from '../domain/workflow/index.ts';
 import { emitVoucherEvent, type VoucherEventSubject } from '../domain/events/index.ts';
-import { companyReachableByActor, documentPermissions, approvedFromChiefAccountantUp, UNRESTRICTED_DELETE_ROLES } from '../domain/entitlement/index.ts';
+import {
+  companyReachableByActor,
+  documentPermissions,
+  approvedFromChiefAccountantUp,
+  PARTNER_REASSIGN_ROLES,
+  UNRESTRICTED_DELETE_ROLES,
+} from '../domain/entitlement/index.ts';
 import { awaitingBadge, decisionPack, docHref, queryQueue } from '../domain/queries/index.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
 import { assertAccountAllowedForCompany, assertGroupAccountForCompany } from '../domain/accounts.ts';
@@ -95,6 +102,7 @@ import {
   buildVoucherRefView,
   disbursementReleasedByLoanChoice,
   linkChosenLoanOnSave,
+  loadPartnerInCompany,
   planToLoanInput,
   planToStoredLoan,
   resolveLoanPlan,
@@ -766,6 +774,122 @@ export function documentRoutes(app: FastifyInstance): void {
             ...(diff.added.length ? { added: diff.added.map(nameOf) } : {}),
             ...(diff.removed.length ? { removed: diff.removed.map(nameOf) } : {}),
           },
+          request_id: body.request_id,
+          ip: requestCtx(req).ip,
+        });
+        invalidateFor(companyId, actor.user_id);
+        return ok(reply, { data: await detailOf(params.id, actor.user_id, requireScope(req).companyIds), version: r.version });
+      },
+    }),
+  );
+
+  /* ---------------------------- đối tác của phiếu (Chủ tịch) ---------------------------- */
+
+  /**
+   * Chủ tịch đổi lại đối tác của phiếu thu/chi (bên nộp tiền / bên nhận tiền) ở MỌI trạng thái, kể cả đã thực thi.
+   * Không đụng số tiền hay sổ cái (sổ không lưu đối tác); số liệu công nợ / đối tác tính sống theo `partner_id`.
+   * Chặn: phiếu đang gắn khoản vay / cấn trừ (gỡ trước), liên kết khớp đối tác cũ (FG-LINK-001), đối tác ngừng giao dịch,
+   * và phiếu chuyển nội bộ đã thực thi (đổi sang / khỏi đối tác "Công ty trong tập đoàn").
+   * Ghi lịch sử `partner_update` và audit `document.partner_update`.
+   */
+  app.route(
+    defineRoute({
+      method: 'PATCH',
+      url: '/documents/:id/partner',
+      config: {
+        perms: ['doc:read'] as Permission[],
+        screen: 'DOC-01',
+        summary: 'Chủ tịch đổi đối tác của phiếu thu/chi (mọi trạng thái; ghi lịch sử partner_update)',
+      },
+      schema: { tags: ['documents'], body: toJsonSchema(documentPartnerBody) },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        if (!PARTNER_REASSIGN_ROLES.includes(actor.role)) {
+          throw new ApiError({ code: 'FG-RBAC-001', detail: 'Chỉ Chủ tịch được đổi đối tác của phiếu' });
+        }
+        const params = req.params as { id: string };
+        const body = validate(documentPartnerBody, req.body);
+        const doc = await loadDoc(params.id);
+        await assertVisible(req, String(doc.company_id));
+        const kind = String(doc.kind) as VoucherKind;
+        if (kind !== 'income' && kind !== 'spend') {
+          throw new ApiError({ code: 'FG-VAL-001', detail: 'Chỉ đổi đối tác của phiếu thu / phiếu chi' });
+        }
+        if (doc.processed_requests?.includes(body.request_id)) {
+          return ok(reply, { data: await detailOf(params.id, actor.user_id, requireScope(req).companyIds), idempotent: true });
+        }
+        const companyId = String(doc.company_id);
+        const prevId = doc.partner_id ? String(doc.partner_id) : null;
+        if (body.partner_id === prevId) {
+          return ok(reply, { data: await detailOf(params.id, actor.user_id, requireScope(req).companyIds), version: doc.version, unchanged: true });
+        }
+        if (doc.options?.loan || doc.options?.offset) {
+          throw new ApiError({
+            code: 'FG-VAL-001',
+            detail: 'Phiếu đang gắn khoản vay hoặc cấn trừ — gỡ trước khi đổi đối tác',
+            errors: { partner_id: 'Phiếu đang gắn khoản vay / cấn trừ — gỡ trước khi đổi đối tác' },
+          });
+        }
+        const next = await resolveVoucherPartner({ companyId, partnerId: body.partner_id, kind, requireActive: true, loanKind: null });
+        const prev = prevId ? await loadPartnerInCompany(companyId, prevId) : null;
+        const nextType = String(next.type);
+        const prevType = prev ? String(prev.type) : null;
+        if (doc.status === 'paid' && kind === 'spend' && (prevType === 'internal' || nextType === 'internal')) {
+          throw new ApiError({
+            code: 'FG-VAL-001',
+            detail: 'Phiếu chuyển nội bộ đã thực thi — không đổi sang / khỏi đối tác "Công ty trong tập đoàn"',
+            errors: { partner_id: 'Phiếu chuyển nội bộ đã thực thi — không đổi sang / khỏi đối tác "Công ty trong tập đoàn"' },
+          });
+        }
+        await assertPartnerChangeKeepsLinks({ documentId: params.id, nextPartnerId: body.partner_id });
+        // phiếu chi: đích chuyển nội bộ suy từ đối tác nên phải tính lại theo đối tác mới
+        const transfer =
+          kind === 'spend'
+            ? await resolveTransferTarget({
+                companyId,
+                kind,
+                partnerId: body.partner_id,
+                target: null,
+                previous: storedTransferOf(doc as unknown as Record<string, unknown>),
+              })
+            : undefined;
+
+        const fromName = prev && prevId ? String(prev.name ?? '') : null;
+        const toName = String(next.name ?? '');
+        const entry = buildHistoryEntry({
+          action: 'partner_update',
+          actor: { user_id: actor.user_id, role: actor.role, name: actor.name },
+          from: doc.status,
+          to: doc.status,
+          request_id: body.request_id,
+          ip: requestCtx(req).ip,
+          fields: {
+            from: fromName !== null && prevId ? { id: prevId, name: fromName } : null,
+            to: { id: body.partner_id, name: toName },
+          },
+        });
+        const set: Record<string, unknown> = { partner_id: body.partner_id };
+        if (transfer !== undefined) {
+          set.transfer_target = transfer;
+          set.target = transfer; // v1 song song
+        }
+        const r = await cas<Record<string, unknown>>({
+          model: 'Document',
+          id: params.id,
+          ifMatch: body.if_match,
+          set,
+          push: { history: entry },
+          addToSet: { processed_requests: body.request_id },
+        });
+        if (!r) throw new ApiError({ code: 'FG-WF-011' });
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'document.partner_update',
+          subject: { type: doc.kind, id: params.id, code: doc.code },
+          company_id: companyId,
+          document_id: params.id,
+          diff_fields: { from: fromName ?? '—', to: toName },
           request_id: body.request_id,
           ip: requestCtx(req).ip,
         });
