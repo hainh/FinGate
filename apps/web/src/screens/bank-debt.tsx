@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { DatePicker, type TableColumnsType } from 'antd';
+import { Checkbox, DatePicker, type TableColumnsType } from 'antd';
 import dayjs from 'dayjs';
 import {
   BANK_DEBT_STATUS_KEYS,
@@ -575,6 +575,8 @@ interface LoanFormState {
   amount: Money | null;
   credit_limit: Money | null;
   disbursed_date: string;
+  /** Tạo khoản chờ giải ngân (chưa có tiền về): không gửi ngày giải ngân. */
+  awaiting_disbursement: boolean;
   maturity_date: string;
   interest_rate: string;
   term_months: string;
@@ -607,6 +609,7 @@ export function BankDebtFormScreen(): ReactNode {
     amount: null,
     credit_limit: null,
     disbursed_date: dayjs().format('YYYY-MM-DD'),
+    awaiting_disbursement: false,
     maturity_date: dayjs().add(12, 'month').subtract(1, 'day').format('YYYY-MM-DD'),
     interest_rate: '0',
     term_months: '12',
@@ -625,6 +628,7 @@ export function BankDebtFormScreen(): ReactNode {
       amount: moneyFromWire(detail.principal),
       credit_limit: minorOf(detail.credit_limit) > 0n ? moneyFromWire(detail.credit_limit) : null,
       disbursed_date: detail.disbursed_at ? dayjs(detail.disbursed_at).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
+      awaiting_disbursement: detail.status === 'pending_disbursement',
       maturity_date: detail.maturity_date,
       interest_rate: interestRateText(detail.interest_rate) || '0',
       term_months: detail.term_months != null ? String(detail.term_months) : '',
@@ -657,7 +661,7 @@ export function BankDebtFormScreen(): ReactNode {
       return;
     }
     // Hạn thanh toán phải sau ngày giải ngân (server kiểm lại).
-    if (!editMode && f.disbursed_date && f.maturity_date <= f.disbursed_date) {
+    if (!editMode && !f.awaiting_disbursement && f.disbursed_date && f.maturity_date <= f.disbursed_date) {
       setErrors({ maturity_date: 'Hạn thanh toán phải sau ngày giải ngân' });
       return;
     }
@@ -703,7 +707,8 @@ export function BankDebtFormScreen(): ReactNode {
         partner_id: f.partner_id,
         amount,
         ...(credit ? { credit_limit: credit } : {}),
-        disbursed_date: f.disbursed_date || undefined,
+        disbursed: !f.awaiting_disbursement,
+        disbursed_date: f.awaiting_disbursement ? undefined : f.disbursed_date || undefined,
         maturity_date: f.maturity_date,
         interest_rate: rate,
         ...(term ? { term_months: term } : {}),
@@ -764,6 +769,13 @@ export function BankDebtFormScreen(): ReactNode {
               <FgMoneyInput value={f.credit_limit} onChange={(v) => setF((s) => ({ ...s, credit_limit: v }))} />
             </FgField>
             {!editMode ? (
+              <FgField label="Giải ngân" help="Đánh dấu nếu khoản chưa có tiền về. Tiền về sau được gán bằng phiếu thu giải ngân.">
+                <Checkbox checked={f.awaiting_disbursement} onChange={(e) => setF((s) => ({ ...s, awaiting_disbursement: e.target.checked }))}>
+                  Chờ giải ngân (chưa có tiền về)
+                </Checkbox>
+              </FgField>
+            ) : null}
+            {!editMode && !f.awaiting_disbursement ? (
               <FgField label="Ngày giải ngân" error={errors['disbursed_date']} help="Mặc định hôm nay">
                 <DatePicker
                   value={f.disbursed_date ? dayjs(f.disbursed_date) : null}

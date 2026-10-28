@@ -45,6 +45,7 @@ import {
   isoOf,
   loanStatusOf,
   loanWarningOf,
+  manualLoanDisbursement,
   positiveMinor,
   wireMoney,
   type LoanStatus,
@@ -521,7 +522,7 @@ export async function createLoan(actor: DebtActor, scope: ScopeLike, body: LoanC
   }
   const principal = positiveMinor(body.amount.amount_minor, 'amount', 'Số tiền vay phải lớn hơn 0');
   const partner = await assertPartner(body.partner_id, companyId, LOAN_PARTNER_TYPES, { usage: 'Khoản nợ ngân hàng' });
-  const disbursedDate = body.disbursed_date ?? today();
+  const { status, disbursedDate } = manualLoanDisbursement(body, today());
   assertMaturityAfterDisbursement(body.maturity_date, disbursedDate);
   return insertLoan({
     companyId,
@@ -539,8 +540,8 @@ export async function createLoan(actor: DebtActor, scope: ScopeLike, body: LoanC
     collateral: body.collateral || null,
     responsible: body.responsible || null,
     note: body.note ?? null,
-    status: 'active',
-    disbursedAt: businessDateStart(disbursedDate),
+    status,
+    disbursedAt: disbursedDate ? businessDateStart(disbursedDate) : null,
     origin: { kind: 'manual', run_id: null, rule_code: null },
     ip: meta.ip ?? null,
     requestId: body.request_id ?? null,

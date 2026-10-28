@@ -259,3 +259,15 @@ export function assertMaturityAfterDisbursement(maturityDate: string, disbursedD
     });
   }
 }
+
+/**
+ * Giải ngân lúc tạo khoản vay thủ công. `disbursed` mặc định true (đang vay, ngày giải ngân = `disbursed_date` hoặc hôm nay).
+ * `disbursed: false` ⇒ chờ giải ngân: không có ngày giải ngân, tiền về sau qua phiếu thu gán làm giải ngân.
+ */
+export function manualLoanDisbursement(
+  input: { disbursed?: boolean; disbursed_date?: string },
+  todayIso: string,
+): { status: 'active' | 'pending_disbursement'; disbursedDate: string | null } {
+  if (input.disbursed === false) return { status: 'pending_disbursement', disbursedDate: null };
+  return { status: 'active', disbursedDate: input.disbursed_date ?? todayIso };
+}

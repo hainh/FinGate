@@ -353,6 +353,8 @@ export interface LoanCreateInput {
   partner_id: string;
   amount: { amount_minor: string; currency: string };
   credit_limit?: { amount_minor: string; currency: string };
+  /** false = chờ giải ngân (chưa có tiền về). */
+  disbursed?: boolean;
   disbursed_date?: string;
   maturity_date: string;
   interest_rate: string;

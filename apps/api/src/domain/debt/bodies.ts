@@ -102,13 +102,14 @@ const loanTerms = {
   note: z.string().max(1000).optional(),
 };
 
-/** POST /bank-debts — ngân hàng cho vay (đối tác loại Ngân hàng) bắt buộc; tạo thủ công = đã giải ngân. */
+/** POST /bank-debts — ngân hàng cho vay (đối tác loại Ngân hàng) bắt buộc; mặc định tạo = đã giải ngân (`disbursed: false` ⇒ chờ giải ngân). */
 export const loanCreateBody = z.object({
   company_id: objectId.optional(),
   partner_id: objectId.describe('Ngân hàng cho vay (đối tác loại Ngân hàng)'),
   amount: moneyField.describe('Số tiền vay (gốc)'),
   credit_limit: moneyField.optional(),
-  disbursed_date: businessDate.optional().describe('Ngày giải ngân (mặc định hôm nay)'),
+  disbursed: z.boolean().optional().describe('false = chờ giải ngân (chưa có tiền về); mặc định true'),
+  disbursed_date: businessDate.optional().describe('Ngày giải ngân (mặc định hôm nay; bỏ qua khi chờ giải ngân)'),
   ...loanTerms,
   request_id: requestId.optional(),
 });
