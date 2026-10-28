@@ -17,7 +17,7 @@
       "command": "npx",
       "args": ["-y", "mongodb-mcp-server@2.1.1", "--readOnly"],
       "env": {
-        "MDB_MCP_CONNECTION_STRING": "mongodb://localhost:27017/fingate?replicaSet=rs0"
+        "MDB_MCP_CONNECTION_STRING": "mongodb://localhost:27117?directConnection=true&appName=MQLens&connectTimeoutMS=10000&serverSelectionTimeoutMS=30000"
       }
     },
     "node-inspector": {
