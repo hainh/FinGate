@@ -478,7 +478,9 @@ export function buildPlan(S, { OID, now }) {
     }
   }
 
-  // disbursement (R2 v1): phiếu thu đi vay → khoản vay tự động; origin = automation/R2
+  // disbursement (R2 v1): phiếu thu đi vay → khoản vay tự động; origin = automation/R2.
+  // Phiếu thu có cờ create_bank_debt bị TẮT khi migrate: v1 có thể đã tự tạo khoản vay từ cờ đó, nên không
+  // sinh liên kết giải ngân hay nhãn tự động R2 nữa — khoản vay giữ nguyên như dữ liệu v1 thường.
   for (const l of S.loans.values()) {
     if (!l.autoSrc) continue;
     const src = S.docs.get(l.autoSrc);
@@ -486,6 +488,7 @@ export function buildPlan(S, { OID, now }) {
       addException('missing_source_document', 'disbursement', 'bank_debts', l.id, l.principal);
       continue;
     }
+    if (src.createBankDebt) continue;
     if (src.company !== l.company || src.kind !== 'income' || l.principal <= 0n) {
       addException('invalid_disbursement', 'disbursement', 'bank_debts', l.id, l.principal);
       continue;
@@ -553,7 +556,8 @@ export function buildPlan(S, { OID, now }) {
     if (!name) return { unassigned: true, reason: 'no_payee' };
     const bank0 = cp?.banks?.[0];
     let type = 'supplier';
-    if (d.kind === 'rollover' || (d.kind === 'income' && d.createBankDebt) || looksLikeBank(name)) type = 'bank';
+    // Cờ v1 create_bank_debt KHÔNG suy loại đối tác: người trả tiền trên phiếu thu là KH/NCC, không phải NH.
+    if (d.kind === 'rollover' || looksLikeBank(name)) type = 'bank';
     else if (d.kind === 'income') type = 'customer';
     return {
       unassigned: false,

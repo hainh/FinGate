@@ -105,7 +105,7 @@ const D1 = new FakeOID('d1000000000000000000001'); // phiếu chi
 const D2 = new FakeOID('d2000000000000000000002'); // phiếu thu (offset KH)
 const D3 = new FakeOID('d3000000000000000000003'); // rollover (loan_ref)
 const D4 = new FakeOID('d4000000000000000000004'); // phiếu chi trả nợ NH
-const D5 = new FakeOID('d5000000000000000000005'); // phiếu thu đi vay → R2
+const D5 = new FakeOID('d5000000000000000000005'); // phiếu thu có cờ v1 create_bank_debt (tắt khi migrate)
 const D6 = new FakeOID('d6000000000000000000006'); // phiếu chi, đối tác đã có
 const D7 = new FakeOID('d7000000000000000000007'); // chi nội bộ (label AP)
 const D8 = new FakeOID('d8000000000000000000008'); // thu nội bộ tự sinh (R1) ở C2
@@ -145,7 +145,7 @@ function seedV1() {
       { _id: D2, company_id: C1, kind: 'income', status: 'paid', payee: { name: 'Công ty CP Đầu tư Nhà Xanh' }, amount: { minor: money(1_200_000_000) } },
       { _id: D3, company_id: C1, kind: 'rollover', status: 'approved', payee: { name: 'BIDV Chi nhánh TP.HCM' }, amount: { minor: money(2_000_000_000) }, loan_id: LOAN1 },
       { _id: D4, company_id: C1, kind: 'spend', status: 'paid', payee: { name: 'BIDV Chi nhánh TP.HCM' }, amount: { minor: money(500_000_000) } },
-      { _id: D5, company_id: C1, kind: 'income', status: 'paid', payee: { name: 'BIDV Chi nhánh TP.HCM' }, amount: { minor: money(800_000_000) }, create_bank_debt: true, execution: { paid_at: '2026-03-01' } },
+      { _id: D5, company_id: C1, kind: 'income', status: 'paid', payee: { name: 'Công ty TNHH Minh Long' }, amount: { minor: money(800_000_000) }, create_bank_debt: true, execution: { paid_at: '2026-03-01' } },
       { _id: D6, company_id: C1, kind: 'spend', status: 'paid', payee: { name: 'Công ty CP Ép cọc nền móng Trường Phát' }, amount: { minor: money(100_000) } },
       { _id: D7, company_id: C1, kind: 'spend', status: 'paid', payee: { name: 'AP - VietinBank - 10987001234501' }, amount: { minor: money(300_000_000) } },
       { _id: D8, company_id: C2, kind: 'income', status: 'paid', payee: { name: 'MP - Công ty MP', is_internal: true }, amount: { minor: money(300_000_000) }, auto_source_document_id: D7, auto_created: true },
@@ -230,7 +230,7 @@ test('dry-run phân loại đối tác, liên kết, ngoại lệ và rà soát 
   const byRel = summary.links.planned.by_relation;
   assert.equal(byRel.offset, 2, 'D1, D2 → công nợ');
   assert.equal(byRel.repayment, 1, 'D4 → L1');
-  assert.equal(byRel.disbursement, 1, 'D5 → L2 (R2)');
+  assert.equal(byRel.disbursement, undefined, 'cờ create_bank_debt tắt: D5 không sinh liên kết giải ngân');
   assert.equal(byRel.internal_transfer, 1, 'D7 → D8 khác công ty');
   assert.equal(byRel.generated, undefined, 'generated chỉ dùng cùng công ty');
 
@@ -260,7 +260,7 @@ test('apply ghi đối tác, liên kết, hướng, origin; chạy lại không 
 
   const partners1 = list('partners').length;
   const links1 = list('business_links').length;
-  assert.equal(links1, 5, 'offset×2 + repayment + disbursement + internal_transfer');
+  assert.equal(links1, 4, 'offset×2 + repayment + internal_transfer (cờ create_bank_debt tắt: không disbursement)');
   assert.ok(list('settings').some((s) => s.key === 'migration.0004.summary'), 'lưu tóm tắt');
 
   // đối tác: DT-code được cấp, có migration.key, phủ mọi phiếu/khoản
@@ -283,8 +283,10 @@ test('apply ghi đối tác, liên kết, hướng, origin; chạy lại không 
   assert.equal(emp.partner_id, undefined, 'nhân viên không có đối tác');
   assert.equal(emp.direction, undefined, 'nhân viên không có hướng');
 
-  // R2 origin và disbursed_at; R1 origin trên phiếu thu nội bộ
-  assert.equal(list('bank_debts').find((x) => String(x._id) === String(LOAN2)).origin.rule_code, 'R2');
+  // cờ create_bank_debt tắt: khoản vay không nhãn R2, phiếu thu có cờ là KH thường; R1 origin trên phiếu thu nội bộ
+  assert.notEqual(list('bank_debts').find((x) => String(x._id) === String(LOAN2)).origin?.rule_code, 'R2', 'không nhãn tự động R2');
+  const d5 = list('documents').find((x) => String(x._id) === String(D5));
+  assert.equal(list('partners').find((x) => String(x._id) === String(d5.partner_id)).type, 'customer', 'cờ create_bank_debt không suy đối tác thành NH');
   assert.equal(list('documents').find((x) => String(x._id) === String(D8)).origin.rule_code, 'R1');
 
   // M4: khoản vay không đổi trạng thái, không có pending_disbursement
