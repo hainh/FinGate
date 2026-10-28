@@ -693,6 +693,11 @@ export function BankDebtFormScreen(): ReactNode {
           note: f.note.trim() || null,
         };
         if (f.partner_id !== detail.partner_id) body.partner_id = f.partner_id;
+        // Đổi giải ngân tay (chỉ gửi khi tích/bỏ tích khác trạng thái đang lưu).
+        if (f.awaiting_disbursement !== (detail.status === 'pending_disbursement')) {
+          body.disbursed = !f.awaiting_disbursement;
+          if (!f.awaiting_disbursement) body.disbursed_date = f.disbursed_date || undefined;
+        }
         await update.mutateAsync(body);
         message.success('Đã cập nhật khoản nợ ngân hàng');
         navigate(`/ngan-hang/khoan-vay/${id}`);
@@ -768,14 +773,19 @@ export function BankDebtFormScreen(): ReactNode {
             <FgField label="Hạn mức tín dụng" error={errors['credit_limit']} help={f.credit_limit ? formatMoney(f.credit_limit, { mode: 'full' }) : 'Hạn mức được cấp (nếu có)'}>
               <FgMoneyInput value={f.credit_limit} onChange={(v) => setF((s) => ({ ...s, credit_limit: v }))} />
             </FgField>
-            {!editMode ? (
-              <FgField label="Giải ngân" help="Đánh dấu nếu khoản chưa có tiền về. Tiền về sau được gán bằng phiếu thu giải ngân.">
-                <Checkbox checked={f.awaiting_disbursement} onChange={(e) => setF((s) => ({ ...s, awaiting_disbursement: e.target.checked }))}>
-                  Chờ giải ngân (chưa có tiền về)
-                </Checkbox>
-              </FgField>
-            ) : null}
-            {!editMode && !f.awaiting_disbursement ? (
+            <FgField
+              label="Giải ngân"
+              help={
+                editMode
+                  ? 'Bỏ tích để đánh dấu đã giải ngân (không được đã gán phiếu thu giải ngân vào khoản).'
+                  : 'Đánh dấu nếu khoản chưa có tiền về. Tiền về sau được gán bằng phiếu thu giải ngân.'
+              }
+            >
+              <Checkbox checked={f.awaiting_disbursement} onChange={(e) => setF((s) => ({ ...s, awaiting_disbursement: e.target.checked }))}>
+                Chờ giải ngân (chưa có tiền về)
+              </Checkbox>
+            </FgField>
+            {!f.awaiting_disbursement && (!editMode || detail?.status === 'pending_disbursement') ? (
               <FgField label="Ngày giải ngân" error={errors['disbursed_date']} help="Mặc định hôm nay">
                 <DatePicker
                   value={f.disbursed_date ? dayjs(f.disbursed_date) : null}

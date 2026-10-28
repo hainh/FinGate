@@ -117,6 +117,10 @@ export const loanCreateBody = z.object({
 /** PATCH /bank-debts/:id — không đổi trạng thái (dùng các thao tác vòng đời riêng). */
 export const loanUpdateBody = z.object({
   partner_id: objectId.optional(),
+  /** Đổi giải ngân tay: false ⇒ chờ giải ngân (khi chưa có liên kết), true ⇒ đang vay (khi chưa gán phiếu thu giải ngân). */
+  disbursed: z.boolean().optional(),
+  /** Ngày giải ngân khi chuyển sang đang vay (mặc định hôm nay). */
+  disbursed_date: businessDate.optional(),
   amount: moneyPatch.optional(),
   credit_limit: moneyPatch.nullable().optional(),
   maturity_date: businessDate.optional(),

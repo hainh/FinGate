@@ -264,6 +264,14 @@ export function assertMaturityAfterDisbursement(maturityDate: string, disbursedD
  * Giải ngân lúc tạo khoản vay thủ công. `disbursed` mặc định true (đang vay, ngày giải ngân = `disbursed_date` hoặc hôm nay).
  * `disbursed: false` ⇒ chờ giải ngân: không có ngày giải ngân, tiền về sau qua phiếu thu gán làm giải ngân.
  */
+/** Đổi giải ngân khi sửa khoản vay: `disbursed` ngược trạng thái hiện tại ⇒ `to_active` / `to_pending`; không đổi ⇒ null. */
+export function loanDisbursementToggle(currentStatus: string | null | undefined, disbursed: boolean | undefined): 'to_active' | 'to_pending' | null {
+  if (disbursed === undefined) return null;
+  if (disbursed && currentStatus === 'pending_disbursement') return 'to_active';
+  if (!disbursed && currentStatus === 'active') return 'to_pending';
+  return null;
+}
+
 export function manualLoanDisbursement(
   input: { disbursed?: boolean; disbursed_date?: string },
   todayIso: string,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { loanCreateBody } from './bodies.ts';
-import { assertMaturityAfterDisbursement, manualLoanDisbursement } from './rules.ts';
+import { loanCreateBody, loanUpdateBody } from './bodies.ts';
+import { assertMaturityAfterDisbursement, loanDisbursementToggle, manualLoanDisbursement } from './rules.ts';
 
 const PARTNER = '65a000000000000000000001';
 const base = { partner_id: PARTNER, amount: { amount_minor: '500000000', currency: 'VND' }, maturity_date: '2027-12-31' };
@@ -38,5 +38,21 @@ describe('tạo khoản vay thủ công: đã giải ngân hay chờ giải ngâ
     expect(loanCreateBody.safeParse({ ...base, disbursed: false }).success).toBe(true);
     expect(loanCreateBody.safeParse({ ...base, disbursed: 'no' }).success).toBe(false);
     expect(loanCreateBody.safeParse(base).success).toBe(true);
+  });
+});
+
+describe('sửa khoản vay: đổi giải ngân tay', () => {
+  it('chờ giải ngân ⇄ đang vay theo cờ disbursed; không gửi cờ hoặc trùng trạng thái ⇒ không đổi', () => {
+    expect(loanDisbursementToggle('pending_disbursement', true)).toBe('to_active');
+    expect(loanDisbursementToggle('active', false)).toBe('to_pending');
+    expect(loanDisbursementToggle('pending_disbursement', false)).toBeNull();
+    expect(loanDisbursementToggle('active', true)).toBeNull();
+    expect(loanDisbursementToggle('active', undefined)).toBeNull();
+    expect(loanDisbursementToggle('archived', false)).toBeNull();
+  });
+
+  it('PATCH nhận disbursed và disbursed_date', () => {
+    expect(loanUpdateBody.safeParse({ disbursed: true, disbursed_date: '2026-10-20' }).success).toBe(true);
+    expect(loanUpdateBody.safeParse({ disbursed: 'yes' }).success).toBe(false);
   });
 });

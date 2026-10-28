@@ -370,6 +370,9 @@ export interface LoanCreateInput {
 
 export interface LoanUpdateInput {
   partner_id?: string;
+  /** Đổi giải ngân tay: false ⇒ chờ giải ngân, true ⇒ đang vay (kèm `disbursed_date`). */
+  disbursed?: boolean;
+  disbursed_date?: string;
   amount?: { amount_minor: string; currency: string };
   credit_limit?: { amount_minor: string; currency: string } | null;
   maturity_date?: string;

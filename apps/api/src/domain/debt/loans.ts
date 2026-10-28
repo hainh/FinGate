@@ -45,6 +45,7 @@ import {
   isoOf,
   loanStatusOf,
   loanWarningOf,
+  loanDisbursementToggle,
   manualLoanDisbursement,
   positiveMinor,
   wireMoney,
@@ -656,7 +657,26 @@ export async function updateLoan(actor: DebtActor, scope: ScopeLike, id: string,
   const disbursedPlanned = reserved.filter((l) => l.relation === 'disbursement').reduce((s, l) => s + allocationOf(l), 0n);
   const repaidPlanned = reserved.filter((l) => l.relation === 'repayment').reduce((s, l) => s + principalPartOf(l), 0n);
   const set: Record<string, unknown> = { updated_at: new Date() };
-  if (body.maturity_date !== undefined) assertMaturityAfterDisbursement(body.maturity_date, b.disbursed_at ? vnDate(b.disbursed_at) : null);
+  // Đổi giải ngân tay: đang vay ⇄ chờ giải ngân. Về chờ chỉ khi chưa có liên kết nào (chưa có tiền); sang đang vay
+  // chỉ khi chưa gán phiếu thu giải ngân (tiền về theo phiếu thu thì để phiếu thu chuyển trạng thái).
+  const toggle = loanDisbursementToggle(b.status, body.disbursed);
+  let disbursedDate: string | null = b.disbursed_at ? vnDate(b.disbursed_at) : null;
+  if (toggle === 'to_pending') {
+    if (links.length) throw new ApiError({ code: 'FG-WF-001', detail: 'Khoản đã có liên kết — không chuyển về chờ giải ngân' });
+    set.status = 'pending_disbursement';
+    set.disbursed_at = null;
+    disbursedDate = null;
+  } else if (toggle === 'to_active') {
+    if (links.some((l) => l.relation === 'disbursement')) {
+      throw new ApiError({ code: 'FG-WF-001', detail: 'Khoản đã gán phiếu thu giải ngân — tiền về theo phiếu thu, không đánh dấu tay' });
+    }
+    disbursedDate = body.disbursed_date ?? today();
+    set.status = 'active';
+    set.disbursed_at = businessDateStart(disbursedDate);
+  }
+  if (body.maturity_date !== undefined || toggle === 'to_active') {
+    assertMaturityAfterDisbursement(body.maturity_date ?? String(b.maturity_date ?? ''), disbursedDate);
+  }
 
   if (body.partner_id !== undefined && body.partner_id !== String(b.partner_id ?? '')) {
     if (links.length) throw new ApiError({ code: 'FG-PARTNER-003', detail: 'Khoản đã có liên kết giải ngân / trả nợ — không đổi ngân hàng' });
@@ -700,6 +720,7 @@ export async function updateLoan(actor: DebtActor, scope: ScopeLike, id: string,
     after[k] = k in set ? set[k] : rawB[k];
   }
   const changes = changesOf(before, after);
+  if (toggle) changes.status = { from: b.status ?? null, to: String(set.status) };
   const changed = Object.keys(changes);
   if (!changed.length) return { changed };
   const history = buildHistoryEntry({
