@@ -1215,6 +1215,7 @@ Sửa các gap đã xác minh trong khu vực phiếu thu/chi và tag. Phần ch
 - **Cảnh báo lượt lỗi theo lần thử (gap 11)**: khoá `automation_run_failed:<run>:<attempts>` (`runFailureAlertKey`); mỗi lần thử lỗi được báo lại.
 - **loan.settled từ phía phiếu (gap 12)**: `POST /documents/:id/links` gọi `emitLoanSettledAfterPayment` khi phiếu chi đã thực thi và liên kết là trả nợ.
 - **Gap 10**: đã được chủ phần nợ ngân hàng gỡ sẵn trong checkout (không còn hook `syncLoansOnVoucherPaid` / `releaseLoansOfCancelledVoucher` / `createLoanForAutomation`); không đổi thêm.
+- **Xoá phiếu giải ngân đã thực thi (gap 13)**: `domain/debt/loan-on-delete.ts`. Khoản `active` mà phiếu thu đã thực thi là giải ngân duy nhất (không còn phiếu giải ngân thực thi khác) ⇒ về `pending_disbursement` (`action: revert_disbursement`, audit `bank_debt.revert_disbursement`); nếu khoản đã có phiếu trả nợ thực thi ⇒ chặn xoá (FG-WF-001, xoá phiếu trả nợ trước). Kiểm TRƯỚC khi đảo sổ cái (`loansToRevertOnDelete`), revert SAU đảo và TRƯỚC `releaseLoansOfSource`, nên khoản tự sinh còn chờ giải ngân bị huỷ theo quyết định R6 chung. Chủ tịch/TGĐ cũng chịu chặn này. Trước đây khoản giữ `active` và liên kết giải ngân bị gỡ mềm, không còn chứng từ nào giải thích khoản vay. Kiểm thử: `domain/debt/loan-on-delete.test.ts` (7 ca, mock Models).
 
 ### 23.2 Quyết định / chính sách (đã ghi vào v2/v2.md)
 

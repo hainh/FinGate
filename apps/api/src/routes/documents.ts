@@ -77,6 +77,7 @@ import { newRequestId } from '../lib/http.ts';
 import { assertDocumentAmountCoversLinks, assertPartnerChangeKeepsLinks, createLink, emitLoanSettledAfterPayment, removeLink } from '../domain/links/index.ts';
 import { activateLoanOnDisbursement, applyRolloverResultToLoan, assertLoanForRollover, assertRolloverResultForLoan } from '../domain/debt/loans.ts';
 import { releaseLoansOfSource } from '../domain/automation/actions/source.ts';
+import { loansToRevertOnDelete, revertLoansOnDelete } from '../domain/debt/loan-on-delete.ts';
 import {
   assertDisbursementNotChosenLoan,
   assertDocumentLinkable,
@@ -1083,6 +1084,9 @@ export function documentRoutes(app: FastifyInstance): void {
         // Step-up (ADR-14) cho thao tác phá huỷ — bỏ qua với Chủ tịch / Tổng Giám đốc.
         if (!unrestricted) await assertStepUp(actor.user_id, body.verify);
 
+        // [v2] khoản vay mà phiếu giải ngân này đã đưa về `active`: kiểm TRƯỚC khi đảo sổ (chặn nếu đã có phiếu trả nợ thực thi).
+        const loansToRevert = await loansToRevertOnDelete(params.id);
+
         // §8 — sổ cái CHỈ THÊM: phiếu đã thực thi được ĐẢO từng bút toán (không xoá entry cũ) rồi mới xoá hồ sơ.
         // Làm TRƯỚC khi xoá: nếu đảo lỗi thì phiếu còn nguyên và thao tác thử lại được (đảo idempotent).
         const reversal = await reverseLedgerForDocument(params.id, actor);
@@ -1100,6 +1104,13 @@ export function documentRoutes(app: FastifyInstance): void {
         });
 
         await Models.Attachment.deleteMany({ document_id: params.id } as never).exec();
+        // [v2] khoản vay do phiếu giải ngân đã thực thi làm `active` ⇒ về `Chờ giải ngân` (tiền đã đảo ở trên). Chạy trước
+        // R6 để khoản tự sinh còn chờ giải ngân được huỷ theo cùng quyết định.
+        await revertLoansOnDelete(loansToRevert, {
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          reason: `Phiếu giải ngân ${doc.code} đã bị xoá`,
+          requestId: body.request_id ?? null,
+        });
         // [v2] khoản vay do quy trình tự động sinh từ phiếu sắp xoá: khoản CHƯA có tiền được huỷ (không để treo trong
         // dự báo dòng tiền); khoản đã có tiền không tự huỷ (§11.5, §14.3 (6))
         await releaseLoansOfSource({
