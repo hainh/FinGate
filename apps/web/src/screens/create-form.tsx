@@ -317,7 +317,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
   const hasPartnerField = kind === 'spend' || kind === 'income' || kind === 'rollover';
   // Phiếu thu đi vay: bên nộp tiền chỉ là Ngân hàng (§11.4). Đảo hạn: ngân hàng (tuỳ chọn).
   // "Công ty trong tập đoàn" chỉ là bên nhận của phiếu chi (chuyển nội bộ suy từ đối tác)
-  const partnerAllowed: PartnerType[] = isBorrow || kind === 'rollover' ? ['bank'] : partnerTypesFor(kind === 'income' ? ['bank', 'customer', 'supplier'] : null);
+  const partnerAllowed: PartnerType[] = isBorrow || kind === 'rollover' ? ['bank'] : partnerTypesFor(kind === 'income' ? ['bank', 'customer', 'supplier', 'other'] : null);
   const partnerDefault: PartnerType = isBorrow || kind === 'rollover' ? 'bank' : kind === 'income' ? 'customer' : 'supplier';
   const partnerLabel = kind === 'income' ? 'Bên nộp tiền' : kind === 'spend' ? 'Bên nhận tiền' : 'Ngân hàng';
   const partnerRequired = kind === 'spend' || kind === 'income';

@@ -25,7 +25,7 @@ Thêm theo §3.2 (quyền đã có, bổ sung cho cấp điều hành): `partner
 
 Hằng số enum + nhãn tiếng Việt (dùng lại ở contract, không import ngược):
 
-- Đối tác: `PARTNER_TYPES` (`bank|customer|supplier`) + `PARTNER_TYPE_LABEL`; `PARTNER_STATUSES` (`active|inactive`) + `PARTNER_STATUS_LABEL` (`Hoạt động` / `Ngừng giao dịch`); `PARTNER_CODE_PREFIX = 'DT'`.
+- Đối tác: `PARTNER_TYPES` (`bank|customer|supplier|other|internal`; `other` = "Khác": nhân viên / khách vãng lai) + `PARTNER_TYPE_LABEL`; `PARTNER_STATUSES` (`active|inactive`) + `PARTNER_STATUS_LABEL` (`Hoạt động` / `Ngừng giao dịch`); `PARTNER_CODE_PREFIX = 'DT'`.
 - Hướng công nợ: `DEBT_DIRECTIONS` (`receivable|payable`) + `DEBT_DIRECTION_LABEL`.
 - Liên kết: `BUSINESS_LINK_RELATIONS` (`offset|repayment|disbursement|funded_by|generated|internal_transfer`) + `BUSINESS_LINK_RELATION_LABEL`; `LINK_OBJECT_TYPES` (`document|debt_voucher|bank_debt`) + `LINK_OBJECT_TYPE_LABEL`; `LINK_ORIGINS` (`manual|automation`); `LINK_STATUSES` (`active|removed`); `LINK_SPLIT_KEYS` (`principal|interest|fee`).
 - Quy tắc & lượt: `AUTOMATION_RULE_CODES` (`R1..R7`) + `AUTOMATION_RULE_LABEL`; `AUTOMATION_RUN_STATUSES` (`pending|running|done|failed`) + `AUTOMATION_RUN_STATUS_REGISTRY`; `AUTOMATION_STEP_STATUSES` (`pending|done|failed|skipped`) + `AUTOMATION_STEP_STATUS_LABEL`.

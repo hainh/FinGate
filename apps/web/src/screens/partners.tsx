@@ -110,7 +110,7 @@ const STATUS_OPTIONS: { value: PartnerStatus; label: string }[] = [
   { value: 'active', label: PARTNER_STATUS_LABEL.active },
   { value: 'inactive', label: PARTNER_STATUS_LABEL.inactive },
 ];
-const TYPE_TONE: Record<PartnerType, string> = { bank: 'info', customer: 'success', supplier: 'neutral', internal: 'attention' };
+const TYPE_TONE: Record<PartnerType, string> = { bank: 'info', customer: 'success', supplier: 'neutral', other: 'neutral', internal: 'attention' };
 const DEBT_STATUS_TEXT: Record<string, string> = {
   open: 'Chưa cấn trừ',
   partial: 'Cấn trừ một phần',

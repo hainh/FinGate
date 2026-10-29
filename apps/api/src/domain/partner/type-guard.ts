@@ -40,7 +40,7 @@ export function partnerTypeBlockers(from: PartnerType, to: PartnerType, usage: P
     if (usage.lender_documents > 0) blockers.push(`là ngân hàng cho vay trên ${usage.lender_documents} phiếu`);
     if (usage.bank_relation_documents > 0) blockers.push(`có ${usage.bank_relation_documents} phiếu đã liên kết trả nợ / giải ngân vay`);
   }
-  if (to === 'bank' && usage.debt_vouchers > 0) {
+  if (to !== 'customer' && to !== 'supplier' && usage.debt_vouchers > 0) {
     blockers.push(`đang có ${usage.debt_vouchers} khoản công nợ (chỉ Khách hàng / Nhà cung cấp)`);
   }
   return blockers;

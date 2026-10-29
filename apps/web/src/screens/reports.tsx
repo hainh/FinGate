@@ -172,7 +172,7 @@ export function ReportRunnerScreen(): ReactNode {
           <PartnerPicker
             value={partnerId}
             onChange={(id) => setPartnerId(id)}
-            allowedTypes={['bank', 'customer', 'supplier']}
+            allowedTypes={['bank', 'customer', 'supplier', 'other']}
             companyId={companyId}
             label={preset === PARTNER_LEDGER_PRESET ? 'Đối tác (bắt buộc)' : 'Đối tác'}
             placeholder="Lọc theo đối tác"

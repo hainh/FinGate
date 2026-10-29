@@ -283,7 +283,7 @@ function ChangePartnerModal({ doc, onClose }: { doc: DocumentDetail; onClose: ()
         <PartnerPicker
           value={picked}
           onChange={(id) => setPicked(id)}
-          allowedTypes={partnerTypesFor(doc.kind === 'income' ? ['bank', 'customer', 'supplier'] : null)}
+          allowedTypes={partnerTypesFor(doc.kind === 'income' ? ['bank', 'customer', 'supplier', 'other'] : null)}
           companyId={doc.company_id}
           label={doc.kind === 'income' ? 'Bên nộp tiền' : 'Bên nhận tiền'}
           required

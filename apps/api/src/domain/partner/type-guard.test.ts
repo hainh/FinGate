@@ -44,6 +44,18 @@ describe('partnerTypeBlockers — ràng buộc khi đổi loại (v2 §5.1)', ()
     expect(partnerTypeBlockers('supplier', 'customer', busy)).toEqual([]);
   });
 
+  it('đang có công nợ KH/NCC KHÔNG đổi sang Khác (chỉ KH / NCC mới có công nợ)', () => {
+    const blockers = partnerTypeBlockers('customer', 'other', { ...none, debt_vouchers: 2 });
+    expect(blockers).toHaveLength(1);
+    expect(blockers[0]).toContain('2 khoản công nợ');
+  });
+
+  it('Khác ↔ Khách hàng / Nhà cung cấp không có công nợ thì đổi được', () => {
+    expect(partnerTypeBlockers('other', 'customer', none)).toEqual([]);
+    expect(partnerTypeBlockers('other', 'supplier', none)).toEqual([]);
+    expect(partnerTypeBlockers('customer', 'other', none)).toEqual([]);
+  });
+
   it('đang là ngân hàng cho vay trên phiếu (options.loan) ⇒ phải giữ loại Ngân hàng', () => {
     const blockers = partnerTypeBlockers('bank', 'customer', { ...none, lender_documents: 2 });
     expect(blockers.join(' ')).toContain('ngân hàng cho vay');
