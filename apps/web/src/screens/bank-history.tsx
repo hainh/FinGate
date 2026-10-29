@@ -182,6 +182,12 @@ export function BankAccountHistoryScreen(): ReactNode {
                     render: (_v, r) => <FgMoney value={r.closing} mode="full" missingLabel="—" />,
                   },
                   {
+                    title: 'Số dư tổng',
+                    key: 'total',
+                    align: 'right',
+                    render: (_v, r) => <FgMoney value={r.total} mode="full" missingLabel="—" emphasis />,
+                  },
+                  {
                     title: 'Nội dung',
                     key: 'content',
                     render: (_v, r) => <span>{r.content || '—'}</span>,

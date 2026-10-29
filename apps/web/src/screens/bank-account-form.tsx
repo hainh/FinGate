@@ -12,14 +12,99 @@ import { useQueryClient } from '@tanstack/react-query';
 import { CURRENCY_CODES, money, moneyToWire, type Money } from '@fingate/shared';
 import { ApiRequestError, apiCall } from '../app/api.ts';
 import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
-import { useBankAccount, useCompanies } from '../app/queries.ts';
-import { FgAlert, FgButton, FgField, FgInput, FgMoneyInput, FgSelect, FgTextarea } from '../components/primitives.tsx';
+import { useBankAccount, useBankAccountHistory, useCompanies } from '../app/queries.ts';
+import type { BankAccountHistoryEntry } from '../app/types.ts';
+import { FgAlert, FgButton, FgDateTime, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgTextarea } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
-import { FgSkeletonTable } from '../components/uitk.tsx';
-import { useToast } from '../components/pagekit.tsx';
+import { FgEmptyState, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
+import { FgQuery, useToast } from '../components/pagekit.tsx';
 
 const GROUP = 'group';
+
+const HISTORY_FIELD_LABEL: Record<string, string> = {
+  bank_name: 'Ngân hàng / tên quỹ',
+  account_name: 'Chủ tài khoản',
+  account_number: 'Số tài khoản / mã quỹ',
+  branch: 'Chi nhánh',
+  currency: 'Loại tiền',
+  kind: 'Loại tài khoản',
+  manager_user_id: 'Người quản lý',
+  limit_minor: 'Hạn mức',
+  min_balance_minor: 'Ngưỡng tối thiểu',
+  stored_minor: 'Tiền lưu trữ',
+  show_on_dashboard: 'Hiển thị trên dashboard',
+  status: 'Trạng thái',
+  note: 'Ghi chú',
+};
+
+const HISTORY_VALUE_LABEL: Record<string, Record<string, string>> = {
+  kind: { bank: 'Ngân hàng', cash: 'Tiền mặt (quỹ)' },
+  status: { active: 'Đang hoạt động', frozen: 'Phong tỏa', closed: 'Đã đóng' },
+};
+
+function historyValue(field: string, v: unknown, currency: string): ReactNode {
+  if (v === null || v === undefined || v === '') return <span className="fg-muted">—</span>;
+  if (typeof v === 'boolean') return v ? 'Có' : 'Không';
+  if (field.endsWith('_minor')) return <FgMoney value={{ minor: String(v), currency, decimals: 0 }} mode="full" />;
+  return HISTORY_VALUE_LABEL[field]?.[String(v)] ?? String(v);
+}
+
+interface HistoryRow {
+  key: string;
+  at: string;
+  actor: string;
+  field: string;
+  from: unknown;
+  to: unknown;
+}
+
+/** Lịch sử sửa tài khoản: mỗi trường đổi là một dòng (ai, khi nào, trước → sau). */
+function BankAccountEditHistory({ id, currency }: { id: string; currency: string }): ReactNode {
+  const query = useBankAccountHistory(id);
+  return (
+    <FgCard style={{ marginTop: 'var(--fg-space-4)', padding: 0 }}>
+      <div style={{ padding: 'var(--fg-space-3) var(--fg-space-4)' }}>
+        <FgText style="headingS">Lịch sử sửa tài khoản</FgText>
+      </div>
+      <FgQuery query={query} skeleton={<FgSkeletonTable rows={4} cols={5} />}>
+        {(data) => {
+          const rows: HistoryRow[] = data.items.flatMap((h: BankAccountHistoryEntry, i) => {
+            const base = { at: h.at, actor: h.actor.name ?? '—' };
+            const entries = Object.entries(h.changes);
+            if (h.action === 'create' || !entries.length) return [{ ...base, key: `${i}`, field: h.action === 'create' ? '_create' : '_update', from: null, to: null }];
+            return entries.map(([field, ch]) => ({ ...base, key: `${i}-${field}`, field, from: ch.from, to: ch.to }));
+          });
+          if (!rows.length) {
+            return (
+              <div style={{ padding: 'var(--fg-space-4)' }}>
+                <FgEmptyState glyph="↺" title="Chưa có thay đổi nào" description="Mọi lần sửa tài khoản sẽ được ghi lại tại đây: ai sửa, khi nào, trước → sau." />
+              </div>
+            );
+          }
+          return (
+            <FgTable<HistoryRow>
+              rowKey="key"
+              dataSource={rows}
+              pagination={false}
+              columns={[
+                { title: 'Thời điểm', key: 'at', render: (_v, r) => <FgDateTime value={r.at} seconds /> },
+                { title: 'Người sửa', key: 'actor', render: (_v, r) => r.actor },
+                {
+                  title: 'Trường',
+                  key: 'field',
+                  render: (_v, r) => (r.field === '_create' ? 'Tạo tài khoản' : r.field === '_update' ? 'Cập nhật' : (HISTORY_FIELD_LABEL[r.field] ?? r.field)),
+                },
+                { title: 'Trước', key: 'from', render: (_v, r) => (r.field.startsWith('_') ? '' : historyValue(r.field, r.from, currency)) },
+                { title: 'Sau', key: 'to', render: (_v, r) => (r.field.startsWith('_') ? '' : historyValue(r.field, r.to, currency)) },
+              ]}
+            />
+          );
+        }}
+      </FgQuery>
+    </FgCard>
+  );
+}
 
 export function BankAccountFormScreen(): ReactNode {
   const { id } = useParams<{ id?: string }>();
@@ -44,6 +129,7 @@ export function BankAccountFormScreen(): ReactNode {
   const [branch, setBranch] = useState('');
   const [currency, setCurrency] = useState('VND');
   const [minBalance, setMinBalance] = useState<Money | null>(null);
+  const [stored, setStored] = useState<Money | null>(null);
   const [showOnDashboard, setShowOnDashboard] = useState(true);
   const [status, setStatus] = useState('active');
   const [note, setNote] = useState('');
@@ -63,6 +149,7 @@ export function BankAccountFormScreen(): ReactNode {
     setBranch(loaded.branch ?? '');
     setCurrency(loaded.currency);
     setMinBalance(money(BigInt(loaded.min_balance_minor || '0'), loaded.currency));
+    setStored(money(BigInt(loaded.stored_minor || '0'), loaded.currency));
     setShowOnDashboard(loaded.show_on_dashboard);
     setStatus(loaded.status);
     setNote(loaded.note ?? '');
@@ -89,6 +176,7 @@ export function BankAccountFormScreen(): ReactNode {
         currency,
         kind,
         min_balance_minor: moneyToWire(minBalance ?? money(0n, currency)).minor,
+        stored_minor: moneyToWire(stored ?? money(0n, currency)).minor,
         show_on_dashboard: showOnDashboard,
         status,
         note: note.trim() || undefined,
@@ -178,6 +266,9 @@ export function BankAccountFormScreen(): ReactNode {
             <FgField label="Ngưỡng tối thiểu" help="Số dư sổ cái (hoặc dự kiến) dưới ngưỡng sẽ được cảnh báo">
               <FgMoneyInput value={minBalance} onChange={setMinBalance} ariaLabel="Ngưỡng tối thiểu" />
             </FgField>
+            <FgField label="Tiền lưu trữ" help="Khoản tiền ngoài sổ cái — Số dư tổng = số dư hiện tại + tiền lưu trữ" error={fieldErrors.stored_minor ?? null}>
+              <FgMoneyInput value={stored} onChange={setStored} ariaLabel="Tiền lưu trữ" />
+            </FgField>
             <FgField
               label="Trạng thái"
               help={
@@ -221,6 +312,7 @@ export function BankAccountFormScreen(): ReactNode {
             </div>
           </div>
         </FgCard>
+        {isEdit && id ? <BankAccountEditHistory id={id} currency={currency} /> : null}
       </div>
     </>
   );

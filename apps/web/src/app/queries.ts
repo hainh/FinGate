@@ -201,6 +201,16 @@ export function useBankAccount(id: string | undefined) {
   });
 }
 
+/** BANK-02 — lịch sử sửa tài khoản tiền (mới nhất trước). Key dưới `bank-account` để lưu xong là làm mới. */
+export function useBankAccountHistory(id: string | undefined) {
+  const { scope } = useAuth();
+  return useQuery({
+    queryKey: ['bank-account', scope, id, 'history'],
+    enabled: !!id,
+    queryFn: () => apiData<{ items: import('./types.ts').BankAccountHistoryEntry[] }>(`/bank-accounts/${id}/history`, { query: { scope } }),
+  });
+}
+
 export function useBalancesHistory(date?: string) {
   const { scope } = useAuth();
   return useQuery({

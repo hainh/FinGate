@@ -25,6 +25,8 @@ export const bankAccountUpsertBody = z.object({
   manager_user_id: objectId.nullable().optional(),
   limit_minor: z.string().regex(/^\d+$/).optional(),
   min_balance_minor: z.string().regex(/^\d+$/).default('0'),
+  /** Tiền lưu trữ (ngoài sổ cái) — số dư tổng = số dư sổ cái + tiền lưu trữ. */
+  stored_minor: z.string().regex(/^\d+$/).default('0'),
   show_on_dashboard: z.boolean().default(true),
   status: accountStatus.default('active'),
   note: z.string().max(500).optional(),

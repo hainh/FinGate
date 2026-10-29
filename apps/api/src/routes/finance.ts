@@ -58,11 +58,34 @@ async function bankAccountDetail(id: string): Promise<Record<string, unknown>> {
     manager_user_id: acct.manager_user_id ? String(acct.manager_user_id) : null,
     limit_minor: acct.limit_minor == null ? null : String(acct.limit_minor),
     min_balance_minor: String(acct.min_balance_minor ?? '0'),
+    stored_minor: String(acct.stored_minor ?? '0'),
     show_on_dashboard: acct.show_on_dashboard !== false,
     status: String(acct.status ?? 'active'),
     note: acct.note ? String(acct.note) : null,
     updated_at: acct.updated_at ? new Date(acct.updated_at as string | Date).toISOString() : null,
   };
+}
+
+/** Giá trị mặc định của trường chưa có trên tài khoản cũ — tránh ghi lịch sử "— → 0" ở lần sửa đầu. */
+const BANK_ACCOUNT_DEFAULTS: Record<string, unknown> = { min_balance_minor: 0n, stored_minor: 0n, show_on_dashboard: true, status: 'active' };
+
+/** Chuẩn hoá giá trị để so sánh / lưu vào lịch sử (BigInt, ObjectId → chuỗi). */
+function historyValue(v: unknown): string | boolean | null {
+  if (v === null || v === undefined || v === '') return null;
+  return typeof v === 'boolean' ? v : String(v);
+}
+
+/** Lịch sử sửa tài khoản tiền (mới nhất trước). */
+function bankAccountHistory(acct: Record<string, unknown>): { at: string; actor: { user_id: string | null; name: string | null }; action: string; changes: Record<string, unknown> }[] {
+  const rows = (acct.history ?? []) as { at: Date; actor?: { user_id?: unknown; name?: string | null } | null; action?: string; changes?: Record<string, unknown> | null }[];
+  return rows
+    .map((h) => ({
+      at: new Date(h.at).toISOString(),
+      actor: { user_id: h.actor?.user_id ? String(h.actor.user_id) : null, name: h.actor?.name ?? null },
+      action: h.action ?? 'update',
+      changes: h.changes ?? {},
+    }))
+    .reverse();
 }
 
 /**
@@ -199,9 +222,11 @@ export function financeRoutes(app: FastifyInstance): void {
           manager_user_id: body.manager_user_id ?? null,
           limit_minor: body.limit_minor ? BigInt(body.limit_minor) : null,
           min_balance_minor: BigInt(body.min_balance_minor),
+          stored_minor: BigInt(body.stored_minor),
           show_on_dashboard: body.show_on_dashboard,
           status: body.status,
           note: body.note ?? null,
+          history: [{ at: new Date(), actor: { user_id: actor.user_id, name: actor.name ?? null }, action: 'create', changes: {} }],
         } as never);
 
         await mirrorAudit({
@@ -231,6 +256,23 @@ export function financeRoutes(app: FastifyInstance): void {
         // Tài khoản Tập đoàn thấy được ở mọi phạm vi (như danh sách); tài khoản công ty phải trong phạm vi.
         if (!acct.is_group) assertCompanyScope(req, acct.company_id ? String(acct.company_id) : null);
         return ok(reply, { data: await bankAccountDetail(id) });
+      },
+    }),
+  );
+
+  /** BANK-02 — lịch sử sửa tài khoản tiền (ai, khi nào, trước → sau). */
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/bank-accounts/:id/history',
+      config: { perms: ['bank:read'] as Permission[], screen: 'BANK-02', summary: 'Lịch sử sửa tài khoản tiền' },
+      handler: async (req, reply) => {
+        const { id } = req.params as { id: string };
+        const acct = await Models.BankAccount.findById(id).select({ is_group: 1, company_id: 1, history: 1 }).lean<Record<string, unknown> | null>();
+        if (!acct) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy tài khoản tiền' });
+        if (!acct.is_group) assertCompanyScope(req, acct.company_id ? String(acct.company_id) : null);
+        const items = bankAccountHistory(acct);
+        return ok(reply, { data: { items } });
       },
     }),
   );
@@ -280,9 +322,15 @@ export function financeRoutes(app: FastifyInstance): void {
 
         const set: Record<string, unknown> = { updated_at: new Date() };
         const changed: string[] = [];
+        const changes: Record<string, { from: unknown; to: unknown }> = {};
+        // chỉ ghi các trường thực sự đổi (so với giá trị hiện tại) vào lịch sử
         const assign = (key: string, value: unknown) => {
+          const from = historyValue(acct[key] ?? BANK_ACCOUNT_DEFAULTS[key]);
+          const to = historyValue(value);
+          if (from === to) return;
           set[key] = value;
           changed.push(key);
+          changes[key] = { from, to };
         };
         if (body.bank_name !== undefined) assign('bank_name', body.bank_name);
         if (body.account_name !== undefined) assign('account_name', body.account_name);
@@ -293,11 +341,14 @@ export function financeRoutes(app: FastifyInstance): void {
         if (body.manager_user_id !== undefined) assign('manager_user_id', body.manager_user_id ?? null);
         if (body.limit_minor !== undefined) assign('limit_minor', body.limit_minor ? BigInt(body.limit_minor) : null);
         if (body.min_balance_minor !== undefined) assign('min_balance_minor', BigInt(body.min_balance_minor));
+        if (body.stored_minor !== undefined) assign('stored_minor', BigInt(body.stored_minor));
         if (body.show_on_dashboard !== undefined) assign('show_on_dashboard', body.show_on_dashboard);
         if (body.status !== undefined) assign('status', body.status);
         if (body.note !== undefined) assign('note', body.note || null);
 
-        await Models.BankAccount.updateOne({ _id: id }, { $set: set }).exec();
+        const update: Record<string, unknown> = { $set: set };
+        if (changed.length) update.$push = { history: { at: new Date(), actor: { user_id: actor.user_id, name: actor.name ?? null }, action: 'update', changes } };
+        await Models.BankAccount.updateOne({ _id: id }, update as never).exec();
         // tên / NH / STK đổi ⇒ đối tác nội bộ trỏ tới TK này đổi theo
         await syncInternalPartners({ accountId: id });
         await mirrorAudit({
@@ -358,7 +409,16 @@ export function financeRoutes(app: FastifyInstance): void {
             });
           }
         }
-        await Models.BankAccount.updateOne({ _id: id }, { $set: { status, updated_at: new Date() } }).exec();
+        const prevStatus = String(acct.status ?? 'active');
+        await Models.BankAccount.updateOne(
+          { _id: id },
+          {
+            $set: { status, updated_at: new Date() },
+            ...(prevStatus !== status
+              ? { $push: { history: { at: new Date(), actor: { user_id: actor.user_id, name: actor.name ?? null }, action: 'status', changes: { status: { from: prevStatus, to: status } } } } }
+              : {}),
+          } as never,
+        ).exec();
         // TK đóng / đóng băng ⇒ đối tác nội bộ trỏ tới TK này chuyển Ngừng giao dịch
         await syncInternalPartners({ accountId: id });
         await mirrorAudit({
@@ -430,9 +490,11 @@ export function financeRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const { id } = req.params as { id: string };
         const account = await Models.BankAccount.findById(id)
-          .select({ company_id: 1, is_group: 1, bank_name: 1, account_number: 1, account_name: 1, kind: 1, currency: 1 })
+          .select({ company_id: 1, is_group: 1, bank_name: 1, account_number: 1, account_name: 1, kind: 1, currency: 1, stored_minor: 1 })
           .lean<Record<string, unknown> | null>();
         if (!account) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy tài khoản tiền' });
+        // tiền lưu trữ (ngoài sổ cái) — số dư tổng mỗi dòng = số dư cuối + tiền lưu trữ
+        const stored = asBigInt(account.stored_minor ?? 0n);
         const isGroup = Boolean(account.is_group);
         if (!isGroup) assertCompanyScope(req, account.company_id ? String(account.company_id) : null);
 
@@ -513,6 +575,7 @@ export function financeRoutes(app: FastifyInstance): void {
               opening: money(opening),
               amount: money(amount),
               closing: money(closing),
+              total: money(closing + stored),
               currency: String(account.currency ?? 'VND'),
               content: doc ? String(doc.purpose ?? doc.title ?? '') : '',
               counterparty,
@@ -544,6 +607,7 @@ export function financeRoutes(app: FastifyInstance): void {
                 account_name: String(account.account_name ?? ''),
                 kind: String(account.kind ?? 'bank'),
                 currency: String(account.currency ?? 'VND'),
+                stored: money(stored),
               },
               period: { from, to },
               totals: { in: money(flows.in), out: money(flows.out) },

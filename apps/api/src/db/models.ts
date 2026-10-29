@@ -579,6 +579,22 @@ AttachmentSchema.index({ owner_type: 1, owner_id: 1, state: 1 });
  * Ngân hàng
  * ------------------------------------------------------------------ */
 
+/** Lịch sử sửa tài khoản tiền: ai, khi nào, trường nào đổi từ đâu sang đâu. */
+const bankAccountHistoryEntry = new Schema(
+  {
+    at: { type: Date, required: true },
+    actor: {
+      user_id: { type: Schema.Types.ObjectId, default: null },
+      name: { type: String, default: null },
+    },
+    /** `create` | `update` | `status` */
+    action: { type: String, default: 'update' },
+    /** `{ field: { from, to } }` — chỉ ghi các trường thực sự đổi. */
+    changes: { type: Schema.Types.Mixed, default: {} },
+  },
+  { _id: false },
+);
+
 export const BankAccountSchema = new Schema(
   {
     /** null = tài khoản Tập đoàn, chỉ Chủ tịch HĐQT cấu hình (blueprint §VIII) */
@@ -593,9 +609,12 @@ export const BankAccountSchema = new Schema(
     manager_user_id: { type: Schema.Types.ObjectId, default: null },
     limit_minor: { type: BigInt, default: null },
     min_balance_minor: { type: BigInt, default: 0n },
+    /** Tiền lưu trữ (nhập tay, ngoài sổ cái) — số dư tổng = số dư sổ cái + tiền lưu trữ. */
+    stored_minor: { type: BigInt, default: 0n },
     show_on_dashboard: { type: Boolean, default: true },
     status: { type: String, enum: ['active', 'closed', 'frozen'], default: 'active' },
     note: { type: String, default: null },
+    history: { type: [bankAccountHistoryEntry], default: [] },
     created_at: { type: Date, default: () => new Date() },
     updated_at: { type: Date, default: () => new Date() },
   },

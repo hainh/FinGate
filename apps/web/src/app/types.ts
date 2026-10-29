@@ -571,10 +571,22 @@ export interface BankAccountDetail {
   manager_user_id: string | null;
   limit_minor: string | null;
   min_balance_minor: string;
+  /** Tiền lưu trữ (ngoài sổ cái). */
+  stored_minor: string;
   show_on_dashboard: boolean;
   status: string;
   note: string | null;
   updated_at: string | null;
+}
+
+/** GET /bank-accounts/:id/history — một lần sửa tài khoản tiền. */
+export interface BankAccountHistoryEntry {
+  at: string;
+  actor: { user_id: string | null; name: string | null };
+  /** `create` | `update` | `status` */
+  action: string;
+  /** `{ field: { from, to } }` — giá trị tiền là số minor dạng chuỗi. */
+  changes: Record<string, { from: unknown; to: unknown }>;
 }
 
 /** GET /bank-accounts/:id/transactions — một dòng lịch sử giao dịch. */
@@ -589,6 +601,8 @@ export interface BankTransactionRow {
   opening: MoneyWire;
   amount: MoneyWire;
   closing: MoneyWire;
+  /** Số dư tổng = số dư cuối + tiền lưu trữ của tài khoản. */
+  total: MoneyWire;
   currency: string;
   content: string;
   counterparty: string;
@@ -610,6 +624,8 @@ export interface BankAccountTransactions {
     account_name: string;
     kind: string;
     currency: string;
+    /** Tiền lưu trữ (ngoài sổ cái). */
+    stored: MoneyWire;
   };
   /** Kỳ đang lọc: `from` null = từ đầu; `to` đã kẹp ≤ hôm nay. */
   period: { from: string | null; to: string };
