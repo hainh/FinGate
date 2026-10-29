@@ -65,7 +65,7 @@ function BankAccountEditHistory({ id, currency }: { id: string; currency: string
   return (
     <FgCard style={{ marginTop: 'var(--fg-space-4)', padding: 0 }}>
       <div style={{ padding: 'var(--fg-space-3) var(--fg-space-4)' }}>
-        <FgText style="headingS">Lịch sử sửa tài khoản</FgText>
+        <FgText style="h4">Lịch sử sửa tài khoản</FgText>
       </div>
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={4} cols={5} />}>
         {(data) => {
