@@ -601,7 +601,9 @@ export interface BankTransactionRow {
   opening: MoneyWire;
   amount: MoneyWire;
   closing: MoneyWire;
-  /** Số dư tổng = số dư cuối + tiền lưu trữ của tài khoản. */
+  /** Tiền lưu trữ có hiệu lực tại thời điểm giao dịch. */
+  stored: MoneyWire;
+  /** Số dư tổng = số dư cuối + tiền lưu trữ tại thời điểm giao dịch. */
   total: MoneyWire;
   currency: string;
   content: string;

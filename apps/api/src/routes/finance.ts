@@ -75,6 +75,31 @@ function historyValue(v: unknown): string | boolean | null {
   return typeof v === 'boolean' ? v : String(v);
 }
 
+/**
+ * Tiền lưu trữ có hiệu lực TẠI một thời điểm, dựng từ lịch sử sửa (`changes.stored_minor`):
+ * mỗi giao dịch gắn mức tiền lưu trữ lúc đó — sửa tiền lưu trữ không làm đổi số dư tổng của giao dịch cũ.
+ * Trước lần đổi đầu tiên = giá trị `from` của lần đổi đó; chưa từng đổi = giá trị hiện tại.
+ */
+export function storedTimeline(acct: { stored_minor?: unknown; history?: unknown }): (at: Date | null) => bigint {
+  const big = (v: unknown): bigint => (v === null || v === undefined || v === '' ? 0n : asBigInt(v));
+  const steps = ((acct.history ?? []) as { at: Date | string; changes?: Record<string, { from?: unknown; to?: unknown }> | null }[])
+    .filter((h) => h.changes && 'stored_minor' in h.changes)
+    .map((h) => ({ at: new Date(h.at).getTime(), from: big(h.changes!.stored_minor!.from), to: big(h.changes!.stored_minor!.to) }))
+    .sort((a, b) => a.at - b.at);
+  const current = big(acct.stored_minor);
+  const initial = steps.length ? steps[0]!.from : current;
+  return (at) => {
+    if (!at) return current;
+    const t = at.getTime();
+    let value = initial;
+    for (const s of steps) {
+      if (s.at > t) break;
+      value = s.to;
+    }
+    return value;
+  };
+}
+
 /** Lịch sử sửa tài khoản tiền (mới nhất trước). */
 function bankAccountHistory(acct: Record<string, unknown>): { at: string; actor: { user_id: string | null; name: string | null }; action: string; changes: Record<string, unknown> }[] {
   const rows = (acct.history ?? []) as { at: Date; actor?: { user_id?: unknown; name?: string | null } | null; action?: string; changes?: Record<string, unknown> | null }[];
@@ -490,11 +515,12 @@ export function financeRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const { id } = req.params as { id: string };
         const account = await Models.BankAccount.findById(id)
-          .select({ company_id: 1, is_group: 1, bank_name: 1, account_number: 1, account_name: 1, kind: 1, currency: 1, stored_minor: 1 })
+          .select({ company_id: 1, is_group: 1, bank_name: 1, account_number: 1, account_name: 1, kind: 1, currency: 1, stored_minor: 1, history: 1 })
           .lean<Record<string, unknown> | null>();
         if (!account) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy tài khoản tiền' });
-        // tiền lưu trữ (ngoài sổ cái) — số dư tổng mỗi dòng = số dư cuối + tiền lưu trữ
+        // tiền lưu trữ (ngoài sổ cái) — số dư tổng mỗi dòng = số dư cuối + tiền lưu trữ TẠI thời điểm giao dịch
         const stored = asBigInt(account.stored_minor ?? 0n);
+        const storedAt = storedTimeline(account);
         const isGroup = Boolean(account.is_group);
         if (!isGroup) assertCompanyScope(req, account.company_id ? String(account.company_id) : null);
 
@@ -564,6 +590,7 @@ export function financeRoutes(app: FastifyInstance): void {
             const payee = (doc?.payee ?? null) as { name?: string } | null;
             const kind = doc?.kind ? String(doc.kind) : '';
             const counterparty = partnerId ? (partnerMap.get(partnerId)?.name ?? '—') : payee?.name ? String(payee.name) : '—';
+            const storedThen = storedAt(at ? new Date(at) : null);
             return {
               _id: String(entry._id),
               at,
@@ -575,7 +602,8 @@ export function financeRoutes(app: FastifyInstance): void {
               opening: money(opening),
               amount: money(amount),
               closing: money(closing),
-              total: money(closing + stored),
+              stored: money(storedThen),
+              total: money(closing + storedThen),
               currency: String(account.currency ?? 'VND'),
               content: doc ? String(doc.purpose ?? doc.title ?? '') : '',
               counterparty,
