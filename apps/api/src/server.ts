@@ -15,6 +15,7 @@ import { bootstrapAdminIfEmpty, ensureGroupCompany } from './db/bootstrap.ts';
 import { ensureAutomationRules } from './domain/automation/engine.ts';
 import './domain/automation/rules/index.ts'; // đăng ký bộ xử lý R1–R6 (trước khi chu kỳ tự động chạy)
 import { startAutomationLoop } from './jobs/index.ts';
+import { startBackupLoop } from './domain/backup/index.ts';
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -43,12 +44,15 @@ async function main(): Promise<void> {
   );
   // v2: xử lý hàng sự kiện → quy tắc tự động mỗi vài giây (bỏ qua khi DB chưa lên).
   const stopAutomation = startAutomationLoop(app.log);
+  // ADM-14: sao lưu mỗi 30' trong tiến trình — chỉ khi BACKUP_AUTO=true (bật trên đúng một instance).
+  const stopBackup = env.BACKUP_AUTO === 'true' ? startBackupLoop(app.log, { ready: dbUp }) : () => undefined;
 
   let closing = false;
   const shutdown = (signal: string): void => {
     if (closing) return;
     closing = true;
     stopAutomation();
+    stopBackup();
     app.log.info(`${signal}: đang đóng`);
     const timer = setTimeout(() => {
       app.log.error('quá 10s, buộc thoát');

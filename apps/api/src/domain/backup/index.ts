@@ -247,6 +247,35 @@ export async function listBackups(): Promise<BackupFile[]> {
   return out.sort((a, b) => b.file.localeCompare(a.file));
 }
 
+/** Một lượt sao lưu định kỳ: tạo bản mới rồi dọn bản quá 30 ngày. */
+export async function runScheduledBackup(): Promise<{ created: string; bytes: number; pruned: number }> {
+  const created = await createBackup();
+  const pruned = await pruneBackups();
+  return { created: created.file, bytes: created.size, pruned: pruned.removed };
+}
+
+/** Chu kỳ sao lưu mỗi 30' (ADM-14) chạy trong tiến trình API. Trả về hàm dừng. */
+export function startBackupLoop(
+  log: { info: (obj: unknown, msg?: string) => void; error: (obj: unknown, msg?: string) => void },
+  opts: { ready: () => boolean; intervalMs?: number; task?: () => Promise<unknown> },
+): () => void {
+  const { ready, intervalMs = 30 * 60_000, task = runScheduledBackup } = opts;
+  let running = false;
+  const timer = setInterval(() => {
+    // Lượt trước chưa xong (mongodump chậm) hoặc DB chưa lên → bỏ qua, không chồng lượt.
+    if (running || !ready()) return;
+    running = true;
+    task()
+      .then((result) => log.info({ result }, 'sao lưu định kỳ xong'))
+      .catch((err: unknown) => log.error({ err }, 'sao lưu định kỳ lỗi'))
+      .finally(() => {
+        running = false;
+      });
+  }, intervalMs);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
 /** Xoá bản cũ hơn `retainMs` (mặc định 30 ngày). */
 export async function pruneBackups(retainMs = BACKUP_RETAIN_MS): Promise<{ removed: number }> {
   const cutoff = Date.now() - retainMs;

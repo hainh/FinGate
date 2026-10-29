@@ -39,6 +39,8 @@ const envSchema = z.object({
   BACKUP_DIR: z.string().default(join(homedir(), 'FinGateBackups')),
   /** Container MongoDB có `mongodump` (dùng khi host không cài MongoDB Database Tools). */
   BACKUP_MONGO_CONTAINER: z.string().default(''),
+  /** Sao lưu mỗi 30' ngay trong tiến trình API. Chỉ bật trên ĐÚNG MỘT instance có đĩa bền (onprem). */
+  BACKUP_AUTO: z.enum(['true', 'false']).default('false'),
   R2_ACCOUNT_ID: z.string().default(''),
   R2_ACCESS_KEY_ID: z.string().default(''),
   R2_SECRET_ACCESS_KEY: z.string().default(''),

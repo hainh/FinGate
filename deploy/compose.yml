@@ -70,6 +70,8 @@ services:
       UPLOAD_DIR: /data/uploads
       # Sao lưu mongodump ghi ra đây — bind-mount ra host (deploy/backups) để truy cập trực tiếp.
       BACKUP_DIR: /data/backups
+      # Sao lưu mỗi 30' ngay trong app (một instance duy nhất trên VPS này).
+      BACKUP_AUTO: 'true'
       WEB_DIST: apps/web/dist
       # Membership của RS quảng bá `localhost:27017` (để dev trên host vẫn dùng
       # `?replicaSet=rs0`), nên app trong container kết nối thẳng thay vì đi theo topology.

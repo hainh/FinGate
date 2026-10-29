@@ -223,9 +223,13 @@ bind-mount `deploy/backups/`). File: `fingate-YYYYMMDD-HHmmss.archive.gz`. KHÔN
   chưa cài MongoDB Database Tools, app tự chạy `mongodump` trong container MongoDB khớp cổng
   `MONGODB_URI` (mặc định nhận diện `fingate-mongo`; đặt `BACKUP_MONGO_CONTAINER` để ép
   container cụ thể). Thiếu cả hai đường → job báo lỗi `FG-SYS-001` kèm thông điệp can thiệp.
-- **Job `backup` mỗi 30'**: workflow `.github/workflows/data-backup.yml`
-  (`*/30 * * * *`) → `POST /api/v1/tasks/backup`; Profile O thêm cron
-  `*/30 * * * * curl -fsS -X POST http://localhost:8080/api/v1/tasks/backup -H "x-task-token: $TASK_TOKEN"`.
+- **Sao lưu mỗi 30' trong app**: đặt `BACKUP_AUTO=true` (Profile O đã bật sẵn trong
+  `deploy/compose.yml`). Tiến trình API tự tạo bản rồi dọn bản quá 30 ngày; bỏ qua lượt nếu DB
+  chưa lên hoặc lượt trước còn chạy. Chỉ bật trên **một** instance. Log: dòng `sao lưu định kỳ xong`
+  / `sao lưu định kỳ lỗi` trong `docker logs fingate-app`.
+- **Cách khác (không khuyến nghị khi đã bật `BACKUP_AUTO`)**: gọi `POST /api/v1/tasks/backup`
+  từ workflow `.github/workflows/data-backup.yml` hoặc cron hệ thống. Không bật cả hai, nếu không sẽ
+  tạo bản trùng.
 - **Retain 30 ngày**: mỗi lần chạy job xoá bản cũ hơn 30 ngày (`pruneBackups`).
 - **API (chỉ `admin:backup` — tài khoản Quản trị hệ thống)**:
   - `GET  /api/v1/system/backups` → danh sách bản còn giữ
