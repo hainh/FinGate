@@ -635,7 +635,7 @@ Phạm vi: `v2/v2.md` §15 (M1–M6) và dữ liệu demo v2. Không đổi rout
 
 ### 14.4 Hợp đồng đã đối chiếu với backend `routes/partners.ts`
 - `GET /partners/options` → `{items: PartnerRef[]}` (`type`, `q`, `company_id`, `status`).
-- `GET /partners/internal-companies` → `{items: {_id, name, code, is_group}}` (mọi công ty đang hoạt động, không theo phân công; chỉ dùng khi tạo đối tác nội bộ). `GET /partners/internal-accounts?company_id=` → `{items: {_id, bank_name, account_name, account_number_masked}}` (TK ngân hàng đang hoạt động, không phải TK nhóm; không có số dư). Cả hai cần `partner:write`.
+- `GET /partners/internal-companies` → `{items: {_id, name, code, is_group}}` (mọi công ty đang hoạt động, không theo phân công; chỉ dùng khi tạo đối tác nội bộ). `GET /partners/internal-accounts?company_id=` → `{items: {_id, bank_name, account_name, account_number_masked}}` (TK ngân hàng hoặc tiền mặt đang hoạt động, không phải TK nhóm; không có số dư). Cả hai cần `partner:write`.
 - `GET /partners` (`type`, `status`, `q`, `period_from`, `period_to`, `limit`, `offset`) → `{items, total, limit, offset, period}`.
 - `GET /partners/:id` → tóm tắt **tháng hiện tại** (server không nhận kỳ) + `history[]` (`changes`: `{field: {from, to}}`).
 - `POST /partners`, `PATCH /partners/:id` → `{partner, warnings}`; `POST /partners/:id/deactivate|reactivate` → `{partner, warnings}`; `DELETE /partners/:id` → `{ok}`.
@@ -730,6 +730,7 @@ Body: `items: [{debt_voucher_id, amount_minor}]` (KH/NCC) hoặc `loans: [{bank_
 
 - Người có `partner:write` tạo đối tác nội bộ tới **mọi công ty đang hoạt động** trong tập đoàn, không chỉ công ty được phân công. Công ty ghi (`company_id`) vẫn phải nằm trong phạm vi; `internalPartnerFieldsFor` chỉ kiểm TK thuộc công ty đã chọn, đang hoạt động, không phải TK nhóm, khác công ty đang tạo và chưa có đối tác cho TK đó.
 - Hai endpoint đọc mới (mục 14.4) thay cho `me.companies` và `GET /bank-accounts?for_company` ở `PartnerFormModal`: endpoint sau bị `companyReachableByActor` chặn với công ty không được phân công.
+- Nguồn đối tác nội bộ là TK ngân hàng **hoặc** TK tiền mặt (`kind` `cash`) của công ty khác, đang hoạt động, không phải TK nhóm. Khác công ty ghi vẫn bắt buộc; TK tiền mặt đi qua cùng luồng chuyển nội bộ (R1 lấy quỹ theo `kind` của TK đích, `fundOfAccount`). Tên / NH (tên quỹ) / STK (mã quỹ) lấy từ TK gốc như TK ngân hàng.
 - Đối tác nội bộ lưu STK đầy đủ của TK gốc (như trước), nên ai xem được đối tác của công ty ghi sẽ thấy STK đó. Quyết định sản phẩm: giữ nguyên, đối tác nội bộ lưu và hiện STK đầy đủ. Phiếu chi chọn đối tác nội bộ không kiểm phạm vi công ty nhận ở server (đích lấy từ đối tác, `resolveTransferTarget`); form «Chuyển nội bộ» vẫn yêu cầu công ty nhận được phân công (`routes/documents.ts`, §7.5/§11.6). Quyết định sản phẩm: giữ nguyên, phiếu chi qua đối tác nội bộ không kiểm phạm vi công ty nhận ở server, khác với form «Chuyển nội bộ».
 
 ### 12.10 Gộp đối tác (`POST /partners/:id/merge`)

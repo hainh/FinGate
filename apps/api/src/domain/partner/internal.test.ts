@@ -27,7 +27,7 @@ describe('đối tác công ty trong tập đoàn', () => {
 });
 
 describe('danh sách TK chọn làm nguồn — khớp tiêu chí khi tạo đối tác', () => {
-  it('chỉ lấy TK ngân hàng, không phải TK nhóm, đang hoạt động, đúng công ty đã chọn', () => {
-    expect(internalSourceFilter('c1')).toEqual({ company_id: 'c1', kind: 'bank', is_group: { $ne: true }, status: 'active' });
+  it('lấy cả TK ngân hàng lẫn tiền mặt, không lấy TK nhóm, chỉ TK đang hoạt động của đúng công ty đã chọn', () => {
+    expect(internalSourceFilter('c1')).toEqual({ company_id: 'c1', is_group: { $ne: true }, status: 'active' });
   });
 });

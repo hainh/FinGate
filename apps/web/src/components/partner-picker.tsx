@@ -119,7 +119,7 @@ export function PartnerFormModal({
 }: PartnerFormModalProps): ReactNode {
   const isEdit = !!editing;
   const currentCompanyId = useCurrentCompanyId();
-  // "Công ty trong tập đoàn": đối tác = một TK ngân hàng của công ty khác; tên / NH / STK lấy từ TK gốc
+  // "Công ty trong tập đoàn": đối tác = một TK (ngân hàng hoặc tiền mặt) của công ty khác; tên / NH / STK lấy từ TK gốc
   const editingInternal = editing?.type === 'internal';
   // loại nội bộ không đổi qua lại với loại khác: không hiện trong danh sách loại khi sửa đối tác thường
   const types: PartnerType[] = isEdit ? (editingInternal ? ['internal'] : ALL_TYPES.filter((t) => t !== 'internal')) : partnerTypesFor(allowedTypes);
@@ -136,7 +136,7 @@ export function PartnerFormModal({
   const [internalAccountId, setInternalAccountId] = useState('');
   const isInternal = type === 'internal';
   const homeCompanyId = companyId ?? currentCompanyId;
-  // Đối tác nội bộ: chọn MỌI công ty trong tập đoàn (không chỉ công ty được phân công) và TK ngân hàng của công ty đó
+  // Đối tác nội bộ: chọn MỌI công ty trong tập đoàn (không chỉ công ty được phân công) và TK (ngân hàng hoặc tiền mặt) của công ty đó
   const creatingInternal = isInternal && !isEdit;
   const internalCompanies = useInternalCompanies(creatingInternal);
   const internalCompanyOptions = internalCompanyOptionsFor(internalCompanies.data?.items ?? [], homeCompanyId);
@@ -148,11 +148,11 @@ export function PartnerFormModal({
     label: `${a.account_name} · ${a.bank_name} · ${a.account_number_masked}`,
   }));
   const internalAccount = internalAccountRows.find((a) => a._id === internalAccountId);
-  // đã chọn công ty nhưng công ty đó không có TK ngân hàng dùng được (đã tải xong, danh sách rỗng)
+  // đã chọn công ty nhưng công ty đó không có TK dùng được (đã tải xong, danh sách rỗng)
   const internalAccountHelp = !internalCompanyId
     ? 'Chọn công ty trước'
     : internalAccounts.isSuccess && !internalAccountRows.length
-      ? 'Công ty này chưa có tài khoản ngân hàng dùng được'
+      ? 'Công ty này chưa có tài khoản dùng được'
       : undefined;
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<{ title: string; detail?: string } | null>(null);
@@ -186,7 +186,7 @@ export function PartnerFormModal({
     // đối tác nội bộ: chỉ chọn công ty + TK khi tạo; khi sửa chỉ đổi trạng thái
     if (isInternal && !isEdit) {
       if (!internalCompanyId) errs.internal_company_id = 'Chọn công ty trong tập đoàn';
-      if (!internalAccountId) errs.internal_account_id = 'Chọn tài khoản ngân hàng của công ty đó';
+      if (!internalAccountId) errs.internal_account_id = 'Chọn tài khoản của công ty đó';
     } else if (!editingInternal) {
       if (trimmedName.length < 2) errs.name = 'Tên đối tác tối thiểu 2 ký tự';
       else if (trimmedName.length > 200) errs.name = 'Tên đối tác tối đa 200 ký tự';
@@ -281,7 +281,7 @@ export function PartnerFormModal({
               />
             </FgField>
             <FgField
-              label="Tài khoản ngân hàng"
+              label="Tài khoản"
               required
               error={errors.internal_account_id}
               help={internalAccountHelp}

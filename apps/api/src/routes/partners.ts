@@ -155,7 +155,7 @@ export function partnerRoutes(app: FastifyInstance): void {
     defineRoute({
       method: 'GET',
       url: '/partners/internal-accounts',
-      config: { perms: ['partner:write'] as Permission[], screen: SCREEN, summary: 'TK ngân hàng của một công ty trong tập đoàn, làm nguồn đối tác nội bộ' },
+      config: { perms: ['partner:write'] as Permission[], screen: SCREEN, summary: 'TK (ngân hàng hoặc tiền mặt) của một công ty trong tập đoàn, làm nguồn đối tác nội bộ' },
       schema: { tags: ['partners'] },
       handler: async (req, reply) => {
         const q = validate(internalAccountsQuery, req.query ?? {});

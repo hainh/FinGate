@@ -1,5 +1,5 @@
 /**
- * Đối tác loại "Công ty trong tập đoàn" (v2 §5.1, §11.6): mỗi TK ngân hàng của một công ty khác trong tập đoàn
+ * Đối tác loại "Công ty trong tập đoàn" (v2 §5.1, §11.6): mỗi TK (ngân hàng hoặc tiền mặt) của một công ty khác trong tập đoàn
  * là MỘT đối tác riêng. Tên / ngân hàng / STK lấy từ công ty & TK gốc và đồng bộ mỗi khi gốc đổi; không sửa tay.
  * Đối tác nội bộ là nguồn duy nhất của chuyển nội bộ phiếu chi (xem resolveTransferTarget).
  */
@@ -14,7 +14,7 @@ export function internalPartnerName(companyName: string, accountName: string): s
   return `${companyName} · ${accountName}`;
 }
 
-/** Nguồn của một đối tác nội bộ. `usable` = TK ngân hàng, không phải TK nhóm, đang hoạt động. */
+/** Nguồn của một đối tác nội bộ. `usable` = TK (ngân hàng hoặc tiền mặt), không phải TK nhóm, đang hoạt động. */
 export interface InternalSource {
   company_id: string;
   name: string;
@@ -37,7 +37,7 @@ export async function loadInternalSource(accountId: string): Promise<InternalSou
     name: internalPartnerName(String(company.name ?? ''), String(acct.account_name ?? '')),
     bank_name: String(acct.bank_name ?? ''),
     account_number: String(acct.account_number ?? ''),
-    usable: !acct.is_group && acct.kind === 'bank' && acct.status === 'active',
+    usable: !acct.is_group && acct.status === 'active',
   };
 }
 
@@ -50,8 +50,8 @@ export async function internalPartnerFieldsFor(input: {
   if (!input.internalCompanyId || !input.internalAccountId) {
     throw new ApiError({
       code: 'FG-VAL-001',
-      detail: 'Chọn công ty và tài khoản ngân hàng của công ty trong tập đoàn',
-      errors: { internal_account_id: 'Chọn tài khoản ngân hàng của công ty trong tập đoàn' },
+      detail: 'Chọn công ty và tài khoản của công ty trong tập đoàn',
+      errors: { internal_account_id: 'Chọn tài khoản của công ty trong tập đoàn' },
     });
   }
   if (input.internalCompanyId === input.ownerCompanyId) {
@@ -65,8 +65,8 @@ export async function internalPartnerFieldsFor(input: {
   if (!src || src.company_id !== input.internalCompanyId || !src.usable) {
     throw new ApiError({
       code: 'FG-VAL-001',
-      detail: 'Tài khoản không thuộc công ty đã chọn, không phải tài khoản ngân hàng, hoặc đã đóng',
-      errors: { internal_account_id: 'Tài khoản không thuộc công ty đã chọn, không phải tài khoản ngân hàng, hoặc đã đóng' },
+      detail: 'Tài khoản không thuộc công ty đã chọn, là tài khoản nhóm, hoặc đã đóng',
+      errors: { internal_account_id: 'Tài khoản không thuộc công ty đã chọn, là tài khoản nhóm, hoặc đã đóng' },
     });
   }
   const existed = await Models.Partner.exists({ company_id: input.ownerCompanyId, type: 'internal', internal_account_id: input.internalAccountId } as never);
@@ -146,10 +146,10 @@ export async function syncInternalPartners(by: { companyId?: string; accountId?:
  * hiện trong danh sách chọn đều tạo được đối tác.
  */
 export function internalSourceFilter(companyId: string): Record<string, unknown> {
-  return { company_id: companyId, kind: 'bank', is_group: { $ne: true }, status: 'active' };
+  return { company_id: companyId, is_group: { $ne: true }, status: 'active' };
 }
 
-/** TK ngân hàng của một công ty để chọn làm nguồn đối tác nội bộ. STK đã che; không có số dư. */
+/** TK (ngân hàng hoặc tiền mặt) của một công ty để chọn làm nguồn đối tác nội bộ. STK đã che; không có số dư. */
 export interface InternalSourceAccountView {
   _id: string;
   bank_name: string;
