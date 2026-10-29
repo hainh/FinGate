@@ -28,7 +28,7 @@ import {
 } from '@fingate/shared';
 import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, internalTransferBodySchema, statementImportBodySchema } from './schemas.ts';
 import { asBigInt, docHref, filterMaturityRows, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
-import { bookedBalance } from '../domain/ledger/index.ts';
+import { bookedBalance, periodFlows } from '../domain/ledger/index.ts';
 import { ledgerAccountViews, pageAccountViews } from '../domain/accounts.ts';
 import { companyReachableByActor } from '../domain/entitlement/index.ts';
 import { loadPartnerRefs } from '../domain/reports/refs.ts';
@@ -436,18 +436,27 @@ export function financeRoutes(app: FastifyInstance): void {
         const isGroup = Boolean(account.is_group);
         if (!isGroup) assertCompanyScope(req, account.company_id ? String(account.company_id) : null);
 
-        const limitRaw = Number((req.query as { limit?: string }).limit ?? 500);
+        const q = req.query as { limit?: string; from?: string; to?: string };
+        const limitRaw = Number(q.limit ?? 500);
         const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 2000) : 500;
+        // Bộ lọc kỳ (YYYY-MM-DD, tuỳ chọn): bỏ trống = toàn bộ thời gian; `to` không vượt quá hôm nay.
+        const isDay = (v: string | undefined): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
+        const from = isDay(q.from) ? q.from : null;
+        const to = isDay(q.to) && q.to < today() ? q.to : today();
+        const dateRange: Record<string, string> = { $lte: to };
+        if (from) dateRange.$gte = from;
         // Lấy `limit` bút toán MỚI NHẤT (sort giảm dần rồi mới limit) — tránh cắt nhầm
         // các giao dịch gần đây khi tài khoản có > limit dòng, khiến "Số dư cuối" sai.
-        const recent = await Models.CashEntry.find({ account_id: id, date: { $lte: today() } } as never)
+        const recent = await Models.CashEntry.find({ account_id: id, date: dateRange } as never)
           .sort({ date: -1, created_at: -1 })
           .limit(limit)
           .lean<Record<string, unknown>[]>();
         const entries = recent.reverse(); // sắp tăng dần để chạy số dư dồn
 
-        // số dư đầu cửa sổ = Σ toàn bộ sổ cái (≤ hôm nay) − Σ các bút toán trong cửa sổ.
-        const totalNet = await bookedBalance(id, today());
+        // số dư đầu cửa sổ = Σ toàn bộ sổ cái (≤ `to`) − Σ các bút toán trong cửa sổ.
+        const totalNet = await bookedBalance(id, to);
+        // tổng thu/chi của CẢ kỳ (không bị cắt bởi `limit`)
+        const flows = await periodFlows(id, from, to);
         let windowNet = 0n;
         for (const e of entries) {
           const amount = asBigInt(e.amount_minor);
@@ -536,6 +545,8 @@ export function financeRoutes(app: FastifyInstance): void {
                 kind: String(account.kind ?? 'bank'),
                 currency: String(account.currency ?? 'VND'),
               },
+              period: { from, to },
+              totals: { in: money(flows.in), out: money(flows.out) },
               items,
             },
           },

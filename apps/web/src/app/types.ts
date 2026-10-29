@@ -611,6 +611,10 @@ export interface BankAccountTransactions {
     kind: string;
     currency: string;
   };
+  /** Kỳ đang lọc: `from` null = từ đầu; `to` đã kẹp ≤ hôm nay. */
+  period: { from: string | null; to: string };
+  /** Tổng thu / chi của cả kỳ (không bị cắt theo giới hạn số dòng). */
+  totals: { in: MoneyWire; out: MoneyWire };
   items: BankTransactionRow[];
 }
 

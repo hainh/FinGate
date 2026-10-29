@@ -2,13 +2,17 @@
  * BANK-05 — Lịch sử giao dịch của một tài khoản tiền (sổ cái).
  *
  * Mỗi dòng là một bút toán thực tế (thu/chi) với số dư đầu/cuối chạy dồn, nội dung,
- * đơn vị nhận/nộp và link tới phiếu gốc.
+ * đơn vị nhận/nộp và link tới phiếu gốc. Lọc theo kỳ (từ ngày – đến ngày, mặc định toàn bộ thời gian)
+ * kèm 2 thẻ tổng thu / tổng chi của kỳ.
  */
 
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
+import { DatePicker } from 'antd';
+import dayjs from 'dayjs';
 import { useBankAccount, useBankAccountTransactions } from '../app/queries.ts';
-import { FgButton, FgDateTime, FgMoney } from '../components/primitives.tsx';
+import { FgButton, FgDateTime, FgMoney, FgText } from '../components/primitives.tsx';
+import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgSkeletonTable, FgTable, FgTag } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery } from '../components/pagekit.tsx';
@@ -31,11 +35,33 @@ export function bankAccountTitleName(a: BankAccountDetail | null | undefined): s
   });
 }
 
+/** Chọn nhanh N tháng gần nhất, tính từ ngày đầu tháng: 1 tháng = từ 01 tháng này; 3 tháng = từ 01 của 2 tháng trước… */
+const QUICK_RANGES: { months: number; label: string }[] = [
+  { months: 1, label: '1 tháng' },
+  { months: 3, label: '3 tháng' },
+  { months: 6, label: '6 tháng' },
+];
+
+const DAY = 'YYYY-MM-DD';
+
+function monthsRange(months: number): { from: string; to: string } {
+  const now = dayjs();
+  return { from: now.subtract(months - 1, 'month').startOf('month').format(DAY), to: now.format(DAY) };
+}
+
 export function BankAccountHistoryScreen(): ReactNode {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const account = useBankAccount(id);
-  const query = useBankAccountTransactions(id);
+  // '' = không giới hạn (mặc định toàn bộ thời gian)
+  const [range, setRange] = useState<{ from: string; to: string }>({ from: '', to: '' });
+  const query = useBankAccountTransactions(id, range);
+  const activeQuick = QUICK_RANGES.find((q) => {
+    const r = monthsRange(q.months);
+    return r.from === range.from && r.to === range.to;
+  })?.months;
+  const isAll = !range.from && !range.to;
+  const totals = query.data?.totals;
   const name = bankAccountTitleName(account.data);
   return (
     <>
@@ -57,15 +83,62 @@ export function BankAccountHistoryScreen(): ReactNode {
           </>
         }
       />
+      <div className="fg-filterbar" role="group" aria-label="Khoảng thời gian" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+        <FgButton size="small" variant={isAll ? 'primary' : 'secondary'} onClick={() => setRange({ from: '', to: '' })}>
+          Toàn bộ
+        </FgButton>
+        {QUICK_RANGES.map((q) => (
+          <FgButton key={q.months} size="small" variant={activeQuick === q.months ? 'primary' : 'secondary'} onClick={() => setRange(monthsRange(q.months))}>
+            {q.label}
+          </FgButton>
+        ))}
+        <DatePicker
+          placeholder="Từ ngày"
+          format="DD/MM/YYYY"
+          value={range.from ? dayjs(range.from) : null}
+          maxDate={range.to ? dayjs(range.to) : dayjs()}
+          onChange={(d) => setRange((r) => ({ ...r, from: d ? d.format(DAY) : '' }))}
+          aria-label="Từ ngày"
+        />
+        <span className="fg-muted">–</span>
+        <DatePicker
+          placeholder="Đến ngày"
+          format="DD/MM/YYYY"
+          value={range.to ? dayjs(range.to) : null}
+          minDate={range.from ? dayjs(range.from) : undefined}
+          maxDate={dayjs()}
+          onChange={(d) => setRange((r) => ({ ...r, to: d ? d.format(DAY) : '' }))}
+          aria-label="Đến ngày"
+        />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 'var(--fg-space-3)', marginBottom: 'var(--fg-space-4)' }}>
+        {[
+          { label: 'Tổng thu', value: totals?.in, color: 'var(--fg-status-success-text)' },
+          { label: 'Tổng chi', value: totals?.out, color: 'var(--fg-status-danger-text)' },
+        ].map((k) => (
+          <FgCard key={k.label} className="fg-kpi">
+            <FgText style="caption" color="muted">
+              {k.label}
+            </FgText>
+            <div className="fg-kpi-value" style={{ color: k.color }}>
+              <FgMoney value={k.value} mode="full" emphasis />
+            </div>
+          </FgCard>
+        ))}
+      </div>
       <FgQuery
         query={query}
         skeleton={<FgSkeletonTable rows={8} cols={8} />}
-        empty={<div className="fg-card"><FgEmptyState glyph="≡" title="Chưa có giao dịch" description="Tài khoản chưa ghi nhận phiếu thu/chi nào đã thực thi." /></div>}
+        empty={<div className="fg-card"><FgEmptyState glyph="≡" title="Chưa có giao dịch" description={isAll ? 'Tài khoản chưa ghi nhận phiếu thu/chi nào đã thực thi.' : 'Không có giao dịch trong khoảng thời gian đã chọn.'} /></div>}
       >
         {(data) =>
           !data.items.length ? (
             <div className="fg-card">
-              <FgEmptyState glyph="≡" title="Chưa có giao dịch" description="Tài khoản chưa ghi nhận phiếu thu/chi nào đã thực thi." />
+              <FgEmptyState
+                glyph="≡"
+                title="Chưa có giao dịch"
+                description={isAll ? 'Tài khoản chưa ghi nhận phiếu thu/chi nào đã thực thi.' : 'Không có giao dịch trong khoảng thời gian đã chọn.'}
+              />
             </div>
           ) : (
             <div className="fg-card" style={{ padding: 0 }}>

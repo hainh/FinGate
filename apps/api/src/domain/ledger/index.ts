@@ -248,6 +248,24 @@ export async function bookedBalance(accountId: string, uptoDate: string): Promis
   return toBig(r?.in_minor) - toBig(r?.out_minor);
 }
 
+/** Tổng thu / tổng chi trên sổ cái của một tài khoản trong khoảng ngày [from, to] (bỏ trống = không giới hạn). */
+export async function periodFlows(accountId: string, from: string | null, to: string): Promise<{ in: bigint; out: bigint }> {
+  const date: Record<string, string> = { $lte: to };
+  if (from) date.$gte = from;
+  const rows = await Models.CashEntry.aggregate([
+    { $match: { account_id: oid(accountId), date } },
+    {
+      $group: {
+        _id: null,
+        in_minor: { $sum: { $cond: [{ $eq: ['$direction', 'in'] }, '$amount_minor', 0] } },
+        out_minor: { $sum: { $cond: [{ $eq: ['$direction', 'out'] }, '$amount_minor', 0] } },
+      },
+    },
+  ] as never[]);
+  const r = (rows as { in_minor?: unknown; out_minor?: unknown }[])[0];
+  return { in: toBig(r?.in_minor), out: toBig(r?.out_minor) };
+}
+
 /**
  * Materialize lại `balances_daily` cho các tài khoản bị ảnh hưởng, TỪ LEDGER.
  *

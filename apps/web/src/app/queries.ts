@@ -210,13 +210,17 @@ export function useBalancesHistory(date?: string) {
   });
 }
 
-/** BANK-05 — lịch sử giao dịch của một tài khoản tiền. */
-export function useBankAccountTransactions(id: string | undefined) {
+/** BANK-05 — lịch sử giao dịch của một tài khoản tiền. `range` (YYYY-MM-DD, tuỳ chọn) — bỏ trống = toàn bộ thời gian. */
+export function useBankAccountTransactions(id: string | undefined, range: { from?: string; to?: string } = {}) {
   const { scope } = useAuth();
+  const { from, to } = range;
   return useQuery({
-    queryKey: ['bank-account-transactions', scope, id],
+    queryKey: ['bank-account-transactions', scope, id, from ?? '', to ?? ''],
     enabled: !!id,
-    queryFn: () => apiData<import('./types.ts').BankAccountTransactions>(`/bank-accounts/${id}/transactions`, { query: { scope } }),
+    queryFn: () =>
+      apiData<import('./types.ts').BankAccountTransactions>(`/bank-accounts/${id}/transactions`, {
+        query: { scope, ...(from ? { from } : {}), ...(to ? { to } : {}) },
+      }),
   });
 }
 
