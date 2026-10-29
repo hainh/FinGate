@@ -27,6 +27,8 @@ export type Density = 'comfortable' | 'compact';
 interface UiState {
   theme: ThemeMode;
   density: Density;
+  /** luôn hiển thị FgTable dạng card list, kể cả trên desktop. */
+  alwaysCards: boolean;
 }
 
 const LS_KEY = 'fg.ui';
@@ -34,9 +36,9 @@ const LS_KEY = 'fg.ui';
 function readUi(): UiState {
   try {
     const s = JSON.parse(localStorage.getItem(LS_KEY) || '{}') as Partial<UiState>;
-    return { theme: s.theme ?? 'light', density: s.density ?? 'comfortable' };
+    return { theme: s.theme ?? 'light', density: s.density ?? 'comfortable', alwaysCards: s.alwaysCards ?? false };
   } catch {
-    return { theme: 'light', density: 'comfortable' };
+    return { theme: 'light', density: 'comfortable', alwaysCards: false };
   }
 }
 
@@ -48,6 +50,7 @@ export function resolvedTheme(mode: ThemeMode): 'light' | 'dark' {
 interface UiContextValue extends UiState {
   setTheme: (t: ThemeMode) => void;
   setDensity: (d: Density) => void;
+  setAlwaysCards: (v: boolean) => void;
   resolved: 'light' | 'dark';
 }
 
@@ -332,6 +335,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
       resolved,
       setTheme: (theme) => setUi((s) => ({ ...s, theme })),
       setDensity: (density) => setUi((s) => ({ ...s, density })),
+      setAlwaysCards: (alwaysCards) => setUi((s) => ({ ...s, alwaysCards })),
     }),
     [ui, resolved],
   );

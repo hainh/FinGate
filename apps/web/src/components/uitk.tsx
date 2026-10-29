@@ -310,8 +310,9 @@ export function useIsCardView(): boolean {
 }
 
 export function FgTable<T extends object>({ size, mobileCards = true, dataSource, className, ...props }: FgTableProps<T>): ReactNode {
-  const density = useUi()?.density;
-  const isCardView = useIsCardView();
+  const ui = useUi();
+  const density = ui?.density;
+  const isCardView = useIsCardView() || !!ui?.alwaysCards;
   const rows = dataSource ?? [];
   if (isCardView && mobileCards && rows.length > 0) {
     return (

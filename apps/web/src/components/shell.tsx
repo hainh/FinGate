@@ -9,7 +9,7 @@ import { startTransition, useEffect, useMemo, useState, type ReactNode } from 'r
 import { Link, NavLink, useLocation, useNavigate } from 'react-router';
 import { useIsFetching } from '@tanstack/react-query';
 import { LoadingOutlined } from '@ant-design/icons';
-import { Badge, Dropdown, Input } from 'antd';
+import { Badge, Checkbox, Dropdown, Input } from 'antd';
 import { useAuth, useUi, SCOPE_ALL } from '../app/store.tsx';
 import { useBadges, useUnreadCount } from '../app/queries.ts';
 import { apiData, openDownload } from '../app/api.ts';
@@ -111,7 +111,7 @@ function FgFetchIndicator(): ReactNode {
 
 export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
   const { me, can, logout, scope, setScope } = useAuth();
-  const { theme, setTheme, resolved, density, setDensity } = useUi();
+  const { theme, setTheme, resolved, density, setDensity, alwaysCards, setAlwaysCards } = useUi();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
@@ -321,6 +321,13 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
             aria-label="Tìm kiếm toàn cục"
             onSearch={(q) => q.trim() && navigate(`/tim-kiem?q=${encodeURIComponent(q)}`)}
           />
+
+          {/* ≤1023px bảng đã luôn ở dạng card — chỉ cần lựa chọn trên desktop. */}
+          {!isOverlay ? (
+            <Checkbox checked={alwaysCards} onChange={(e) => setAlwaysCards(e.target.checked)} style={{ whiteSpace: 'nowrap' }}>
+              Dạng thẻ
+            </Checkbox>
+          ) : null}
 
           <Link to="/cho-toi-duyet" aria-label="Chờ tôi duyệt" style={{ color: 'var(--fg-text-secondary)' }}>
             <Badge count={badges?.counts?.awaiting_me ?? 0} size="small" offset={[2, -2]}>
