@@ -40,7 +40,7 @@ const envSchema = z.object({
   /** Container MongoDB có `mongodump` (dùng khi host không cài MongoDB Database Tools). */
   BACKUP_MONGO_CONTAINER: z.string().default(''),
   /** Sao lưu mỗi 30' ngay trong tiến trình API. Chỉ bật trên ĐÚNG MỘT instance có đĩa bền (onprem). */
-  BACKUP_AUTO: z.enum(['true', 'false']).default('false'),
+  BACKUP_AUTO: z.enum(['true', 'false']).default('true'),
   R2_ACCOUNT_ID: z.string().default(''),
   R2_ACCESS_KEY_ID: z.string().default(''),
   R2_SECRET_ACCESS_KEY: z.string().default(''),
