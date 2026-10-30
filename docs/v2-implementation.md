@@ -1544,6 +1544,7 @@ Chủ tịch (`chairman`) đổi lại bên nộp tiền (phiếu thu) hoặc b�
 ### 29.3 Kiểm tra
 
 - Khi lưu (`domain/vouchers/account-borrow.ts` → `resolveAccountBorrow`): chỉ phiếu chi; TK B thuộc cùng công ty, đang hoạt động, khác TK chi; số tiền mượn > 0 và không vượt số tiền phiếu; không kèm vay để chi.
+- Số dư khi thực thi (FG-WF-010): TK chi được tính thêm số tiền mượn (số dư A + tiền mượn ≥ số thực chi); TK cho mượn phải đủ số tiền mượn (R8 thực thi phiếu chi B → A qua cùng bước kiểm).
 - Khi duyệt / đưa vào hàng / thực thi (`assertAccountBorrowLive`): TK B còn hoạt động và khác TK thực chi (thực thi có thể đổi TK) — R8 chạy sau thực thi nên lỗi phải chặn trước.
 - R8 idempotent theo lượt (`findAutoVoucher(runId, 'R8', kind)`); lỗi bước ⇒ lượt `Lỗi`, KTT chạy lại trên màn Quy trình tự động.
 

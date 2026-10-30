@@ -49,7 +49,7 @@ import { assertTransferTargetAccount, assertTransferTargetSubmittable } from '..
 import { assertAccountAllowedForCompany, assertGroupAccountForCompany } from '../accounts.ts';
 import { emitVoucherEvent, type VoucherEventSubject } from '../events/index.ts';
 import { emitLoanSettledAfterPayment } from '../links/index.ts';
-import { assertAccountBorrowLive } from '../vouchers/account-borrow.ts';
+import { assertAccountBorrowLive, effectiveBorrowAmount, storedAccountBorrowToPlan } from '../vouchers/account-borrow.ts';
 import {
   applyDecision,
   canTransition,
@@ -771,21 +771,32 @@ export async function transition(input: {
     }
 
     // 4b. số dư tài khoản nguồn — CHỈ chặn ở bước THỰC THI, không chặn khi duyệt.
+    //     Phiếu chi mượn tiền TK khác (R8): TK chi được tính thêm số tiền mượn; TK cho mượn phải đủ số tiền mượn
+    //     (R8 thực thi phiếu chi B → A ngay sau đó, cũng qua bước kiểm số dư này).
     if (doc.kind === 'spend' && accountId) {
-      const balance = await balanceForPaymentOf(accountId);
-      if (actual > balance) {
-        const account = await Models.BankAccount.findById(accountId)
+      const insufficient = async (acctId: string, balance: bigint, need: bigint, fallback: string, suffix = ''): Promise<never> => {
+        const account = await Models.BankAccount.findById(acctId)
           .select({ bank_name: 1, account_number: 1 })
           .lean();
-        const label = account ? `${account.bank_name} ${account.account_number ?? ''}`.trim() : 'tài khoản nguồn';
+        const label = account ? `${account.bank_name} ${account.account_number ?? ''}`.trim() : fallback;
         throw new ApiError({
           code: 'FG-WF-010',
           detail: `Số dư ${label} không đủ — hiện có ${formatMoney(money(balance, doc.amount.currency), { mode: 'compact' })}, cần ${formatMoney(
-            money(actual, doc.amount.currency),
+            money(need, doc.amount.currency),
             { mode: 'compact' },
-          )}`,
-          data: { account_id: accountId, balance_minor: balance.toString(), amount_minor: actual.toString() },
+          )}${suffix}`,
+          data: { account_id: acctId, balance_minor: balance.toString(), amount_minor: need.toString() },
         });
+      };
+      const borrow = storedAccountBorrowToPlan((doc.options?.account_borrow ?? null) as Record<string, unknown> | null);
+      const borrowed = borrow ? effectiveBorrowAmount(borrow, actual) : 0n;
+      if (borrow && borrowed > 0n) {
+        const lenderBalance = await balanceForPaymentOf(borrow.account_id);
+        if (borrowed > lenderBalance) await insufficient(borrow.account_id, lenderBalance, borrowed, 'tài khoản cho mượn', ' để cho mượn');
+      }
+      const balance = await balanceForPaymentOf(String(accountId));
+      if (actual > balance + borrowed) {
+        await insufficient(String(accountId), balance, actual - borrowed, 'tài khoản nguồn', borrowed > 0n ? ' (sau khi tính tiền mượn)' : '');
       }
     }
 
