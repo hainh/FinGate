@@ -12,7 +12,8 @@
  *  2. create_receipt  — phiếu THU ĐÃ DUYỆT vào TK A từ TK B (cùng công ty, cùng số tiền);
  *  3. execute_spend   — thực thi phiếu chi B → A (ngày thực thi = ngày thực thi phiếu chi gốc): TK B giảm;
  *  4. execute_receipt — thực thi phiếu thu: TK A được bù;
- *  5. link            — `generated` phiếu gốc → hai phiếu sinh ra; `internal_transfer` phiếu chi B → phiếu thu A.
+ *  5. link            — `generated` phiếu gốc → hai phiếu sinh ra. KHÔNG nối `internal_transfer` phiếu chi B → phiếu thu A:
+ *                        quan hệ đó chỉ dành cho hai công ty khác nhau (RELATION_SPECS); hai phiếu nhận ra nhau qua phiếu gốc.
  * Số tiền = số tiền mượn đã ghi trên phiếu (không vượt số thực chi), bỏ trống = toàn bộ số thực chi.
  * Hai phiếu sinh ra không có đối tác ngoài (chuyển giữa hai TK của chính công ty — như phiếu thu của R1).
  */
@@ -167,6 +168,5 @@ async function linkStep(ctx: StepContext): Promise<StepOutput> {
   const srcRef = { type: 'document' as const, id: String(b.src._id) };
   await ensureAutomationLink({ ...common, from: srcRef, to: { type: 'document', id: spendId }, relation: 'generated' });
   await ensureAutomationLink({ ...common, from: srcRef, to: { type: 'document', id: receiptId }, relation: 'generated' });
-  await ensureAutomationLink({ ...common, from: { type: 'document', id: spendId }, to: { type: 'document', id: receiptId }, relation: 'internal_transfer' });
   return { output_type: 'document', output_id: receiptId };
 }

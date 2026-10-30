@@ -1535,7 +1535,7 @@ Chủ tịch (`chairman`) đổi lại bên nộp tiền (phiếu thu) hoặc b�
   3. rồi mới kiểm số dư A và chi phiếu gốc.
   Ngày thực thi của hai phiếu = ngày thực thi phiếu chi gốc. Hai phiếu không có đối tác ngoài (`partner_id = null`, cùng ngoại lệ với phiếu thu R1).
 - Quy tắc R8 (`voucher.paid`) chạy sau: dùng lại hai phiếu đã có (tìm theo phiếu nguồn), bảo đảm đã thực thi, gán liên kết; chỉ sinh mới khi thiếu (dự phòng).
-- Liên kết: `generated` phiếu gốc → từng phiếu sinh ra; `internal_transfer` phiếu chi B → phiếu thu A.
+- Liên kết: `generated` phiếu gốc → từng phiếu sinh ra. Không nối `internal_transfer` giữa hai phiếu mượn — quan hệ đó chỉ cho hai công ty khác nhau; hai phiếu nhận ra nhau qua phiếu gốc.
 - Không dùng cùng lúc với "Vay ngân hàng để chi" (R3).
 
 ### 29.2 Dữ liệu
