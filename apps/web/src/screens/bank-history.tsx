@@ -141,11 +141,11 @@ export function BankAccountHistoryScreen(): ReactNode {
         }
       />
       <div className="fg-filterbar" role="group" aria-label="Khoảng thời gian" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
-        <FgButton size="small" variant={isAll ? 'primary' : 'secondary'} onClick={() => setRange({ from: '', to: '' })}>
+        <FgButton size="medium" variant={isAll ? 'primary' : 'secondary'} onClick={() => setRange({ from: '', to: '' })}>
           Toàn bộ
         </FgButton>
         {QUICK_RANGES.map((q) => (
-          <FgButton key={q.months} size="small" variant={activeQuick === q.months ? 'primary' : 'secondary'} onClick={() => setRange(monthsRange(q.months))}>
+          <FgButton key={q.months} size="medium" variant={activeQuick === q.months ? 'primary' : 'secondary'} onClick={() => setRange(monthsRange(q.months))}>
             {q.label}
           </FgButton>
         ))}
