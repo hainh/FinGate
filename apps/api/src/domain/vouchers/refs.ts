@@ -30,6 +30,7 @@ import { ensureManualLink } from '../automation/actions/link.ts';
 import { assertOffsetDirection, directionOf, isReadOnlyDebt } from '../debt/rules.ts';
 import { bankAccountLabelOf } from '../queries/index.ts';
 import { loanOpenForRepayment, offsetRuleLinksOf } from './offset.ts';
+import { accountBorrowViewOf, type AccountBorrowView } from './account-borrow.ts';
 import {
   assertAmountEditAllowed,
   assertLenderBank,
@@ -707,7 +708,7 @@ export interface VoucherRefView {
   payee: Record<string, unknown>;
   tag_ids: string[];
   tags: TagView[];
-  options: { loan: LoanView | null; offset: OffsetView | null };
+  options: { loan: LoanView | null; offset: OffsetView | null; account_borrow: AccountBorrowView | null };
   transfer_target: TransferView | null;
   origin: OriginView;
   links: LinkView[];
@@ -1008,7 +1009,15 @@ export async function buildVoucherRefView(doc: Record<string, unknown>, scopeCom
     payee,
     tag_ids: tags.map((t) => t._id),
     tags,
-    options: { loan, offset },
+    options: {
+      loan,
+      offset,
+      account_borrow: await accountBorrowViewOf(
+        (doc.options as { account_borrow?: Record<string, unknown> | null } | null | undefined)?.account_borrow ?? null,
+        companyId,
+        amountMinor,
+      ),
+    },
     transfer_target,
     origin: {
       kind: origin.kind === 'automation' ? 'automation' : 'manual',

@@ -69,6 +69,21 @@ export interface DocOffsetView {
   fee_minor: string | null;
 }
 
+/** `options.account_borrow` khi đọc phiếu chi: tài khoản cho mượn (cùng công ty) và số tiền mượn hiệu lực (R8). */
+export interface DocAccountBorrowView {
+  account_id: string;
+  account_label: string | null;
+  /** null = toàn bộ số tiền thực chi. */
+  amount_minor: string | null;
+  effective_amount_minor: string;
+}
+
+/** `options.account_borrow` gửi lên: không mượn ⇒ null (server bỏ lựa chọn đã lưu). */
+export function accountBorrowBody(on: boolean, accountId: string, amountMinor: string | null): { account_id: string; amount_minor: string | null } | null {
+  if (!on || !accountId) return null;
+  return { account_id: accountId, amount_minor: amountMinor };
+}
+
 /** Chuyển tiền nội bộ theo ID (`transfer_target`, đã nạp tên công ty và TK). */
 export interface DocTransferView {
   company_id: string;

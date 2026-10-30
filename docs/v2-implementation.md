@@ -28,7 +28,7 @@ Hằng số enum + nhãn tiếng Việt (dùng lại ở contract, không import
 - Đối tác: `PARTNER_TYPES` (`bank|customer|supplier|other|internal`; `other` = "Khác": nhân viên / khách vãng lai) + `PARTNER_TYPE_LABEL`; `PARTNER_STATUSES` (`active|inactive`) + `PARTNER_STATUS_LABEL` (`Hoạt động` / `Ngừng giao dịch`); `PARTNER_CODE_PREFIX = 'DT'`.
 - Hướng công nợ: `DEBT_DIRECTIONS` (`receivable|payable`) + `DEBT_DIRECTION_LABEL`.
 - Liên kết: `BUSINESS_LINK_RELATIONS` (`offset|repayment|disbursement|funded_by|generated|internal_transfer`) + `BUSINESS_LINK_RELATION_LABEL`; `LINK_OBJECT_TYPES` (`document|debt_voucher|bank_debt`) + `LINK_OBJECT_TYPE_LABEL`; `LINK_ORIGINS` (`manual|automation`); `LINK_STATUSES` (`active|removed`); `LINK_SPLIT_KEYS` (`principal|interest|fee`).
-- Quy tắc & lượt: `AUTOMATION_RULE_CODES` (`R1..R7`) + `AUTOMATION_RULE_LABEL`; `AUTOMATION_RUN_STATUSES` (`pending|running|done|failed`) + `AUTOMATION_RUN_STATUS_REGISTRY`; `AUTOMATION_STEP_STATUSES` (`pending|done|failed|skipped`) + `AUTOMATION_STEP_STATUS_LABEL`.
+- Quy tắc & lượt: `AUTOMATION_RULE_CODES` (`R1..R8`) + `AUTOMATION_RULE_LABEL`; `AUTOMATION_RUN_STATUSES` (`pending|running|done|failed`) + `AUTOMATION_RUN_STATUS_REGISTRY`; `AUTOMATION_STEP_STATUSES` (`pending|done|failed|skipped`) + `AUTOMATION_STEP_STATUS_LABEL`.
 - Khoản nợ NH (registry riêng, không trộn workflow): `BANK_DEBT_STATUSES` = `pending_disbursement | active | overdue | settled | archived | cancelled`; `BANK_DEBT_STATUS_REGISTRY`, `BANK_DEBT_STATUS_KEYS`, `bankDebtStatusLabel(key)`, `bankDebtStatusTone(key)`. `pending_disbursement` = "Chờ giải ngân" (tone attention, không tính dư nợ); `cancelled` = "Đã huỷ".
 - Tuỳ chọn vay: `LOAN_KINDS` (`borrow|fund`) + `LOAN_KIND_LABEL`; `LOAN_MODES` (`new|existing|later`) + `LOAN_MODE_LABEL`; `REPAYMENT_PERIODS` + `REPAYMENT_PERIOD_LABEL`; `REPAYMENT_METHODS` (type `RepaymentMethodKey`) + `REPAYMENT_METHOD_LABEL`.
 - `TAG_COLOR_DEFAULT = '#64748b'`.
@@ -293,6 +293,7 @@ Chu kỳ: `startAutomationLoop(log, intervalMs = 5000)` (`jobs/index.ts`) gọi 
 | R5 | `schedule.recurring` | — | create_voucher | — | ✔ |
 | R6 | `voucher.cancelled` (+ `voucher.rejected`) | `payload.loan_kind ≠ null` | alert, cancel_unpaid | — | ✔ |
 | R7 | `voucher.approved` | `payload.kind = spend` (bước gán chỉ làm khi phiếu có `options.offset`, §27) | link | — | ✔ |
+| R8 | `voucher.paid` | `payload.kind = spend`, `payload.account_borrow = true` (§29) | create_spend, create_receipt, execute_spend, execute_receipt, link | — | ✔ |
 
 Seed chỉ INSERT quy tắc còn thiếu (`$setOnInsert`), không ghi đè chỉnh sửa của người dùng. Trường `steps` trong DB chỉ để hiển thị; bộ xử lý đăng ký trong code là nguồn thực thi.
 
@@ -830,6 +831,7 @@ Chưa làm / lưu ý:
   - R5 `r5-recurring.ts` + `domain/recurring/index.ts` — tác vụ `recurring` nay chỉ phát `schedule.recurring` (mỗi khoản, mỗi kỳ; không phát trùng khi sự kiện đang chờ); R5 tạo phiếu nháp qua `createRecurringDraft` (idempotent theo lịch sử `recurring_materialize`, đối tác theo `partner_id`, đứng tên KTT của công ty). Nhắc 7/3/1 ngày vẫn ở tác vụ này.
   - R6 `r6-cancel-generated.ts` — `voucher.cancelled` / `rejected` (chỉ khi trạng thái hiện tại vẫn huỷ/từ chối; đã gửi lại thì bỏ qua): khoản do quy tắc sinh từ phiếu này và chưa có tiền ⇒ huỷ; khoản chỉ gắn THỦ CÔNG vào phiếu (tạo tay, không do phiếu sinh ra) ⇒ chỉ gỡ liên kết (liên kết của phiếu đã huỷ/từ chối không còn hiệu lực), không cảnh báo và không huỷ, kể cả khi khoản đã có tiền; khoản do quy tắc sinh từ phiếu này đã có tiền ⇒ chỉ cảnh báo KTT (`source_cancelled_with_money`), giữ liên kết, không tự huỷ (`decideOnSourceFinal`, `alertLoansOfSource`).
   - R7 `r7-offset-on-approval.ts` — `voucher.approved` phiếu thu / chi có cấn trừ khoản vay: gán liên kết tới khoản đã chọn khi duyệt xong (chi tiết §27).
+  - R8 `r8-account-borrow.ts` — `voucher.paid` phiếu chi mượn tiền từ tài khoản khác cùng công ty: sinh phiếu chi B → A + phiếu thu A ← B, thực thi ngay (chi tiết §29).
 - **Thuần (có test)**: `policy.ts` — điều khoản mặc định (`resolveLoanTerms`), số tiền vay R3 (`resolveLoanAmount`), ngày duyệt cuối (`finalApprovalDateOf`), quyết định R6 (`decideOnSourceFinal`), thời điểm R2 (`mayCreateLoan`, `mayFollowLoanEdits`, `mayReviveLoan`); `params.ts` — tham số theo quy tắc (`checkRuleParams`).
 - **Khoá số tiền R3** (`automation/locks.ts`, dùng trong `workflow.transition`): sau khi R3 đã chạy, đổi `amount_minor` khi duyệt hoặc `actual_amount_minor` khi thực thi ⇒ `FG-VAL-001`.
 - **Route** (`routes/automation.ts`, đăng ký trong `routes/index.ts`):
@@ -1521,6 +1523,38 @@ Chủ tịch (`chairman`) đổi lại bên nộp tiền (phiếu thu) hoặc b�
 
 - Phiếu đang có khoản vay / cấn trừ không đổi được đối tác qua API này: phải gỡ trước. Hiện chưa có nút gỡ trên phiếu đã thực thi, nên các phiếu này phải xử lý riêng nếu cần.
 - Liên kết do quy trình tự động tạo không được kiểm tra khi đổi đối tác (giống luồng sửa phiếu thường).
+
+## 29. Phiếu chi mượn tiền từ tài khoản khác cùng công ty — R8
+
+### 29.1 Nghiệp vụ
+
+- Phiếu chi từ tài khoản **A** cho đối tác **X** có thể đánh dấu "Mượn tiền từ tài khoản khác" và chọn tài khoản **B** (cùng công ty, đang hoạt động, khác A; ngân hàng hoặc tiền mặt). Số tiền mượn tuỳ chọn — bỏ trống = toàn bộ số thực chi.
+- Khi phiếu chi được duyệt và **thực thi** (`voucher.paid`), R8 tự sinh **2 phiếu** — tổng cộng 3 phiếu:
+  1. phiếu **chi** từ B, ĐÃ DUYỆT (kế thừa chuỗi duyệt của phiếu gốc, nhãn Tự động) → thực thi ngay: TK B giảm;
+  2. phiếu **thu** vào A, ĐÃ DUYỆT → thực thi ngay: TK A được bù.
+  Ngày thực thi của hai phiếu = ngày thực thi phiếu chi gốc. Hai phiếu không có đối tác ngoài (`partner_id = null`, cùng ngoại lệ với phiếu thu R1).
+- Liên kết: `generated` phiếu gốc → từng phiếu sinh ra; `internal_transfer` phiếu chi B → phiếu thu A.
+- Không dùng cùng lúc với "Vay ngân hàng để chi" (R3).
+
+### 29.2 Dữ liệu
+
+- `documents.options.account_borrow = { account_id, amount_minor | null }` (`accountBorrowOptions` trong `@fingate/shared`). Dạng đọc có thêm `account_label`, `effective_amount_minor`.
+- Payload sự kiện phiếu có `account_borrow: boolean` — điều kiện của R8.
+
+### 29.3 Kiểm tra
+
+- Khi lưu (`domain/vouchers/account-borrow.ts` → `resolveAccountBorrow`): chỉ phiếu chi; TK B thuộc cùng công ty, đang hoạt động, khác TK chi; số tiền mượn > 0 và không vượt số tiền phiếu; không kèm vay để chi.
+- Khi duyệt / đưa vào hàng / thực thi (`assertAccountBorrowLive`): TK B còn hoạt động và khác TK thực chi (thực thi có thể đổi TK) — R8 chạy sau thực thi nên lỗi phải chặn trước.
+- R8 idempotent theo lượt (`findAutoVoucher(runId, 'R8', kind)`); lỗi bước ⇒ lượt `Lỗi`, KTT chạy lại trên màn Quy trình tự động.
+
+### 29.4 Giao diện
+
+- Form phiếu chi: mục "Mượn tiền từ tài khoản khác" (chọn TK cho mượn, số tiền mượn).
+- Chi tiết phiếu: banner `AccountBorrowBanner` (sẽ tạo / đã tạo phiếu, xem tab Liên kết).
+
+### 29.5 Kiểm thử
+
+- Đã cập nhật danh sách quy tắc trong `engine.test.ts` / `engine.keys.test.ts`. **Chưa có** test tích hợp DB / E2E cho luồng lưu → duyệt → thực thi → R8; cần kiểm trên app đang chạy.
 
 ## Quyết định thiết kế bổ sung (chờ duyệt đưa vào v2/v2.md)
 

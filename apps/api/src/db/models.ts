@@ -168,6 +168,16 @@ const offsetOptionsEmbed = new Schema(
   { _id: false },
 );
 
+/** Mượn tiền từ tài khoản khác cùng công ty trên phiếu chi (`options.account_borrow`, R8): thực thi xong ⇒ tự sinh phiếu chi B → A + phiếu thu A ← B. */
+const accountBorrowOptionsEmbed = new Schema(
+  {
+    account_id: { type: Schema.Types.ObjectId, required: true },
+    /** minor units; null = toàn bộ số tiền thực chi. */
+    amount_minor: { type: BigInt, default: null },
+  },
+  { _id: false },
+);
+
 /** Chuyển nội bộ theo ID (thay `target` v1 — v2 §11.6). */
 const transferTargetEmbed = new Schema(
   {
@@ -443,10 +453,11 @@ export const DocumentSchema = new Schema(
     partner_id: { type: Schema.Types.ObjectId, default: null },
     /** ★ v2: tag gắn phiếu (thuộc danh bạ tag của công ty). */
     tag_ids: { type: [Schema.Types.ObjectId], default: [] },
-    /** ★ v2: tuỳ chọn tự động — `options.loan` (cờ đi vay / vay để chi + thông tin khoản vay dự kiến) · `options.offset` (cấn trừ khoản vay). */
+    /** ★ v2: tuỳ chọn tự động — `options.loan` (cờ đi vay / vay để chi + thông tin khoản vay dự kiến) · `options.offset` (cấn trừ khoản vay) · `options.account_borrow` (mượn tiền TK khác, R8). */
     options: {
       loan: { type: loanOptionsEmbed, default: null },
       offset: { type: offsetOptionsEmbed, default: null },
+      account_borrow: { type: accountBorrowOptionsEmbed, default: null },
     },
     /** ★ v2: chuyển nội bộ theo ID (thay `target` v1 — giữ song song). */
     transfer_target: { type: transferTargetEmbed, default: null },

@@ -940,6 +940,17 @@ export const DEFAULT_AUTOMATION_RULES: readonly DefaultRuleDef[] = [
     params: {},
     enabled: true,
   },
+  {
+    code: 'R8',
+    name: AUTOMATION_RULE_LABEL.R8,
+    trigger_event: 'voucher.paid',
+    trigger_events: [],
+    // chỉ phiếu chi có cờ mượn tiền từ TK khác cùng công ty (`options.account_borrow`)
+    condition: { 'payload.kind': 'spend', 'payload.account_borrow': true },
+    steps: ['create_spend', 'create_receipt', 'execute_spend', 'execute_receipt', 'link'],
+    params: {},
+    enabled: true,
+  },
 ];
 
 /**

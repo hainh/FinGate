@@ -55,6 +55,7 @@ import {
   useLoanDefaults,
   transferTargetBody,
   type LoanTermsValues,
+  accountBorrowBody,
 } from '../app/v2/documents.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoneyInput, FgNumber, FgSelect, FgTextarea, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -129,6 +130,11 @@ export interface FormState {
   loan: LoanState;
   /** Cấn trừ khoản vay (phiếu chi; phiếu thu chỉ cấn trừ công nợ phải thu). */
   offset: OffsetState;
+  /** Phiếu chi mượn tiền từ TK khác cùng công ty (R8): thực thi xong tự sinh phiếu chi B → A + phiếu thu A ← B. */
+  borrowOn: boolean;
+  borrowAccountId: string;
+  /** null = toàn bộ số tiền thực chi. */
+  borrowAmount: Money | null;
   /** Chuyển nội bộ theo ID (luôn bật với phiếu chuyển nội bộ; phiếu chi suy từ đối tác). */
   transferOn: boolean;
   transferCompanyId: string;
@@ -188,6 +194,9 @@ const initial = (kind: PageKind): FormState => ({
   tagIds: [],
   loan: emptyLoan(),
   offset: emptyOffset(),
+  borrowOn: false,
+  borrowAccountId: '',
+  borrowAmount: null,
   transferOn: kind === 'internal',
   transferCompanyId: '',
   transferAccountId: '',
@@ -250,6 +259,11 @@ function formFromDocument(doc: DocumentDetail, kind: PageKind): FormState {
           }
         : emptyLoan(),
     offset: offsetFromDocument(doc),
+    borrowOn: Boolean(doc.options?.account_borrow),
+    borrowAccountId: doc.options?.account_borrow?.account_id ?? '',
+    borrowAmount: doc.options?.account_borrow?.amount_minor
+      ? moneyFromWire({ minor: doc.options.account_borrow.amount_minor, currency: doc.amount.currency, decimals: 0 })
+      : null,
     transferOn: kind === 'internal',
     transferCompanyId: doc.transfer_target?.company_id ?? doc.target?.company_id ?? '',
     transferAccountId: doc.transfer_target?.account_id ?? doc.target?.account_id ?? '',
@@ -378,6 +392,11 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
     .filter((a) => a.status === 'active' && a.kind === 'bank' && !a.is_group && a.company_id === currentCompany)
     .map((a) => ({ value: a._id, label: bankAccountOptionLabel(a) }));
 
+  // Mượn tiền: TK đang hoạt động khác của CHÍNH công ty lập phiếu (ngân hàng hoặc tiền mặt), trừ TK chi.
+  const borrowAccountOptions = (accounts.data?.items ?? [])
+    .filter((a) => a.status === 'active' && !a.is_group && a.company_id === currentCompany && a._id !== f.accountId)
+    .map((a) => ({ value: a._id, label: bankAccountOptionLabel(a) }));
+
   // Chuyển nội bộ: công ty khác (trong danh bạ phạm vi) + TK đang hoạt động của công ty đó.
   const targetAccounts = useBankAccounts(f.transferCompanyId || null);
   // Công ty nhận: mọi công ty NGƯỜI DÙNG ĐƯỢC GÁN (me.companies), không chỉ công ty đang xem ở bộ chuyển phạm vi.
@@ -498,7 +517,12 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
       },
       note: f.note || undefined,
       tag_ids: f.tagIds,
-      options: { loan: loanBody, offset: offsetBody },
+      options: {
+        loan: loanBody,
+        offset: offsetBody,
+        // luôn gửi với phiếu chi (kể cả null) để sửa phiếu bỏ được lựa chọn mượn tiền đã lưu
+        account_borrow: kind === 'spend' ? accountBorrowBody(f.borrowOn, f.borrowAccountId, f.borrowAmount ? f.borrowAmount.minor.toString() : null) : null,
+      },
       transfer_target: transfer,
     };
     if (kind === 'rollover') {
@@ -548,6 +572,11 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
       if (f.offset.target === 'bank_debt' && offsetTotal > 0n && offsetPrincipal === null) {
         clientErrors['options.offset.interest_minor'] = 'Lãi + phí không được vượt số tiền cấn trừ';
       }
+    }
+    if (kind === 'spend' && f.borrowOn) {
+      if (!f.borrowAccountId) clientErrors['options.account_borrow.account_id'] = 'Chọn tài khoản cho mượn';
+      else if (f.borrowAccountId === f.accountId) clientErrors['options.account_borrow.account_id'] = 'Tài khoản cho mượn phải khác tài khoản chi';
+      if (f.borrowAmount && f.amount && f.borrowAmount.minor > f.amount.minor) clientErrors['options.account_borrow.amount_minor'] = 'Số tiền mượn không được vượt số tiền phiếu chi';
     }
     if (f.transferOn && !f.transferCompanyId) clientErrors['transfer_target.company_id'] = 'Chọn công ty nhận';
     if (f.transferOn && f.transferCompanyId && !f.transferAccountId) clientErrors['transfer_target.account_id'] = 'Chọn tài khoản nhận';
@@ -957,6 +986,8 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                         fund: on ? 'bank' : s.fund,
                         // vay để chi và cấn trừ khoản vay không đi cùng nhau: bật vay thì tắt cấn trừ
                         offset: on && s.offset.on ? { ...s.offset, on: false } : s.offset,
+                        // vay để chi và mượn tiền TK khác không đi cùng nhau
+                        borrowOn: on ? false : s.borrowOn,
                         accountId: linked !== null ? linked : s.accountId,
                       };
                     });
@@ -1010,6 +1041,55 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                   <div style={{ gridColumn: '1/-1' }}>
                     <LoanTermsFields value={f.loan} onChange={setLoan} baseDate={f.plannedDate} disabled={!canEdit} errors={errors} defaults={loanDefaults.data?.fund ?? null} />
                   </div>
+                </div>
+              ) : null}
+            </Section>
+          ) : null}
+
+          {/* ---------- Phiếu chi: mượn tiền từ tài khoản khác cùng công ty (R8) ---------- */}
+          {kind === 'spend' ? (
+            <Section title="Mượn tiền từ tài khoản khác">
+              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, cursor: canEdit && !f.loan.on ? 'pointer' : 'not-allowed' }}>
+                <input
+                  type="checkbox"
+                  checked={f.borrowOn}
+                  onChange={(e) => set('borrowOn', e.target.checked)}
+                  style={{ width: 18, height: 18, marginTop: 1 }}
+                  disabled={!canEdit || f.loan.on}
+                />
+                <span>
+                  Mượn tiền từ tài khoản khác của công ty
+                  <br />
+                  <span style={{ color: 'var(--fg-text-muted)' }}>
+                    Khi phiếu được duyệt và thực thi, hệ thống tự tạo phiếu chi từ tài khoản cho mượn sang tài khoản chi của phiếu này và phiếu thu tương ứng (đã
+                    duyệt, đã thực thi) — tổng cộng 3 phiếu.
+                    {f.loan.on ? ' Không dùng cùng lúc với "Vay ngân hàng để chi".' : ''}
+                  </span>
+                </span>
+              </label>
+              {f.borrowOn ? (
+                <div style={{ display: 'grid', gap: 'var(--fg-space-3)', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', marginTop: 'var(--fg-space-3)' }}>
+                  <FgField
+                    label="Tài khoản cho mượn *"
+                    error={errors['options.account_borrow.account_id'] ?? null}
+                    help="Tài khoản khác của cùng công ty, khác tài khoản chi"
+                  >
+                    <FgSelect
+                      options={borrowAccountOptions}
+                      value={f.borrowAccountId || undefined}
+                      onChange={(v) => set('borrowAccountId', v ?? '')}
+                      placeholder="Chọn tài khoản cho mượn"
+                      style={{ width: '100%' }}
+                      disabled={!canEdit}
+                    />
+                  </FgField>
+                  <FgField
+                    label="Số tiền mượn"
+                    error={errors['options.account_borrow.amount_minor'] ?? null}
+                    help={f.amount ? `Bỏ trống = toàn bộ số thực chi (${formatMoney(f.amount, { mode: 'compact' })})` : 'Bỏ trống = toàn bộ số thực chi'}
+                  >
+                    <FgMoneyInput value={f.borrowAmount} onChange={(m) => set('borrowAmount', m)} disabled={!canEdit} placeholder="Bằng số thực chi" />
+                  </FgField>
                 </div>
               ) : null}
             </Section>

@@ -57,6 +57,7 @@ import {
   type DocLinkCounterpart,
   type DocLoanView,
   type DocOffsetView,
+  type DocAccountBorrowView,
   type ManualLinkRelation,
 } from '../app/v2/documents.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgSelect, FgText, FgToneChip } from './primitives.tsx';
@@ -160,6 +161,21 @@ export function OffsetBanner({ offset, status, style }: { offset: DocOffsetView;
       style={style}
     />
   );
+}
+
+/**
+ * Phiếu chi mượn tiền từ tài khoản khác cùng công ty (R8): khi phiếu được duyệt và thực thi, hệ thống tự sinh phiếu chi
+ * từ tài khoản cho mượn sang tài khoản chi và phiếu thu tương ứng (xem tab Liên kết).
+ */
+export function AccountBorrowBanner({ borrow, status, style }: { borrow: DocAccountBorrowView; status: string; style?: CSSProperties }): ReactNode {
+  const released = OFFSET_RELEASED_STATUSES.includes(status);
+  const headline = `Mượn tiền từ TK ${borrow.account_label ?? 'khác'} — ${borrow.amount_minor ? formatMoney(money(BigInt(borrow.effective_amount_minor)), { mode: 'compact' }) : 'toàn bộ số thực chi'}`;
+  const line = released
+    ? 'Phiếu đã huỷ hoặc từ chối — không mượn tiền'
+    : status === 'paid'
+      ? 'Đã tự tạo phiếu chi từ tài khoản cho mượn và phiếu thu vào tài khoản chi — xem tab Liên kết'
+      : 'Khi phiếu được thực thi, hệ thống tự tạo phiếu chi từ tài khoản cho mượn sang tài khoản chi và phiếu thu tương ứng (đã duyệt, đã thực thi)';
+  return <FgAlert tone={released ? 'neutral' : 'info'} title={headline} description={line} style={style} />;
 }
 
 /** Thẻ đối tác: thông tin lấy từ đối tác hiện tại (không lưu bản sao trên phiếu). */

@@ -135,12 +135,13 @@ export interface VoucherEventSubject {
   status: string;
   partner_id?: unknown;
   amount?: { minor?: unknown; currency?: string | null } | null;
-  options?: { loan?: { kind?: string | null } | null } | null;
+  options?: { loan?: { kind?: string | null } | null; account_borrow?: { account_id?: unknown } | null } | null;
 }
 
 /**
  * Phát sự kiện phiếu. Payload luôn có: `kind`, `code`, `status`, `partner_id`, `amount_minor`
- * (chuỗi), `currency`, `loan_kind` (`borrow` | `fund` | null) — các điều kiện quy tắc dựa vào đây.
+ * (chuỗi), `currency`, `loan_kind` (`borrow` | `fund` | null), `account_borrow` (phiếu chi mượn tiền TK khác, R8)
+ * — các điều kiện quy tắc dựa vào đây.
  * `extra` bổ sung (VD `from`, `to`, `action`, `changed`).
  */
 export async function emitVoucherEvent(
@@ -163,6 +164,7 @@ export async function emitVoucherEvent(
       amount_minor: amountMinor == null ? null : String(amountMinor),
       currency: doc.amount?.currency ?? null,
       loan_kind: doc.options?.loan?.kind ?? null,
+      account_borrow: Boolean(doc.options?.account_borrow?.account_id),
       ...extra,
     },
     actor,

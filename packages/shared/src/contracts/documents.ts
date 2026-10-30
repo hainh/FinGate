@@ -127,6 +127,25 @@ export const offsetOptionsView = z.object({
 });
 export type OffsetOptionsView = z.infer<typeof offsetOptionsView>;
 
+/**
+ * `options.account_borrow` — phiếu chi MƯỢN TIỀN từ tài khoản khác cùng công ty (quy tắc R8). Phiếu chi được duyệt và
+ * thực thi ⇒ hệ thống tự sinh phiếu chi từ tài khoản cho mượn sang tài khoản chi và phiếu thu tương ứng (đã duyệt, đã thực thi).
+ */
+export const accountBorrowOptions = z.object({
+  account_id: objectId.describe('Tài khoản cho mượn — cùng công ty, khác tài khoản chi'),
+  amount_minor: minorNonNeg.nullable().optional().describe('Số tiền mượn — bỏ trống = toàn bộ số tiền thực chi'),
+});
+export type AccountBorrowOptions = z.infer<typeof accountBorrowOptions>;
+
+/** Dạng ĐỌC `options.account_borrow` (server nạp nhãn tài khoản và số tiền hiệu lực). */
+export const accountBorrowOptionsView = z.object({
+  account_id: objectId,
+  account_label: z.string().nullable(),
+  amount_minor: minorNonNeg.nullable(),
+  effective_amount_minor: minorNonNeg,
+});
+export type AccountBorrowOptionsView = z.infer<typeof accountBorrowOptionsView>;
+
 /** Chuyển tiền nội bộ: công ty / tài khoản đích theo ID (v2 §11.6 — không nhận diện theo chuỗi). Dạng ĐỌC (dữ liệu cũ có thể thiếu TK). */
 export const transferTarget = z.object({
   company_id: objectId,
@@ -239,7 +258,10 @@ const documentFields = z.object({
     /** ★ v2 [MỚI]: tag gắn phiếu (tối đa 50). */
     tag_ids: z.array(objectId).max(50).optional(),
     /** ★ v2 [MỚI]: tuỳ chọn tự động — `options.loan` (vay) và `options.offset` (cấn trừ khoản vay, R7). */
-    options: z.object({ loan: loanOptions.nullable().optional(), offset: offsetOptions.nullable().optional() }).nullable().optional(),
+    options: z
+      .object({ loan: loanOptions.nullable().optional(), offset: offsetOptions.nullable().optional(), account_borrow: accountBorrowOptions.nullable().optional() })
+      .nullable()
+      .optional(),
     /** ★ v2 [MỚI]: chuyển tiền nội bộ theo ID — thay dần `target` (v1). */
     transfer_target: transferTargetInput.nullable().optional(),
     evidence_required: z
@@ -533,7 +555,10 @@ export const documentDetail = z.object({
   tag_ids: z.array(objectId).default([]),
   tags: z.array(z.object({ _id: objectId, name: z.string(), color: z.string() })).optional(),
   /** ★ v2: tuỳ chọn tự động (vay, cấn trừ khoản vay). */
-  options: z.object({ loan: loanOptions.nullable().optional(), offset: offsetOptionsView.nullable().optional() }).nullable().optional(),
+  options: z
+    .object({ loan: loanOptions.nullable().optional(), offset: offsetOptionsView.nullable().optional(), account_borrow: accountBorrowOptionsView.nullable().optional() })
+    .nullable()
+    .optional(),
   /** ★ v2: chuyển nội bộ theo ID. */
   transfer_target: transferTarget.nullable().optional(),
   /** ★ v2: nguồn gốc — thủ công / tự động (quy tắc + lượt chạy). */

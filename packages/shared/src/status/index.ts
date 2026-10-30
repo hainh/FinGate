@@ -495,7 +495,7 @@ export const LINK_SPLIT_LABEL: Record<(typeof LINK_SPLIT_KEYS)[number], string> 
 };
 
 /** Mã quy tắc tự động (v2 §11.3). */
-export const AUTOMATION_RULE_CODES = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7'] as const;
+export const AUTOMATION_RULE_CODES = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8'] as const;
 export type AutomationRuleCode = (typeof AUTOMATION_RULE_CODES)[number];
 export const AUTOMATION_RULE_LABEL: Record<AutomationRuleCode, string> = {
   R1: 'Chuyển tiền nội bộ → phiếu thu tự động',
@@ -505,6 +505,7 @@ export const AUTOMATION_RULE_LABEL: Record<AutomationRuleCode, string> = {
   R5: 'Khoản chi định kỳ → phiếu nháp',
   R6: 'Huỷ phiếu nguồn → cảnh báo / huỷ đối tượng sinh chưa phát sinh tiền',
   R7: 'Phiếu thu/chi cấn trừ khoản vay → gán khi duyệt xong',
+  R8: 'Phiếu chi mượn tiền tài khoản khác → phiếu chi + phiếu thu chuyển tiền',
 };
 
 /** Trạng thái lượt chạy quy tắc tự động (v2 §11.2 — lỗi ⇒ Chạy lại). */

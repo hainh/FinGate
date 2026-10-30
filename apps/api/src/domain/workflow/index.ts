@@ -49,6 +49,7 @@ import { assertTransferTargetAccount, assertTransferTargetSubmittable } from '..
 import { assertAccountAllowedForCompany, assertGroupAccountForCompany } from '../accounts.ts';
 import { emitVoucherEvent, type VoucherEventSubject } from '../events/index.ts';
 import { emitLoanSettledAfterPayment } from '../links/index.ts';
+import { assertAccountBorrowLive } from '../vouchers/account-borrow.ts';
 import {
   applyDecision,
   canTransition,
@@ -695,6 +696,11 @@ export async function transition(input: {
   // 5b. v2 §11.6 — duyệt / đưa vào hàng / thực thi phiếu chuyển nội bộ chỉ khi TK đích còn hiệu lực (xem
   //     assertTransferTargetAccountLive): R1 chỉ chạy SAU thực thi, lỗi lúc đó để tiền đã ra khỏi công ty nguồn.
   if (isApproval || action === 'queue_payment' || action === 'pay') await assertTransferTargetAccountLive(doc);
+  // 5c. Mượn tiền TK khác (R8 chạy SAU thực thi): TK cho mượn còn hiệu lực và khác TK thực chi.
+  if (isApproval || action === 'queue_payment' || action === 'pay') {
+    const chargedAccountId = (action === 'pay' ? body.execution?.account_id : null) ?? nextAccountId ?? oldAccountId;
+    await assertAccountBorrowLive(doc, chargedAccountId ? String(chargedAccountId) : null);
+  }
 
   // 6. CAS — status + step + history[] + version++ trong MỘT update
   const now = new Date();

@@ -92,6 +92,7 @@ import {
   type VoucherKind,
 } from '../domain/vouchers/rules.ts';
 import { isOffsetRuleLink, releaseOffsetRuleLinks } from '../domain/vouchers/offset.ts';
+import { planToAccountBorrowInput, planToStoredAccountBorrow, resolveAccountBorrow, storedAccountBorrowToPlan } from '../domain/vouchers/account-borrow.ts';
 import {
   mayChangeVoucherTags,
   roundLocksEdit,
@@ -356,6 +357,15 @@ export function documentRoutes(app: FastifyInstance): void {
         });
         // "Vay để chi" (R3): tài khoản nguồn mặc định = tài khoản nhận giải ngân (vẫn sửa được).
         const sourceAccountId = body.source.account_id ?? (loan?.kind === 'fund' ? loan.receive_account_id : null) ?? null;
+        // Mượn tiền từ TK khác cùng công ty (R8): thực thi xong tự sinh phiếu chi B → A + phiếu thu A ← B.
+        const accountBorrow = await resolveAccountBorrow({
+          companyId,
+          voucherKind: kind,
+          voucherAmountMinor: amountMinor,
+          sourceAccountId,
+          loanKind: loan?.kind ?? null,
+          borrow: body.options?.account_borrow ?? null,
+        });
         const evidence = await rebuildEvidence({
           kind,
           category_id: body.category_id ?? null,
@@ -378,7 +388,7 @@ export function documentRoutes(app: FastifyInstance): void {
           // [v2] không ghi payee.* (nhập tự do đã bỏ) — đối tác theo ID, tag, tuỳ chọn vay, chuyển nội bộ theo ID
           partner_id: partner ? String(partner._id) : null,
           tag_ids: tagIds,
-          options: { loan: planToStoredLoan(loan), offset: planToStoredOffset(offset) },
+          options: { loan: planToStoredLoan(loan), offset: planToStoredOffset(offset), account_borrow: planToStoredAccountBorrow(accountBorrow) },
           transfer_target: transfer,
           target: transfer, // v1 song song: bộ máy/ sổ cái v1 còn đọc `target` (sẽ bỏ khi migrate)
           amount: { minor: amountMinor, currency: body.amount.currency, decimals: currencyDecimals(body.amount.currency) },
@@ -578,13 +588,25 @@ export function documentRoutes(app: FastifyInstance): void {
             previous: storedTransferOf(doc as unknown as Record<string, unknown>),
           });
         }
+        // Mượn tiền từ TK khác (R8): kiểm trên bản gộp (TK chi có thể đổi trong cùng lần lưu).
+        const previousBorrow = storedAccountBorrowToPlan(doc.options?.account_borrow as Record<string, unknown> | null | undefined);
+        const borrowInput = body.options !== undefined ? (body.options?.account_borrow ?? null) : previousBorrow ? planToAccountBorrowInput(previousBorrow) : null;
+        const mergedSourceAccountId = body.source && body.source.account_id !== undefined ? body.source.account_id : doc.source?.account_id;
+        const accountBorrow = await resolveAccountBorrow({
+          companyId,
+          voucherKind: kind,
+          voucherAmountMinor: amountMinorNext,
+          sourceAccountId: mergedSourceAccountId ? String(mergedSourceAccountId) : null,
+          loanKind: loan?.kind ?? null,
+          borrow: borrowInput,
+        });
         if (body.tag_ids !== undefined) {
           set.tag_ids = await resolveVoucherTagIds({ companyId, requested: body.tag_ids, previous: (doc.tag_ids ?? []).map(String) });
         }
         if (body.partner_id !== undefined) set.partner_id = nextPartnerId;
         // lãi/gốc của khoản vay dự kiến đi theo đối tác (vay đi thu: NH cho vay = đối tác phiếu) và số tiền phiếu
         if (body.options !== undefined || partnerChanged || body.amount !== undefined) {
-          set.options = { loan: planToStoredLoan(loan), offset: planToStoredOffset(offset) };
+          set.options = { loan: planToStoredLoan(loan), offset: planToStoredOffset(offset), account_borrow: planToStoredAccountBorrow(accountBorrow) };
         }
         if (transfer !== undefined) {
           set.transfer_target = transfer;
