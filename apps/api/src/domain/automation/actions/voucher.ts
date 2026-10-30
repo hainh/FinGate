@@ -70,7 +70,8 @@ export interface AutoVoucherSpec {
   createdBy: string;
   source: { id: string; code: string };
   ruleCode: string;
-  runId: string;
+  /** Lượt chạy quy tắc; null = sinh ngay trong nghiệp vụ (VD mượn tiền TK khác chạy trước khi chi phiếu gốc). */
+  runId: string | null;
   eventType: string;
   actor: AutoActor;
   requestId: string;

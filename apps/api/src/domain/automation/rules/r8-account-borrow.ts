@@ -1,6 +1,11 @@
 /**
  * R8 — Phiếu chi MƯỢN TIỀN từ tài khoản khác cùng công ty (`options.account_borrow`).
  *
+ * Hai phiếu mượn tiền được sinh và THỰC THI NGAY TRONG bước thực thi phiếu chi gốc, trước khi phiếu gốc ra tiền
+ * (`vouchers/account-borrow-run.ts`, gọi từ `workflow.transition`) — TK A có tiền trước khi chi, TK B không âm.
+ * Quy tắc này chạy sau đó: dùng lại hai phiếu đã có (theo phiếu nguồn), bảo đảm đã thực thi và gán liên kết; chỉ sinh
+ * mới khi thiếu (dự phòng).
+ *
  * Kích hoạt: `voucher.paid` của phiếu chi có cờ mượn tiền (phiếu chi từ TK A cho đối tác X đã duyệt và thực thi).
  * Bước:
  *  1. create_spend    — phiếu CHI ĐÃ DUYỆT từ TK cho mượn B sang TK A (kế thừa người duyệt của phiếu chi gốc, nhãn Tự động);
@@ -16,9 +21,10 @@ import { registerRule, type StepContext, type StepOutput } from '../engine.ts';
 import { assertAccountAllowedForCompany } from '../../accounts.ts';
 import { actorOfEvent, big } from '../actions/common.ts';
 import { fundOfAccount, loadVoucher, type VoucherRow } from '../actions/lookup.ts';
-import { createAutoVoucher, executeAutoVoucher, findAutoVoucher, todayVn } from '../actions/voucher.ts';
+import { createAutoVoucher, executeAutoVoucher, todayVn } from '../actions/voucher.ts';
 import { ensureAutomationLink } from '../actions/link.ts';
 import { effectiveBorrowAmount, storedAccountBorrowToPlan } from '../../vouchers/account-borrow.ts';
+import { findBorrowVoucher } from '../../vouchers/account-borrow-run.ts';
 import { Models } from '../../../db/models.ts';
 import { bankAccountLabelOf } from '../../queries/index.ts';
 
@@ -69,11 +75,11 @@ async function accountLabel(id: string): Promise<string> {
 }
 
 async function spendIdOf(ctx: StepContext): Promise<string | null> {
-  return ctx.outputs.create_spend?.output_id ?? (await findAutoVoucher(ctx.runId, RULE, 'spend'))?.id ?? null;
+  return ctx.outputs.create_spend?.output_id ?? (await findBorrowVoucher(String(ctx.event.subject_id), 'spend'))?.id ?? null;
 }
 
 async function receiptIdOf(ctx: StepContext): Promise<string | null> {
-  return ctx.outputs.create_receipt?.output_id ?? (await findAutoVoucher(ctx.runId, RULE, 'income'))?.id ?? null;
+  return ctx.outputs.create_receipt?.output_id ?? (await findBorrowVoucher(String(ctx.event.subject_id), 'income'))?.id ?? null;
 }
 
 /** Phần chung của hai phiếu sinh ra. */
@@ -102,7 +108,7 @@ function commonSpec(ctx: StepContext, b: Borrow) {
 async function createSpendStep(ctx: StepContext): Promise<StepOutput> {
   const b = await borrowOf(ctx);
   if (!b) return { skipped: true };
-  const existing = await findAutoVoucher(ctx.runId, RULE, 'spend');
+  const existing = await findBorrowVoucher(String(b.src._id), 'spend');
   if (existing) return { output_type: 'document', output_id: existing.id };
   await assertAccountAllowedForCompany(String(b.src.company_id), b.fromAccountId);
   const toLabel = await accountLabel(b.toAccountId);
@@ -121,7 +127,7 @@ async function createSpendStep(ctx: StepContext): Promise<StepOutput> {
 async function createReceiptStep(ctx: StepContext): Promise<StepOutput> {
   const b = await borrowOf(ctx);
   if (!b) return { skipped: true };
-  const existing = await findAutoVoucher(ctx.runId, RULE, 'income');
+  const existing = await findBorrowVoucher(String(b.src._id), 'income');
   if (existing) return { output_type: 'document', output_id: existing.id };
   const fromLabel = await accountLabel(b.fromAccountId);
   const created = await createAutoVoucher({

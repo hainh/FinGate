@@ -1061,8 +1061,8 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                   Mượn tiền từ tài khoản khác của công ty
                   <br />
                   <span style={{ color: 'var(--fg-text-muted)' }}>
-                    Khi phiếu được duyệt và thực thi, hệ thống tự tạo phiếu chi từ tài khoản cho mượn sang tài khoản chi của phiếu này và phiếu thu tương ứng (đã
-                    duyệt, đã thực thi) — tổng cộng 3 phiếu.
+                    Khi thực thi phiếu này, hệ thống tự tạo và thực thi trước phiếu chi từ tài khoản cho mượn sang tài khoản chi và phiếu thu tương ứng, rồi mới
+                    chi phiếu này — tổng cộng 3 phiếu. Tài khoản cho mượn phải đủ số tiền mượn (không được âm).
                     {f.loan.on ? ' Không dùng cùng lúc với "Vay ngân hàng để chi".' : ''}
                   </span>
                 </span>

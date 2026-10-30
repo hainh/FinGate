@@ -771,8 +771,9 @@ export async function transition(input: {
     }
 
     // 4b. số dư tài khoản nguồn — CHỈ chặn ở bước THỰC THI, không chặn khi duyệt.
-    //     Phiếu chi mượn tiền TK khác (R8): TK chi được tính thêm số tiền mượn; TK cho mượn phải đủ số tiền mượn
-    //     (R8 thực thi phiếu chi B → A ngay sau đó, cũng qua bước kiểm số dư này).
+    //     Phiếu chi mượn tiền TK khác (R8): THỰC THI TRƯỚC phiếu chi B → A và phiếu thu A ← B, rồi mới kiểm số dư A
+    //     và chi phiếu gốc. Kiểm trước khi sinh phiếu: B đủ số tiền mượn (không âm), A + tiền mượn đủ số thực chi —
+    //     để không chuyển tiền B → A khi phiếu gốc chắc chắn không chi được.
     if (doc.kind === 'spend' && accountId) {
       const insufficient = async (acctId: string, balance: bigint, need: bigint, fallback: string, suffix = ''): Promise<never> => {
         const account = await Models.BankAccount.findById(acctId)
@@ -790,14 +791,32 @@ export async function transition(input: {
       };
       const borrow = storedAccountBorrowToPlan((doc.options?.account_borrow ?? null) as Record<string, unknown> | null);
       const borrowed = borrow ? effectiveBorrowAmount(borrow, actual) : 0n;
-      if (borrow && borrowed > 0n) {
+      // nạp động: module mượn tiền gọi lại `transition()` (vòng import)
+      const borrowRun = borrow && borrowed > 0n ? await import('../vouchers/account-borrow-run.ts') : null;
+      if (borrow && borrowRun) {
+        // lần thực thi trước có thể đã chuyển xong một phần (lỗi giữa chừng): phần đã chuyển không tính lại
+        const [lent, received] = await Promise.all([borrowRun.findBorrowVoucher(String(doc._id), 'spend'), borrowRun.findBorrowVoucher(String(doc._id), 'income')]);
+        const lendPending = lent?.status === 'paid' ? 0n : borrowed;
+        const receivePending = received?.status === 'paid' ? 0n : borrowed;
         const lenderBalance = await balanceForPaymentOf(borrow.account_id);
-        if (borrowed > lenderBalance) await insufficient(borrow.account_id, lenderBalance, borrowed, 'tài khoản cho mượn', ' để cho mượn');
+        if (lendPending > lenderBalance) {
+          await insufficient(borrow.account_id, lenderBalance, lendPending, 'tài khoản cho mượn', ' để cho mượn — tài khoản cho mượn không được âm');
+        }
+        const before = await balanceForPaymentOf(String(accountId));
+        if (actual > before + receivePending) {
+          await insufficient(String(accountId), before, actual - receivePending, 'tài khoản nguồn', ' (đã tính tiền mượn)');
+        }
+        await borrowRun.runAccountBorrowBeforePay({
+          doc,
+          payAccountId: String(accountId),
+          actualMinor: actual,
+          paidAt: body.execution?.paid_at ?? businessDate,
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          requestId: body.request_id,
+        });
       }
       const balance = await balanceForPaymentOf(String(accountId));
-      if (actual > balance + borrowed) {
-        await insufficient(String(accountId), balance, actual - borrowed, 'tài khoản nguồn', borrowed > 0n ? ' (sau khi tính tiền mượn)' : '');
-      }
+      if (actual > balance) await insufficient(String(accountId), balance, actual, 'tài khoản nguồn');
     }
 
     nextStatus = 'paid';

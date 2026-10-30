@@ -174,7 +174,7 @@ export function AccountBorrowBanner({ borrow, status, style }: { borrow: DocAcco
     ? 'Phiếu đã huỷ hoặc từ chối — không mượn tiền'
     : status === 'paid'
       ? 'Đã tự tạo phiếu chi từ tài khoản cho mượn và phiếu thu vào tài khoản chi — xem tab Liên kết'
-      : 'Khi phiếu được thực thi, hệ thống tự tạo phiếu chi từ tài khoản cho mượn sang tài khoản chi và phiếu thu tương ứng (đã duyệt, đã thực thi)';
+      : 'Khi thực thi, hệ thống tự tạo và thực thi TRƯỚC phiếu chi từ tài khoản cho mượn sang tài khoản chi và phiếu thu tương ứng, rồi mới chi phiếu này. Tài khoản cho mượn phải đủ số tiền mượn (không được âm).';
   return <FgAlert tone={released ? 'neutral' : 'info'} title={headline} description={line} style={style} />;
 }
 

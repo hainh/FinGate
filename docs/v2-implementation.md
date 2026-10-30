@@ -831,7 +831,7 @@ Chưa làm / lưu ý:
   - R5 `r5-recurring.ts` + `domain/recurring/index.ts` — tác vụ `recurring` nay chỉ phát `schedule.recurring` (mỗi khoản, mỗi kỳ; không phát trùng khi sự kiện đang chờ); R5 tạo phiếu nháp qua `createRecurringDraft` (idempotent theo lịch sử `recurring_materialize`, đối tác theo `partner_id`, đứng tên KTT của công ty). Nhắc 7/3/1 ngày vẫn ở tác vụ này.
   - R6 `r6-cancel-generated.ts` — `voucher.cancelled` / `rejected` (chỉ khi trạng thái hiện tại vẫn huỷ/từ chối; đã gửi lại thì bỏ qua): khoản do quy tắc sinh từ phiếu này và chưa có tiền ⇒ huỷ; khoản chỉ gắn THỦ CÔNG vào phiếu (tạo tay, không do phiếu sinh ra) ⇒ chỉ gỡ liên kết (liên kết của phiếu đã huỷ/từ chối không còn hiệu lực), không cảnh báo và không huỷ, kể cả khi khoản đã có tiền; khoản do quy tắc sinh từ phiếu này đã có tiền ⇒ chỉ cảnh báo KTT (`source_cancelled_with_money`), giữ liên kết, không tự huỷ (`decideOnSourceFinal`, `alertLoansOfSource`).
   - R7 `r7-offset-on-approval.ts` — `voucher.approved` phiếu thu / chi có cấn trừ khoản vay: gán liên kết tới khoản đã chọn khi duyệt xong (chi tiết §27).
-  - R8 `r8-account-borrow.ts` — `voucher.paid` phiếu chi mượn tiền từ tài khoản khác cùng công ty: sinh phiếu chi B → A + phiếu thu A ← B, thực thi ngay (chi tiết §29).
+  - R8 `r8-account-borrow.ts` — `voucher.paid` phiếu chi mượn tiền từ tài khoản khác cùng công ty: hai phiếu mượn đã sinh và thực thi trước khi chi phiếu gốc (trong `transition`); R8 gán liên kết, sinh dự phòng khi thiếu (chi tiết §29).
 - **Thuần (có test)**: `policy.ts` — điều khoản mặc định (`resolveLoanTerms`), số tiền vay R3 (`resolveLoanAmount`), ngày duyệt cuối (`finalApprovalDateOf`), quyết định R6 (`decideOnSourceFinal`), thời điểm R2 (`mayCreateLoan`, `mayFollowLoanEdits`, `mayReviveLoan`); `params.ts` — tham số theo quy tắc (`checkRuleParams`).
 - **Khoá số tiền R3** (`automation/locks.ts`, dùng trong `workflow.transition`): sau khi R3 đã chạy, đổi `amount_minor` khi duyệt hoặc `actual_amount_minor` khi thực thi ⇒ `FG-VAL-001`.
 - **Route** (`routes/automation.ts`, đăng ký trong `routes/index.ts`):
@@ -1529,10 +1529,12 @@ Chủ tịch (`chairman`) đổi lại bên nộp tiền (phiếu thu) hoặc b�
 ### 29.1 Nghiệp vụ
 
 - Phiếu chi từ tài khoản **A** cho đối tác **X** có thể đánh dấu "Mượn tiền từ tài khoản khác" và chọn tài khoản **B** (cùng công ty, đang hoạt động, khác A; ngân hàng hoặc tiền mặt). Số tiền mượn tuỳ chọn — bỏ trống = toàn bộ số thực chi.
-- Khi phiếu chi được duyệt và **thực thi** (`voucher.paid`), R8 tự sinh **2 phiếu** — tổng cộng 3 phiếu:
-  1. phiếu **chi** từ B, ĐÃ DUYỆT (kế thừa chuỗi duyệt của phiếu gốc, nhãn Tự động) → thực thi ngay: TK B giảm;
-  2. phiếu **thu** vào A, ĐÃ DUYỆT → thực thi ngay: TK A được bù.
+- Khi **thực thi** phiếu chi gốc, TRƯỚC khi phiếu gốc ra tiền, hệ thống sinh và thực thi ngay **2 phiếu** — tổng cộng 3 phiếu (`vouchers/account-borrow-run.ts`, gọi từ `workflow.transition` hành động `pay`):
+  1. phiếu **chi** từ B, ĐÃ DUYỆT (kế thừa chuỗi duyệt của phiếu gốc, nhãn Tự động, `origin.rule_code = R8`, `source_document_id` = phiếu gốc) → thực thi: TK B giảm;
+  2. phiếu **thu** vào A, ĐÃ DUYỆT → thực thi: TK A được bù;
+  3. rồi mới kiểm số dư A và chi phiếu gốc.
   Ngày thực thi của hai phiếu = ngày thực thi phiếu chi gốc. Hai phiếu không có đối tác ngoài (`partner_id = null`, cùng ngoại lệ với phiếu thu R1).
+- Quy tắc R8 (`voucher.paid`) chạy sau: dùng lại hai phiếu đã có (tìm theo phiếu nguồn), bảo đảm đã thực thi, gán liên kết; chỉ sinh mới khi thiếu (dự phòng).
 - Liên kết: `generated` phiếu gốc → từng phiếu sinh ra; `internal_transfer` phiếu chi B → phiếu thu A.
 - Không dùng cùng lúc với "Vay ngân hàng để chi" (R3).
 
@@ -1544,9 +1546,10 @@ Chủ tịch (`chairman`) đổi lại bên nộp tiền (phiếu thu) hoặc b�
 ### 29.3 Kiểm tra
 
 - Khi lưu (`domain/vouchers/account-borrow.ts` → `resolveAccountBorrow`): chỉ phiếu chi; TK B thuộc cùng công ty, đang hoạt động, khác TK chi; số tiền mượn > 0 và không vượt số tiền phiếu; không kèm vay để chi.
-- Số dư khi thực thi (FG-WF-010): TK chi được tính thêm số tiền mượn (số dư A + tiền mượn ≥ số thực chi); TK cho mượn phải đủ số tiền mượn (R8 thực thi phiếu chi B → A qua cùng bước kiểm).
-- Khi duyệt / đưa vào hàng / thực thi (`assertAccountBorrowLive`): TK B còn hoạt động và khác TK thực chi (thực thi có thể đổi TK) — R8 chạy sau thực thi nên lỗi phải chặn trước.
-- R8 idempotent theo lượt (`findAutoVoucher(runId, 'R8', kind)`); lỗi bước ⇒ lượt `Lỗi`, KTT chạy lại trên màn Quy trình tự động.
+- Số dư khi thực thi (FG-WF-010), kiểm TRƯỚC khi sinh phiếu: TK B đủ số tiền mượn (**không được âm**); số dư A + tiền mượn ≥ số thực chi. Phiếu chi B → A đi qua `transition()` nên cũng bị kiểm số dư B như mọi phiếu chi. Sau khi tiền mượn vào A, kiểm lại số dư A rồi mới chi.
+- Lỗi giữa chừng (VD xung đột phiên bản khi ghi phiếu gốc): hai phiếu mượn đã thực thi được dùng lại ở lần thực thi sau, phần đã chuyển không tính lại, không sinh trùng.
+- Khi duyệt / đưa vào hàng / thực thi (`assertAccountBorrowLive`): TK B còn hoạt động và khác TK thực chi (thực thi có thể đổi TK).
+- Hai phiếu mượn và R8 idempotent theo phiếu nguồn (`findBorrowVoucher`); lỗi bước ⇒ lượt `Lỗi`, KTT chạy lại trên màn Quy trình tự động.
 
 ### 29.4 Giao diện
 
