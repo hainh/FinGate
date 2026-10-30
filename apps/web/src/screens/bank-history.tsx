@@ -64,36 +64,38 @@ function PartnerStatsCard({
   onPick: (key: string) => void;
 }): ReactNode {
   return (
-    <FgTable<BankPartnerStat>
-      rowKey="key"
-      dataSource={partners}
-      columns={[
-        {
-          title: 'Đối tác',
-          key: 'name',
-          render: (_v, r) => (
-            <button
-              type="button"
-              className="fg-link"
-              aria-pressed={selected === r.key}
-              onClick={() => onPick(r.key)}
-              style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', textAlign: 'left', fontWeight: selected === r.key ? 700 : 400 }}
-            >
-              {r.name}
-            </button>
-          ),
-        },
-        { title: 'Số giao dịch', key: 'count', align: 'right', render: (_v, r) => r.count },
-        { title: 'Tổng thu', key: 'in', align: 'right', render: (_v, r) => <FgMoney value={r.in} mode="full" /> },
-        { title: 'Tổng chi', key: 'out', align: 'right', render: (_v, r) => <FgMoney value={r.out} mode="full" /> },
-        {
-          title: 'Chênh lệch (thu − chi)',
-          key: 'net',
-          align: 'right',
-          render: (_v, r) => <FgMoney value={{ minor: (BigInt(r.in.minor) - BigInt(r.out.minor)).toString(), currency, decimals: 0 }} mode="full" />,
-        },
-      ]}
-    />
+    <div className="fg-card" style={{ padding: 0 }}>
+      <FgTable<BankPartnerStat>
+        rowKey="key"
+        dataSource={partners}
+        columns={[
+          {
+            title: 'Đối tác',
+            key: 'name',
+            render: (_v, r) => (
+              <button
+                type="button"
+                className="fg-link"
+                aria-pressed={selected === r.key}
+                onClick={() => onPick(r.key)}
+                style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', textAlign: 'left', fontWeight: selected === r.key ? 700 : 400 }}
+              >
+                {r.name}
+              </button>
+            ),
+          },
+          { title: 'Số giao dịch', key: 'count', align: 'right', render: (_v, r) => r.count },
+          { title: 'Tổng thu', key: 'in', align: 'right', render: (_v, r) => <FgMoney value={r.in} mode="full" /> },
+          { title: 'Tổng chi', key: 'out', align: 'right', render: (_v, r) => <FgMoney value={r.out} mode="full" /> },
+          {
+            title: 'Chênh lệch (thu − chi)',
+            key: 'net',
+            align: 'right',
+            render: (_v, r) => <FgMoney value={{ minor: (BigInt(r.in.minor) - BigInt(r.out.minor)).toString(), currency, decimals: 0 }} mode="full" />,
+          },
+        ]}
+      />
+    </div>
   );
 }
 
