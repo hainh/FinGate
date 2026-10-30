@@ -13,7 +13,7 @@ import dayjs from 'dayjs';
 import { useBankAccount, useBankAccountTransactions } from '../app/queries.ts';
 import { FgButton, FgDateTime, FgMoney, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
-import { FgEmptyState, FgSkeletonTable, FgTable, FgTag } from '../components/uitk.tsx';
+import { FgEmptyState, FgSegmented, FgSkeletonTable, FgTable, FgTag } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery } from '../components/pagekit.tsx';
 import type { BankAccountDetail, BankPartnerStat, BankTransactionRow } from '../app/types.ts';
@@ -49,6 +49,56 @@ function monthsRange(months: number): { from: string; to: string } {
   return { from: now.subtract(months - 1, 'month').startOf('month').format(DAY), to: now.format(DAY) };
 }
 
+type ScreenTab = 'history' | 'stats';
+
+/** Bảng thống kê theo đối tác của kỳ; bấm tên đối tác để lọc lịch sử (bấm lại để bỏ lọc). */
+function PartnerStatsCard({
+  partners,
+  selected,
+  currency,
+  onPick,
+}: {
+  partners: BankPartnerStat[];
+  selected: string;
+  currency: string;
+  onPick: (key: string) => void;
+}): ReactNode {
+  return (
+    <FgCard style={{ padding: 0 }}>
+      <FgTable<BankPartnerStat>
+        rowKey="key"
+        dataSource={partners}
+        columns={[
+          {
+            title: 'Đối tác',
+            key: 'name',
+            render: (_v, r) => (
+              <button
+                type="button"
+                className="fg-link"
+                aria-pressed={selected === r.key}
+                onClick={() => onPick(r.key)}
+                style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', textAlign: 'left', fontWeight: selected === r.key ? 700 : 400 }}
+              >
+                {r.name}
+              </button>
+            ),
+          },
+          { title: 'Số giao dịch', key: 'count', align: 'right', render: (_v, r) => r.count },
+          { title: 'Tổng thu', key: 'in', align: 'right', render: (_v, r) => <FgMoney value={r.in} mode="full" /> },
+          { title: 'Tổng chi', key: 'out', align: 'right', render: (_v, r) => <FgMoney value={r.out} mode="full" /> },
+          {
+            title: 'Chênh lệch (thu − chi)',
+            key: 'net',
+            align: 'right',
+            render: (_v, r) => <FgMoney value={{ minor: (BigInt(r.in.minor) - BigInt(r.out.minor)).toString(), currency, decimals: 0 }} mode="full" />,
+          },
+        ]}
+      />
+    </FgCard>
+  );
+}
+
 export function BankAccountHistoryScreen(): ReactNode {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -57,6 +107,8 @@ export function BankAccountHistoryScreen(): ReactNode {
   const [range, setRange] = useState<{ from: string; to: string }>({ from: '', to: '' });
   // '' = tất cả đối tác; giá trị là khoá của thống kê theo đối tác (`BankPartnerStat.key`)
   const [partner, setPartner] = useState<string>('');
+  // tab hiển thị: lịch sử giao dịch (mặc định) hoặc thống kê theo đối tác
+  const [tab, setTab] = useState<ScreenTab>('history');
   const query = useBankAccountTransactions(id, { ...range, partner });
   const activeQuick = QUICK_RANGES.find((q) => {
     const r = monthsRange(q.months);
@@ -142,43 +194,26 @@ export function BankAccountHistoryScreen(): ReactNode {
           </FgCard>
         ))}
       </div>
-      {partners.length ? (
-        <FgCard style={{ padding: 0, marginBottom: 'var(--fg-space-4)' }}>
-          <div style={{ padding: 'var(--fg-space-3) var(--fg-space-4)' }}>
-            <FgText style="h4">Thống kê theo đối tác</FgText>
+      <FgSegmented<ScreenTab>
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: 'history', label: 'Lịch sử giao dịch' },
+          { value: 'stats', label: 'Thống kê theo đối tác' },
+        ]}
+        style={{ marginBottom: 'var(--fg-space-4)' }}
+      />
+      {tab === 'stats' ? (
+        query.isPending ? (
+          <FgSkeletonTable rows={4} cols={5} />
+        ) : partners.length ? (
+          <PartnerStatsCard partners={partners} selected={partner} currency={currency} onPick={(key) => setPartner((cur) => (cur === key ? '' : key))} />
+        ) : (
+          <div className="fg-card">
+            <FgEmptyState glyph="≡" title="Chưa có đối tác" description="Kỳ này chưa có giao dịch nào để thống kê." />
           </div>
-          <FgTable<BankPartnerStat>
-            rowKey="key"
-            dataSource={partners}
-            columns={[
-              {
-                title: 'Đối tác',
-                key: 'name',
-                render: (_v, r) => (
-                  <button
-                    type="button"
-                    className="fg-link"
-                    aria-pressed={partner === r.key}
-                    onClick={() => setPartner(partner === r.key ? '' : r.key)}
-                    style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', textAlign: 'left', fontWeight: partner === r.key ? 700 : 400 }}
-                  >
-                    {r.name}
-                  </button>
-                ),
-              },
-              { title: 'Số giao dịch', key: 'count', align: 'right', render: (_v, r) => r.count },
-              { title: 'Tổng thu', key: 'in', align: 'right', render: (_v, r) => <FgMoney value={r.in} mode="full" /> },
-              { title: 'Tổng chi', key: 'out', align: 'right', render: (_v, r) => <FgMoney value={r.out} mode="full" /> },
-              {
-                title: 'Chênh lệch (thu − chi)',
-                key: 'net',
-                align: 'right',
-                render: (_v, r) => <FgMoney value={{ minor: (BigInt(r.in.minor) - BigInt(r.out.minor)).toString(), currency, decimals: 0 }} mode="full" />,
-              },
-            ]}
-          />
-        </FgCard>
-      ) : null}
+        )
+      ) : (
       <FgQuery
         query={query}
         skeleton={<FgSkeletonTable rows={8} cols={8} />}
@@ -285,6 +320,7 @@ export function BankAccountHistoryScreen(): ReactNode {
           )
         }
       </FgQuery>
+      )}
     </>
   );
 }
