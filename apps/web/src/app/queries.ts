@@ -221,15 +221,15 @@ export function useBalancesHistory(date?: string) {
 }
 
 /** BANK-05 — lịch sử giao dịch của một tài khoản tiền. `range` (YYYY-MM-DD, tuỳ chọn) — bỏ trống = toàn bộ thời gian. */
-export function useBankAccountTransactions(id: string | undefined, range: { from?: string; to?: string } = {}) {
+export function useBankAccountTransactions(id: string | undefined, range: { from?: string; to?: string; partner?: string } = {}) {
   const { scope } = useAuth();
-  const { from, to } = range;
+  const { from, to, partner } = range;
   return useQuery({
-    queryKey: ['bank-account-transactions', scope, id, from ?? '', to ?? ''],
+    queryKey: ['bank-account-transactions', scope, id, from ?? '', to ?? '', partner ?? ''],
     enabled: !!id,
     queryFn: () =>
       apiData<import('./types.ts').BankAccountTransactions>(`/bank-accounts/${id}/transactions`, {
-        query: { scope, ...(from ? { from } : {}), ...(to ? { to } : {}) },
+        query: { scope, ...(from ? { from } : {}), ...(to ? { to } : {}), ...(partner ? { partner } : {}) },
       }),
   });
 }

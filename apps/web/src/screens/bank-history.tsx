@@ -8,7 +8,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { DatePicker } from 'antd';
+import { DatePicker, Select } from 'antd';
 import dayjs from 'dayjs';
 import { useBankAccount, useBankAccountTransactions } from '../app/queries.ts';
 import { FgButton, FgDateTime, FgMoney, FgText } from '../components/primitives.tsx';
@@ -16,7 +16,7 @@ import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgSkeletonTable, FgTable, FgTag } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery } from '../components/pagekit.tsx';
-import type { BankAccountDetail, BankTransactionRow } from '../app/types.ts';
+import type { BankAccountDetail, BankPartnerStat, BankTransactionRow } from '../app/types.ts';
 import { bankAccountOptionLabel } from '../app/v2/documents.ts';
 
 /**
@@ -55,13 +55,18 @@ export function BankAccountHistoryScreen(): ReactNode {
   const account = useBankAccount(id);
   // '' = không giới hạn (mặc định toàn bộ thời gian)
   const [range, setRange] = useState<{ from: string; to: string }>({ from: '', to: '' });
-  const query = useBankAccountTransactions(id, range);
+  // '' = tất cả đối tác; giá trị là khoá của thống kê theo đối tác (`BankPartnerStat.key`)
+  const [partner, setPartner] = useState<string>('');
+  const query = useBankAccountTransactions(id, { ...range, partner });
   const activeQuick = QUICK_RANGES.find((q) => {
     const r = monthsRange(q.months);
     return r.from === range.from && r.to === range.to;
   })?.months;
   const isAll = !range.from && !range.to;
+  const isFiltered = !isAll || !!partner;
   const totals = query.data?.totals;
+  const partners = query.data?.partners ?? [];
+  const currency = query.data?.account.currency ?? 'VND';
   const name = bankAccountTitleName(account.data);
   return (
     <>
@@ -110,6 +115,17 @@ export function BankAccountHistoryScreen(): ReactNode {
           onChange={(d) => setRange((r) => ({ ...r, to: d ? d.format(DAY) : '' }))}
           aria-label="Đến ngày"
         />
+        <Select
+          allowClear
+          showSearch
+          placeholder="Tìm theo đối tác"
+          value={partner || undefined}
+          onChange={(v) => setPartner(v ?? '')}
+          optionFilterProp="label"
+          style={{ minWidth: 260 }}
+          options={partners.map((p) => ({ value: p.key, label: p.name }))}
+          aria-label="Lọc theo đối tác"
+        />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 'var(--fg-space-3)', marginBottom: 'var(--fg-space-4)' }}>
         {[
@@ -126,10 +142,47 @@ export function BankAccountHistoryScreen(): ReactNode {
           </FgCard>
         ))}
       </div>
+      {partners.length ? (
+        <FgCard style={{ padding: 0, marginBottom: 'var(--fg-space-4)' }}>
+          <div style={{ padding: 'var(--fg-space-3) var(--fg-space-4)' }}>
+            <FgText style="h4">Thống kê theo đối tác</FgText>
+          </div>
+          <FgTable<BankPartnerStat>
+            rowKey="key"
+            dataSource={partners}
+            columns={[
+              {
+                title: 'Đối tác',
+                key: 'name',
+                render: (_v, r) => (
+                  <button
+                    type="button"
+                    className="fg-link"
+                    aria-pressed={partner === r.key}
+                    onClick={() => setPartner(partner === r.key ? '' : r.key)}
+                    style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', textAlign: 'left', fontWeight: partner === r.key ? 700 : 400 }}
+                  >
+                    {r.name}
+                  </button>
+                ),
+              },
+              { title: 'Số giao dịch', key: 'count', align: 'right', render: (_v, r) => r.count },
+              { title: 'Tổng thu', key: 'in', align: 'right', render: (_v, r) => <FgMoney value={r.in} mode="full" /> },
+              { title: 'Tổng chi', key: 'out', align: 'right', render: (_v, r) => <FgMoney value={r.out} mode="full" /> },
+              {
+                title: 'Chênh lệch (thu − chi)',
+                key: 'net',
+                align: 'right',
+                render: (_v, r) => <FgMoney value={{ minor: (BigInt(r.in.minor) - BigInt(r.out.minor)).toString(), currency, decimals: 0 }} mode="full" />,
+              },
+            ]}
+          />
+        </FgCard>
+      ) : null}
       <FgQuery
         query={query}
         skeleton={<FgSkeletonTable rows={8} cols={8} />}
-        empty={<div className="fg-card"><FgEmptyState glyph="≡" title="Chưa có giao dịch" description={isAll ? 'Tài khoản chưa ghi nhận phiếu thu/chi nào đã thực thi.' : 'Không có giao dịch trong khoảng thời gian đã chọn.'} /></div>}
+        empty={<div className="fg-card"><FgEmptyState glyph="≡" title="Chưa có giao dịch" description={isFiltered ? 'Không có giao dịch phù hợp với bộ lọc đã chọn.' : 'Tài khoản chưa ghi nhận phiếu thu/chi nào đã thực thi.'} /></div>}
       >
         {(data) =>
           !data.items.length ? (
@@ -137,7 +190,7 @@ export function BankAccountHistoryScreen(): ReactNode {
               <FgEmptyState
                 glyph="≡"
                 title="Chưa có giao dịch"
-                description={isAll ? 'Tài khoản chưa ghi nhận phiếu thu/chi nào đã thực thi.' : 'Không có giao dịch trong khoảng thời gian đã chọn.'}
+                description={isFiltered ? 'Không có giao dịch phù hợp với bộ lọc đã chọn.' : 'Tài khoản chưa ghi nhận phiếu thu/chi nào đã thực thi.'}
               />
             </div>
           ) : (

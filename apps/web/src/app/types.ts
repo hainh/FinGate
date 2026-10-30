@@ -614,6 +614,16 @@ export interface BankTransactionRow {
   document: { id: string; code: string; kind: string; href: string } | null;
 }
 
+/** Thống kê theo đối tác trong kỳ. `key` là giá trị của bộ lọc đối tác (`partner`). */
+export interface BankPartnerStat {
+  key: string;
+  partner_id: string | null;
+  name: string;
+  count: number;
+  in: MoneyWire;
+  out: MoneyWire;
+}
+
 export interface BankAccountTransactions {
   account: {
     _id: string;
@@ -633,6 +643,8 @@ export interface BankAccountTransactions {
   period: { from: string | null; to: string };
   /** Tổng thu / chi của cả kỳ (không bị cắt theo giới hạn số dòng). */
   totals: { in: MoneyWire; out: MoneyWire };
+  /** Thống kê theo đối tác của cả kỳ (không áp bộ lọc đối tác), sắp theo tổng phát sinh giảm dần. */
+  partners: BankPartnerStat[];
   items: BankTransactionRow[];
 }
 

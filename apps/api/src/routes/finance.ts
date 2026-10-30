@@ -28,7 +28,7 @@ import {
 } from '@fingate/shared';
 import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, internalTransferBodySchema, statementImportBodySchema } from './schemas.ts';
 import { asBigInt, docHref, filterMaturityRows, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
-import { bookedBalance, periodFlows } from '../domain/ledger/index.ts';
+import { bookedBalance } from '../domain/ledger/index.ts';
 import { ledgerAccountViews, pageAccountViews } from '../domain/accounts.ts';
 import { companyReachableByActor } from '../domain/entitlement/index.ts';
 import { loadPartnerRefs } from '../domain/reports/refs.ts';
@@ -524,7 +524,7 @@ export function financeRoutes(app: FastifyInstance): void {
         const isGroup = Boolean(account.is_group);
         if (!isGroup) assertCompanyScope(req, account.company_id ? String(account.company_id) : null);
 
-        const q = req.query as { limit?: string; from?: string; to?: string };
+        const q = req.query as { limit?: string; from?: string; to?: string; partner?: string };
         const limitRaw = Number(q.limit ?? 500);
         const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 2000) : 500;
         // Bộ lọc kỳ (YYYY-MM-DD, tuỳ chọn): bỏ trống = toàn bộ thời gian; `to` không vượt quá hôm nay.
@@ -533,35 +533,18 @@ export function financeRoutes(app: FastifyInstance): void {
         const to = isDay(q.to) && q.to < today() ? q.to : today();
         const dateRange: Record<string, string> = { $lte: to };
         if (from) dateRange.$gte = from;
-        // Lấy `limit` bút toán MỚI NHẤT (sort giảm dần rồi mới limit) — tránh cắt nhầm
-        // các giao dịch gần đây khi tài khoản có > limit dòng, khiến "Số dư cuối" sai.
-        const recent = await Models.CashEntry.find({ account_id: id, date: dateRange } as never)
-          .sort({ date: -1, created_at: -1 })
-          .limit(limit)
+        // Bộ lọc đối tác: khoá lấy từ `partners[].key` (p:<id> | n:<tên người nhận> | none); bỏ trống = tất cả.
+        const partnerFilter = q.partner ? q.partner : null;
+
+        // Toàn bộ bút toán trong kỳ, sắp tăng dần: số dư đầu/cuối luôn theo SỔ CÁI của tài khoản
+        // (không phụ thuộc bộ lọc); thống kê và tổng thu/chi tính trên cả kỳ, không bị cắt bởi `limit`.
+        const all = await Models.CashEntry.find({ account_id: id, date: dateRange } as never)
+          .sort({ date: 1, created_at: 1 })
           .lean<Record<string, unknown>[]>();
-        const entries = recent.reverse(); // sắp tăng dần để chạy số dư dồn
+        // số dư đầu kỳ = Σ sổ cái đến hết ngày trước `from` (không có `from` ⇒ 0)
+        let running = from ? await bookedBalance(id, addDays(from, -1)) : 0n;
 
-        // số dư đầu cửa sổ = Σ toàn bộ sổ cái (≤ `to`) − Σ các bút toán trong cửa sổ.
-        const totalNet = await bookedBalance(id, to);
-        // tổng thu/chi của CẢ kỳ (không bị cắt bởi `limit`)
-        const flows = await periodFlows(id, from, to);
-        let windowNet = 0n;
-        for (const e of entries) {
-          const amount = asBigInt(e.amount_minor);
-          windowNet += String(e.direction ?? 'in') === 'in' ? amount : -amount;
-        }
-        let running = totalNet - windowNet;
-
-        // số dư đầu/cuối chạy dồn theo thời gian (in = +, out = −)
-        const withBalance = entries.map((e) => {
-          const amount = asBigInt(e.amount_minor);
-          const direction = String(e.direction ?? 'in');
-          const opening = running;
-          running = direction === 'in' ? running + amount : running - amount;
-          return { entry: e, direction, amount, opening, closing: running };
-        });
-
-        const docIds = [...new Set(entries.map((e) => (e.document_id ? String(e.document_id) : '')).filter(Boolean))];
+        const docIds = [...new Set(all.map((e) => (e.document_id ? String(e.document_id) : '')).filter(Boolean))];
         const docs = docIds.length
           ? await Models.Document.find({ _id: { $in: docIds } } as never)
               .select({ code: 1, kind: 1, title: 1, purpose: 1, payee: 1, partner_id: 1, execution: 1 })
@@ -578,18 +561,66 @@ export function financeRoutes(app: FastifyInstance): void {
           decimals: 0,
         });
 
-        const items = withBalance
+        // mỗi bút toán: số dư đầu/cuối chạy dồn (in = +, out = −) + đối tác lấy từ phiếu gốc
+        const rows = all.map((e) => {
+          const amount = asBigInt(e.amount_minor);
+          const direction = String(e.direction ?? 'in');
+          const opening = running;
+          running = direction === 'in' ? running + amount : running - amount;
+          const doc = e.document_id ? dmap.get(String(e.document_id)) : undefined;
+          const partnerId = doc?.partner_id ? String(doc.partner_id) : null;
+          const payeeName = String(((doc?.payee ?? null) as { name?: string } | null)?.name ?? '');
+          return {
+            entry: e,
+            doc,
+            direction,
+            amount,
+            opening,
+            closing: running,
+            partnerId,
+            counterparty: partnerId ? (partnerMap.get(partnerId)?.name ?? '—') : payeeName || '—',
+            key: partnerId ? `p:${partnerId}` : payeeName ? `n:${payeeName}` : 'none',
+          };
+        });
+
+        // thống kê theo đối tác trong kỳ — KHÔNG áp bộ lọc đối tác (để đổi sang đối tác khác)
+        const statMap = new Map<string, { key: string; partner_id: string | null; name: string; count: number; in: bigint; out: bigint }>();
+        for (const r of rows) {
+          const s = statMap.get(r.key) ?? {
+            key: r.key,
+            partner_id: r.partnerId,
+            name: r.key === 'none' ? 'Không có đối tác' : r.counterparty,
+            count: 0,
+            in: 0n,
+            out: 0n,
+          };
+          s.count += 1;
+          if (r.direction === 'in') s.in += r.amount;
+          else s.out += r.amount;
+          statMap.set(r.key, s);
+        }
+        const partners = [...statMap.values()]
+          .sort((a, b) => (b.in + b.out > a.in + a.out ? 1 : b.in + b.out < a.in + a.out ? -1 : 0))
+          .map((s) => ({ key: s.key, partner_id: s.partner_id, name: s.name, count: s.count, in: money(s.in), out: money(s.out) }));
+
+        // tổng thu/chi của kỳ (theo đối tác đang lọc nếu có)
+        const filtered = partnerFilter ? rows.filter((r) => r.key === partnerFilter) : rows;
+        let inTotal = 0n;
+        let outTotal = 0n;
+        for (const r of filtered) {
+          if (r.direction === 'in') inTotal += r.amount;
+          else outTotal += r.amount;
+        }
+
+        const items = filtered
+          .slice(-limit) // `limit` bút toán mới nhất trong kết quả lọc
           .reverse() // mới nhất lên trước
-          .map(({ entry, direction, amount, opening, closing }) => {
-            const doc = entry.document_id ? dmap.get(String(entry.document_id)) : undefined;
+          .map(({ entry, doc, direction, amount, opening, closing, partnerId, counterparty }) => {
             const exec = (doc?.execution ?? null) as { paid_at?: string | null } | null;
             const createdAt = entry.created_at ? new Date(String(entry.created_at)).toISOString() : null;
             // ưu tiên mốc thực thi (nếu có giờ), còn lại dùng created_at (đủ giây).
             const at = exec?.paid_at && exec.paid_at.length > 10 ? exec.paid_at : createdAt;
-            const partnerId = doc?.partner_id ? String(doc.partner_id) : null;
-            const payee = (doc?.payee ?? null) as { name?: string } | null;
             const kind = doc?.kind ? String(doc.kind) : '';
-            const counterparty = partnerId ? (partnerMap.get(partnerId)?.name ?? '—') : payee?.name ? String(payee.name) : '—';
             const storedThen = storedAt(at ? new Date(at) : null);
             return {
               _id: String(entry._id),
@@ -638,7 +669,8 @@ export function financeRoutes(app: FastifyInstance): void {
                 stored: money(stored),
               },
               period: { from, to },
-              totals: { in: money(flows.in), out: money(flows.out) },
+              totals: { in: money(inTotal), out: money(outTotal) },
+              partners,
               items,
             },
           },
