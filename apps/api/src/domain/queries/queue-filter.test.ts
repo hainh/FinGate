@@ -10,9 +10,12 @@ function base(over: Partial<QueueQuery>): QueueQuery {
 describe('queueFilter — "chờ tôi duyệt" gồm cả việc thực thi cho kế toán', () => {
   it('không có payment:mark → chỉ hồ sơ tới lượt tôi duyệt', () => {
     const f = queueFilter(base({ mine: 'to_approve', role: 'chief_accountant', canPay: false }));
-    expect(f.$or).toBeUndefined();
-    expect(f.$and).toBeUndefined();
-    expect(f.$expr).toBeDefined();
+    // gộp trong $and: [lượt tôi duyệt, phiếu quỹ tiền mặt có bước tôi chưa duyệt]
+    const and = f.$and as Record<string, unknown>[];
+    expect(and).toHaveLength(1);
+    const union = and[0]!.$or as Record<string, unknown>[];
+    expect(union).toHaveLength(2);
+    expect(union[1]).toMatchObject({ 'source.fund': 'cash' });
     expect(f.status).toEqual({ $in: [...DECISION_STATUSES] });
   });
 
@@ -22,8 +25,8 @@ describe('queueFilter — "chờ tôi duyệt" gồm cả việc thực thi cho 
     const and = f.$and as Record<string, unknown>[];
     expect(and).toHaveLength(1);
     const union = and[0]!.$or as Record<string, unknown>[];
-    expect(union).toHaveLength(2);
-    expect(union[1]).toEqual({ kind: 'spend', status: { $in: [...EXECUTION_STATUSES] } });
+    expect(union).toHaveLength(3);
+    expect(union[2]).toEqual({ kind: 'spend', status: { $in: [...EXECUTION_STATUSES] } });
     expect(f.status).toEqual({ $in: [...DECISION_STATUSES, ...EXECUTION_STATUSES] });
   });
 

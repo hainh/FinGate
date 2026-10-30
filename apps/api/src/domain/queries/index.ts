@@ -204,14 +204,7 @@ const LIST_PROJECTION = {
  * duyệt được tạo SAU khi hồ sơ đã gửi. Khi đó ai đúng vai trò cũng xử lý được.
  */
 function lowestPendingOwnerFilter(userId: string, role?: Role): Record<string, unknown> {
-  const owned = role
-    ? {
-        $or: [
-          { $eq: [{ $toString: '$$s.user_id' }, userId] },
-          { $and: [{ $eq: ['$$s.user_id', null] }, { $eq: ['$$s.role', role] }] },
-        ],
-      }
-    : { $eq: [{ $toString: '$$s.user_id' }, userId] };
+  const owned = ownedStepCond(userId, role);
   return {
     $expr: {
       $let: {
@@ -238,6 +231,39 @@ function lowestPendingOwnerFilter(userId: string, role?: Role): Record<string, u
   };
 }
 
+/**
+ * Phiếu thu/chi quỹ tiền mặt: việc duyệt vẫn theo thứ tự, nhưng MỌI cấp còn bước chưa duyệt
+ * (current/waiting) đều thấy phiếu trong "Chờ tôi duyệt" ngay khi kế toán lập xong.
+ */
+function cashAnyPendingOwnerFilter(userId: string, role?: Role): Record<string, unknown> {
+  return {
+    'source.fund': 'cash',
+    kind: { $in: ['spend', 'income'] },
+    $expr: {
+      $anyElementTrue: {
+        $map: {
+          input: {
+            $filter: { input: '$approval.steps', as: 's', cond: { $in: ['$$s.state', ['current', 'waiting']] } },
+          },
+          as: 's',
+          in: ownedStepCond(userId, role),
+        },
+      },
+    },
+  };
+}
+
+function ownedStepCond(userId: string, role?: Role): Record<string, unknown> {
+  return role
+    ? {
+        $or: [
+          { $eq: [{ $toString: '$$s.user_id' }, userId] },
+          { $and: [{ $eq: ['$$s.user_id', null] }, { $eq: ['$$s.role', role] }] },
+        ],
+      }
+    : { $eq: [{ $toString: '$$s.user_id' }, userId] };
+}
+
 /** Phiếu chi đã duyệt xong đang chờ kế toán thực thi (không còn bước duyệt nào). */
 function executionQueueFilter(): Record<string, unknown> {
   return { kind: 'spend', status: { $in: [...EXECUTION_STATUSES] } };
@@ -245,7 +271,10 @@ function executionQueueFilter(): Record<string, unknown> {
 
 /** "Việc ở bàn tôi" = bước duyệt của tôi là cấp thấp nhất còn chờ, + (nếu được chi) phiếu chờ thực thi. */
 function toApproveFilter(input: Pick<QueueQuery, 'userId' | 'role' | 'canPay'>): Record<string, unknown> {
-  const parts: Record<string, unknown>[] = [lowestPendingOwnerFilter(input.userId, input.role)];
+  const parts: Record<string, unknown>[] = [
+    lowestPendingOwnerFilter(input.userId, input.role),
+    cashAnyPendingOwnerFilter(input.userId, input.role),
+  ];
   if (input.canPay) parts.push(executionQueueFilter());
   return parts.length > 1 ? { $or: parts } : parts[0]!;
 }
