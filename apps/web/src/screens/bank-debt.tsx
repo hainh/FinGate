@@ -6,7 +6,7 @@
  *    Dư nợ do server tính: gốc − Σ phần GỐC của phiếu chi đã thực thi.
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { Checkbox, DatePicker, type TableColumnsType } from 'antd';
 import dayjs from 'dayjs';
@@ -105,14 +105,18 @@ function OriginTag({ origin }: { origin: { kind: string; rule_code: string | nul
   return <FgText style="caption" color="muted">Thủ công</FgText>;
 }
 
-function KpiCard({ label, value, emphasis, sub }: { label: string; value: MoneyWire; emphasis?: boolean; sub?: ReactNode }): ReactNode {
+/** Khoản đã huỷ: gạch ngang các con số không còn hiệu lực. */
+const STRUCK: CSSProperties = { textDecoration: 'line-through' };
+const struck = (on: boolean, node: ReactNode): ReactNode => (on ? <span style={STRUCK}>{node}</span> : node);
+
+function KpiCard({ label, value, emphasis, sub, strike }: { label: string; value: MoneyWire; emphasis?: boolean; sub?: ReactNode; strike?: boolean }): ReactNode {
   return (
     <FgCard className="fg-kpi">
       <FgText style="caption" color="muted">
         {label}
       </FgText>
       <div className="fg-kpi-value">
-        <FgMoneyStack value={moneyFromWire(value)} emphasis={emphasis} />
+        {struck(!!strike, <FgMoneyStack value={moneyFromWire(value)} emphasis={emphasis} />)}
       </div>
       {sub ? <FgText style="caption" color="muted">{sub}</FgText> : null}
     </FgCard>
@@ -151,27 +155,27 @@ function loanColumns(): TableColumnsType<LoanRow> {
       dataIndex: 'principal',
       key: 'principal',
       align: 'right',
-      render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} />,
+      render: (v: MoneyWire, r: LoanRow) => struck(r.status === 'cancelled', <FgMoneyStack value={moneyFromWire(v)} />),
     },
     {
       title: 'Đã trả gốc',
       dataIndex: 'repaid',
       key: 'repaid',
       align: 'right',
-      render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} />,
+      render: (v: MoneyWire, r: LoanRow) => struck(r.status === 'cancelled', <FgMoneyStack value={moneyFromWire(v)} />),
     },
     {
       title: 'Dư nợ',
       dataIndex: 'outstanding',
       key: 'outstanding',
       align: 'right',
-      render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} emphasis />,
+      render: (v: MoneyWire, r: LoanRow) => struck(r.status === 'cancelled', <FgMoneyStack value={moneyFromWire(v)} emphasis />),
     },
     {
       title: 'Lãi suất',
       dataIndex: 'interest_rate',
       key: 'ir',
-      render: (v: string) => `${interestRateText(v)} %/năm`,
+      render: (v: string, r: LoanRow) => struck(r.status === 'cancelled', `${interestRateText(v)} %/năm`),
     },
     {
       title: 'Hạn thanh toán',
@@ -179,8 +183,8 @@ function loanColumns(): TableColumnsType<LoanRow> {
       key: 'md',
       render: (_v, r: LoanRow) => (
         <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
-          <span className="fg-num">{ddmmyyyy(r.maturity_date)}</span>
-          {r.warning ? <FgMaturityCell days={r.days_to_due} tone={r.warning.tone} label={r.warning.label} /> : null}
+          <span className="fg-num" style={r.status === 'cancelled' ? STRUCK : undefined}>{ddmmyyyy(r.maturity_date)}</span>
+          {r.warning && r.status !== 'cancelled' ? <FgMaturityCell days={r.days_to_due} tone={r.warning.tone} label={r.warning.label} /> : null}
         </span>
       ),
     },
@@ -1149,7 +1153,7 @@ export function BankDebtDetailScreen(): ReactNode {
           <>
             <FgPageHeader
               title={`${d.code} · ${bankNameOf(d)}`}
-              meta={`Hạn thanh toán ${ddmmyyyy(d.maturity_date)} · lãi suất ${interestRateText(d.interest_rate)}%/năm`}
+              meta={struck(status === 'cancelled', `Hạn thanh toán ${ddmmyyyy(d.maturity_date)} · lãi suất ${interestRateText(d.interest_rate)}%/năm`)}
               actions={
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <Link to={`/ngan-hang/khoan-vay/${d._id}/lich-tra`}>
@@ -1229,14 +1233,15 @@ export function BankDebtDetailScreen(): ReactNode {
             ) : null}
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 'var(--fg-space-3)', marginBottom: 'var(--fg-space-4)' }}>
-              <KpiCard label="Số tiền vay (gốc)" value={d.principal} sub={d.credit_limit && minorOf(d.credit_limit) > 0n ? `Hạn mức ${formatMoney(moneyFromWire(d.credit_limit) ?? money(0n), { mode: 'compact' })}` : undefined} />
+              <KpiCard label="Số tiền vay (gốc)" value={d.principal} strike={status === 'cancelled'} sub={d.credit_limit && minorOf(d.credit_limit) > 0n ? `Hạn mức ${formatMoney(moneyFromWire(d.credit_limit) ?? money(0n), { mode: 'compact' })}` : undefined} />
               <KpiCard label="Đã giải ngân" value={d.disbursed} sub={`Chưa giải ngân ${formatMoney(moneyFromWire(d.undisbursed) ?? money(0n), { mode: 'compact' })}`} />
               <KpiCard
                 label="Đã trả gốc"
                 value={d.repaid}
+                strike={status === 'cancelled'}
                 sub={`Lãi ${formatMoney(moneyFromWire(d.repaid_interest) ?? money(0n), { mode: 'compact' })} · phí ${formatMoney(moneyFromWire(d.repaid_fee) ?? money(0n), { mode: 'compact' })}`}
               />
-              <KpiCard label="Dư nợ" value={d.outstanding} emphasis sub={`Lãi dự kiến tới đáo hạn ${formatMoney(moneyFromWire(d.interest_to_maturity) ?? money(0n), { mode: 'compact' })}`} />
+              <KpiCard label="Dư nợ" value={d.outstanding} emphasis strike={status === 'cancelled'} sub={`Lãi dự kiến tới đáo hạn ${formatMoney(moneyFromWire(d.interest_to_maturity) ?? money(0n), { mode: 'compact' })}`} />
             </div>
 
             <FgCard title="Thông tin khoản vay" style={{ marginBottom: 'var(--fg-space-4)' }}>
