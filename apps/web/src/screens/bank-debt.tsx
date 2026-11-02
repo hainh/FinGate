@@ -1176,8 +1176,8 @@ export function BankDebtDetailScreen(): ReactNode {
                       <FgButton>+ Lập phương án đảo hạn</FgButton>
                     </Link>
                   ) : null}
-                  {/* Chỉ xoá khoản chờ giải ngân chưa có liên kết nào (v2 §2.3); còn lại dùng Huỷ / Lưu trữ. */}
-                  {status === 'pending_disbursement' && chainTotal === 0 && can('loan:delete') ? (
+                  {/* Chỉ xoá khoản chờ giải ngân / đã huỷ chưa có liên kết nào (v2 §2.3); còn lại dùng Huỷ / Lưu trữ. */}
+                  {(status === 'pending_disbursement' || status === 'cancelled') && chainTotal === 0 && can('loan:delete') ? (
                     <FgButton variant="danger" onClick={() => setDeleteOpen(true)}>
                       Xoá
                     </FgButton>

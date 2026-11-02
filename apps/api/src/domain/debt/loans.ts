@@ -751,7 +751,7 @@ export async function updateLoan(actor: DebtActor, scope: ScopeLike, id: string,
  */
 export async function assertLoanDeletable(scope: ScopeLike, b: LoanRaw): Promise<void> {
   assertInScope(scope.companyIds, String(b.company_id));
-  if (b.status !== 'pending_disbursement') {
+  if (b.status !== 'pending_disbursement' && b.status !== 'cancelled') {
     throw new ApiError({ code: 'FG-VAL-001', detail: 'Khoản đã đang vay hoặc đã xử lý — không xoá (chờ giải ngân thì dùng Huỷ; đã tất toán thì Lưu trữ)' });
   }
   const linked = await Models.BusinessLink.exists({
