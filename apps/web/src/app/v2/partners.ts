@@ -360,6 +360,8 @@ export function usePartnerCopySource(companyId: string | null | undefined, filte
   return useQuery({
     queryKey: ['partners-copy-source', companyId ?? '', q ?? '', offset, limit, sort ?? ''],
     enabled: !!companyId,
+    // queryKey[1] là công ty nguồn (không phải scope) nên placeholder mặc định của app không giữ được dữ liệu → bảng nháy khi đổi trang/sắp xếp
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === (companyId ?? '') ? prev : undefined),
     queryFn: () =>
       apiCall<PartnerListResult>('/partners', {
         scope: companyId ?? undefined,
@@ -391,8 +393,8 @@ export function usePartnerVouchers(partnerId: string | undefined, sort = '') {
   return useQuery({
     queryKey: ['partner-vouchers', scope, partnerId ?? '', sort],
     enabled: !!partnerId,
-    // đổi đối tác: không hiện phiếu của đối tác trước trong lúc tải
-    placeholderData: undefined,
+    // đổi đối tác: không hiện phiếu của đối tác trước; đổi cột sắp xếp (cùng đối tác): giữ bảng cũ, không nháy skeleton
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[2] === (partnerId ?? '') ? prev : undefined),
     queryFn: () => apiCall<{ items: PartnerVoucherRow[]; total: number }>(`/partners/${partnerId}/documents`, { query: { scope, limit: 100, sort: sort || undefined } }),
   });
 }
