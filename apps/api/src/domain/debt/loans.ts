@@ -754,16 +754,19 @@ export async function assertLoanDeletable(scope: ScopeLike, b: LoanRaw): Promise
   if (b.status !== 'pending_disbursement' && b.status !== 'cancelled') {
     throw new ApiError({ code: 'FG-VAL-001', detail: 'Khoản đã đang vay hoặc đã xử lý — không xoá (chờ giải ngân thì dùng Huỷ; đã tất toán thì Lưu trữ)' });
   }
+  // Khoản ĐÃ HUỶ chưa từng có tiền: liên kết `funded_by` (phiếu chi nguồn của khoản tự sinh) đi theo khoản khi xoá.
   const linked = await Models.BusinessLink.exists({
     $or: [{ to_type: 'bank_debt', to_id: b._id }, { from_type: 'bank_debt', from_id: b._id }],
+    ...(b.status === 'cancelled' ? { relation: { $ne: 'funded_by' } } : {}),
   } as never);
   if (linked) {
     throw new ApiError({ code: 'FG-VAL-001', detail: 'Khoản đã có liên kết (kể cả đã gỡ) — không xoá; dùng Huỷ để giữ lịch sử' });
   }
 }
 
-/** Xoá bản ghi khoản vay (sau `assertLoanDeletable`). Không có liên kết nào để xoá theo; lịch sử của khoản đi theo bản ghi. */
+/** Xoá bản ghi khoản vay (sau `assertLoanDeletable`). Chỉ còn liên kết `funded_by` của khoản đã huỷ để xoá theo; lịch sử của khoản đi theo bản ghi. */
 export async function deleteLoanRecord(id: string): Promise<void> {
+  await Models.BusinessLink.deleteMany({ to_type: 'bank_debt', to_id: id, relation: 'funded_by' } as never).exec();
   await Models.BankDebt.deleteOne({ _id: id } as never).exec();
 }
 
