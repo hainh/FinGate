@@ -418,12 +418,15 @@ export function FgMoneyStack({
   emphasis,
   className,
   style,
+  strike,
 }: {
   value: Money | { minor: string; currency?: string; decimals?: number } | string | number | bigint | null | undefined;
   missingLabel?: string;
   emphasis?: boolean;
   className?: string;
   style?: CSSProperties;
+  /** Gạch ngang số tiền (vd khoản đã huỷ). `inline-flex` không thừa kế `text-decoration` của cha nên phải đặt ở từng dòng. */
+  strike?: boolean;
 }): ReactNode {
   const m = toMoney(value as never);
   if (m === null) {
@@ -436,9 +439,9 @@ export function FgMoneyStack({
       className={className}
       style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.35, ...style }}
     >
-      <FgMoney value={m} mode="full" emphasis={emphasis} />
+      <FgMoney value={m} mode="full" emphasis={emphasis} style={strike ? { textDecoration: 'line-through' } : undefined} />
       {compact !== full ? (
-        <span style={{ fontSize: 'var(--fg-font-caption-size)', lineHeight: 'var(--fg-font-caption-line)', color: 'var(--fg-text-muted)' }}>
+        <span style={{ textDecoration: strike ? 'line-through' : undefined, fontSize: 'var(--fg-font-caption-size)', lineHeight: 'var(--fg-font-caption-line)', color: 'var(--fg-text-muted)' }}>
           {compact}
         </span>
       ) : null}

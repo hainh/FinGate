@@ -116,7 +116,7 @@ function KpiCard({ label, value, emphasis, sub, strike }: { label: string; value
         {label}
       </FgText>
       <div className="fg-kpi-value">
-        {struck(!!strike, <FgMoneyStack value={moneyFromWire(value)} emphasis={emphasis} />)}
+        <FgMoneyStack value={moneyFromWire(value)} emphasis={emphasis} strike={strike} />
       </div>
       {sub ? <FgText style="caption" color="muted">{sub}</FgText> : null}
     </FgCard>
@@ -155,21 +155,21 @@ function loanColumns(): TableColumnsType<LoanRow> {
       dataIndex: 'principal',
       key: 'principal',
       align: 'right',
-      render: (v: MoneyWire, r: LoanRow) => struck(r.status === 'cancelled', <FgMoneyStack value={moneyFromWire(v)} />),
+      render: (v: MoneyWire, r: LoanRow) => <FgMoneyStack value={moneyFromWire(v)} strike={r.status === 'cancelled'} />,
     },
     {
       title: 'Đã trả gốc',
       dataIndex: 'repaid',
       key: 'repaid',
       align: 'right',
-      render: (v: MoneyWire, r: LoanRow) => struck(r.status === 'cancelled', <FgMoneyStack value={moneyFromWire(v)} />),
+      render: (v: MoneyWire, r: LoanRow) => <FgMoneyStack value={moneyFromWire(v)} strike={r.status === 'cancelled'} />,
     },
     {
       title: 'Dư nợ',
       dataIndex: 'outstanding',
       key: 'outstanding',
       align: 'right',
-      render: (v: MoneyWire, r: LoanRow) => struck(r.status === 'cancelled', <FgMoneyStack value={moneyFromWire(v)} emphasis />),
+      render: (v: MoneyWire, r: LoanRow) => <FgMoneyStack value={moneyFromWire(v)} emphasis strike={r.status === 'cancelled'} />,
     },
     {
       title: 'Lãi suất',
