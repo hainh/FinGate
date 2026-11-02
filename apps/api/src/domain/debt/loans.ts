@@ -9,9 +9,10 @@
  * Quy tắc tự động R2/R3/R6 hiện ghi khoản vay qua `domain/automation/actions/loan.ts` (chưa dùng hàm này).
  */
 
-import { ApiError, daysUntil, today, vnDate } from '@fingate/shared';
+import { ApiError, bankDebtStatusLabel, daysUntil, today, vnDate } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
 import { scopeFilter, scopedFind } from '../../lib/mongo.ts';
+import { minorKey, parseSort, sortRows, type SortKey } from '../../lib/sort.ts';
 import { buildHistoryEntry, mirrorAudit } from '../audit/index.ts';
 import { emitDomainEvent } from '../events/index.ts';
 import { nextSequentialCode } from '../numbering/index.ts';
@@ -243,7 +244,29 @@ export interface LoanListQuery {
   summary?: 'true' | 'false';
   page?: number;
   limit?: number;
+  /** `<cột>` tăng dần, `-<cột>` giảm dần; rỗng/lạ → mặc định (hạn thanh toán tăng dần). */
+  sort?: string;
 }
+
+type BuiltLoan = ReturnType<typeof buildLoan>;
+const loanStr = (b: BuiltLoan, k: string): string => String(b.item[k] ?? '');
+
+/** Trường sắp xếp được của danh sách khoản vay (khoá cột phía web) → khoá so sánh trên khoản đã dựng. */
+export const LOAN_SORT_GETTERS: Record<string, (b: BuiltLoan) => SortKey> = {
+  code: (b) => loanStr(b, 'code'),
+  bank: (b) => loanStr(b, 'bank_name'),
+  co: (b) => loanStr(b, 'company_name'),
+  principal: (b) => b.principal,
+  repaid: (b) => minorKey(b.item.repaid),
+  outstanding: (b) => b.outstanding,
+  ir: (b) => {
+    const n = Number(loanStr(b, 'interest_rate').replace(',', '.'));
+    return Number.isFinite(n) ? n : null;
+  },
+  md: (b) => loanStr(b, 'maturity_date'),
+  st: (b) => bankDebtStatusLabel(b.status),
+  created_at: (b) => loanStr(b, 'created_at'),
+};
 
 /** Trạng thái LƯU TRỰC TIẾP (không phụ thuộc dư nợ / hạn): lọc được ngay trong DB. Đang vay / quá hạn / tất toán suy ra khi đọc. */
 const STORED_LOAN_STATUSES: ReadonlySet<string> = new Set(['pending_disbursement', 'cancelled', 'archived']);
@@ -328,6 +351,8 @@ export async function listLoans(scope: ScopeLike, q: LoanListQuery) {
   let built = rows.map((b) => buildLoan(b, ctx));
   // trạng thái suy ra (đang vay / quá hạn / tất toán) chỉ biết sau khi tính dư nợ ⇒ lọc ở đây
   if (q.status && !STORED_LOAN_STATUSES.has(q.status)) built = built.filter((x) => x.status === q.status);
+  // sắp xếp theo cột (ổn định trên thứ tự mặc định hạn thanh toán ↑, _id ↑) TRƯỚC khi cắt trang
+  built = sortRows(built, parseSort(q.sort, Object.keys(LOAN_SORT_GETTERS)), LOAN_SORT_GETTERS);
   let outstanding = 0n;
   let pendingCount = 0;
   let pendingAmount = 0n;

@@ -100,6 +100,7 @@ export function partnerRoutes(app: FastifyInstance): void {
           q: q.q,
           limit: q.limit,
           offset: q.offset,
+          sort: q.sort,
           period,
           visible: summaryVisibilityOf(requireActor(req).permissions),
         });
@@ -131,7 +132,7 @@ export function partnerRoutes(app: FastifyInstance): void {
               .filter(Boolean)
               .slice(0, 1000)
           : undefined;
-        const items = await partnerOptions({ companyIds: [companyId], type, status: q.status, q: q.q, limit: q.limit, codes });
+        const items = await partnerOptions({ companyIds: [companyId], type, status: q.status, q: q.q, limit: q.limit, codes, sort: q.sort });
         return ok(reply, { items });
       },
     }),
@@ -366,7 +367,7 @@ export function partnerRoutes(app: FastifyInstance): void {
         const p = await loadPartner(id);
         assertPartnerInScope(p.company_id, scope.companyIds);
         const q = validate(partnerTabQuery, req.query ?? {});
-        const items = await partnerDocuments(p, { status: q.status, kind: q.kind, limit: q.limit });
+        const items = await partnerDocuments(p, { status: q.status, kind: q.kind, limit: q.limit, sort: q.sort });
         return ok(reply, { items, total: items.length });
       },
     }),

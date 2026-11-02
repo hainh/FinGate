@@ -18,6 +18,7 @@ import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery } from '../components/pagekit.tsx';
 import type { BankAccountDetail, BankPartnerStat, BankTransactionRow } from '../app/types.ts';
 import { bankAccountOptionLabel } from '../app/v2/documents.ts';
+import { onSortChange, withServerSort } from '../app/table-sort.ts';
 
 /**
  * Tên TK trong tiêu đề BANK-05, ví dụ "BIDV · 122983878772 · TK lịch sử A": CÓ TÊN TK theo cùng quy ước
@@ -109,7 +110,9 @@ export function BankAccountHistoryScreen(): ReactNode {
   const [partner, setPartner] = useState<string>('');
   // tab hiển thị: lịch sử giao dịch (mặc định) hoặc thống kê theo đối tác
   const [tab, setTab] = useState<ScreenTab>('history');
-  const query = useBankAccountTransactions(id, { ...range, partner });
+  // lịch sử bị cắt ở số bút toán tối đa ⇒ sắp xếp ở máy chủ (rỗng = mới nhất trước)
+  const [sort, setSort] = useState('');
+  const query = useBankAccountTransactions(id, { ...range, partner, sort });
   const activeQuick = QUICK_RANGES.find((q) => {
     const r = monthsRange(q.months);
     return r.from === range.from && r.to === range.to;
@@ -233,7 +236,8 @@ export function BankAccountHistoryScreen(): ReactNode {
               <FgTable<BankTransactionRow>
                 rowKey="_id"
                 dataSource={data.items}
-                columns={[
+                onChange={onSortChange(setSort)}
+                columns={withServerSort<BankTransactionRow>([
                   {
                     title: 'Thời điểm',
                     dataIndex: 'at',
@@ -314,7 +318,7 @@ export function BankAccountHistoryScreen(): ReactNode {
                         <span className="fg-muted">—</span>
                       ),
                   },
-                ]}
+                ], ['at', 'dir', 'opening', 'amount', 'closing', 'total', 'content', 'cp', 'doc'], sort, '-at')}
               />
             </div>
           )

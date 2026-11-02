@@ -26,6 +26,7 @@ import {
 } from '@fingate/shared';
 import { ApiRequestError, uuid } from '../app/api.ts';
 import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
+import { onSortChange, withServerSort } from '../app/table-sort.ts';
 import {
   debtDirectionOf,
   useCopyPartners,
@@ -438,7 +439,8 @@ export function CopyPartnersDialog({ onClose }: { onClose: () => void }): ReactN
   const [search, setSearch] = useState('');
   const searchDebounced = useDebounced(search.trim(), 300);
   const [page, setPage] = useState(1);
-  const source = usePartnerCopySource(sourceId, { q: searchDebounced, offset: (page - 1) * COPY_PAGE_SIZE, limit: COPY_PAGE_SIZE });
+  const [sort, setSort] = useState('');
+  const source = usePartnerCopySource(sourceId, { q: searchDebounced, offset: (page - 1) * COPY_PAGE_SIZE, limit: COPY_PAGE_SIZE, sort });
   const copy = useCopyPartners();
   const [picked, setPicked] = useState<string[]>([]);
   const [result, setResult] = useState<PartnerCopyResult | null>(null);
@@ -479,6 +481,7 @@ export function CopyPartnersDialog({ onClose }: { onClose: () => void }): ReactN
     },
     { title: 'MST', key: 'tax', render: (_v, r: PartnerListRow) => r.tax_code ?? '—' },
   ];
+  const sortedColumns = withServerSort(columns, ['name', 'type', 'bank', 'tax'], sort, 'name');
 
   const sourceRows = source.data?.items ?? [];
   const sourceTotal = source.data?.total ?? 0;
@@ -568,7 +571,11 @@ export function CopyPartnersDialog({ onClose }: { onClose: () => void }): ReactN
                   rowKey="_id"
                   size="small"
                   dataSource={sourceRows}
-                  columns={columns}
+                  columns={sortedColumns}
+                  onChange={onSortChange((s) => {
+                    setSort(s);
+                    setPage(1);
+                  })}
                   pagination={false}
                   rowSelection={{ selectedRowKeys: picked, onChange: (keys) => setPicked(keys.map(String)) }}
                 />
@@ -720,6 +727,7 @@ export function MergePartnerDialog({
   const [search, setSearch] = useState('');
   const searchDebounced = useDebounced(search.trim(), 300);
   const [target, setTarget] = useState<PartnerRef | null>(null);
+  const [mergeSort, setMergeSort] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   // một lần mở hộp thoại = một request_id: bấm lặp / gửi lại sau lỗi không gộp đôi
   const [requestId] = useState(() => uuid());
@@ -729,6 +737,7 @@ export function MergePartnerDialog({
     status: 'active',
     q: searchDebounced || undefined,
     limit: MERGE_OPTIONS_LIMIT,
+    sort: mergeSort || undefined,
   });
   const candidates = (options.data?.items ?? []).filter((c) => c._id !== partner._id);
 
@@ -803,7 +812,8 @@ export function MergePartnerDialog({
             size="small"
             mobileCards={false}
             dataSource={candidates}
-            columns={columns}
+            columns={withServerSort(columns, ['code', 'name', 'bank', 'tax'], mergeSort, 'name')}
+            onChange={onSortChange(setMergeSort)}
             pagination={false}
             rowSelection={{ type: 'radio', selectedRowKeys: target ? [target._id] : [], onChange: (_keys, rows) => setTarget(rows[0] ?? null) }}
             onRow={(r) => ({ onClick: () => setTarget(r) })}

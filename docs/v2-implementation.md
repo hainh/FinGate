@@ -1571,3 +1571,9 @@ Các điểm agent phát hiện khi triển khai, spec chưa nêu:
 - | Cấp duyệt hạ số tiền chi xuống **dưới** số tiền vay riêng (vay một phần) | Từ chối duyệt (FG-VAL-001): số tiền chi sau duyệt không được nhỏ hơn số tiền vay. Người duyệt **trả về** để KTV hạ số tiền vay, hoặc giữ số tiền chi. |
 - - Phiếu thu do R1 sinh ra **không có đối tác ngoài** (`partner_id` = null) — ngoại lệ có chủ ý: không có danh bạ đối tác liên công ty. Được nhận diện là nội bộ theo nguồn gốc (`origin` của quy tắc R1) và liên kết `internal_transfer`, không theo tên đối tác.
 - 4. **Đi qua nghiệp vụ chuẩn**: bước tự động gọi đúng các hàm nghiệp vụ người dùng gọi (kiểm tra quyền hệ thống, ghi lịch sử, sổ cái), không ghi DB tắt. *Chính sách:* thực thi tự động (R1, R3, và phiếu thu tự thực thi khi duyệt) chạy dưới phiên hệ thống, được cấp `payment:mark` và miễn xác thực lại; kiểm soát nằm ở việc duyệt phiếu gốc, không kiểm tra quyền thanh toán của người duyệt cuối.
+
+## Sắp xếp bảng phía máy chủ
+
+Bảng phân trang (hoặc bị giới hạn số dòng) chỉ giữ một phần dữ liệu trong trình duyệt, nên sắp xếp phải do máy chủ làm. Quy ước: `sort=<cột>` tăng dần, `sort=-<cột>` giảm dần; khoá cột ở web trùng tên trường `sort` của API. Tiêu đề cột chỉ hiển thị mũi tên (`withServerSort`/`onSortChange` trong `apps/web/src/app/table-sort.ts`); API dùng `apps/api/src/lib/sort.ts` (chỉ nhận trường trong danh sách cho phép, trường lạ → thứ tự mặc định, giá trị trống xuống cuối).
+
+Áp dụng: Chờ tôi duyệt / Tôi đã duyệt / Thu / Chi (`/queue`, `/queue/processed`, `/documents`), Công nợ (`/debts`), Khoản vay (`/loans`), Tài khoản tiền (`/bank-accounts`), Đối tác (`/partners`, `/partners/options`, tab phiếu thu/chi), Lịch sử giao dịch tài khoản. Bảng luôn tải đủ toàn bộ dòng trong một phản hồi (tab công nợ/khoản vay của đối tác, ma trận tuổi nợ…) giữ nguyên.

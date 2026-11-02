@@ -16,7 +16,8 @@ import { nextPartnerCode } from '../numbering/index.ts';
 import { acquireClaim, claimKeyOf, completeClaim, releaseClaim, type ClaimHandle } from './claims.ts';
 import { findDuplicatePartners, identifierSearchPattern, type DuplicateHit } from './duplicates.ts';
 import { assertMergeable, mergedMasterFields, type MergeCandidate } from './merge.ts';
-import { defaultPeriod, loadPartnerLedgers, maturityInfo, numbersOf, type LedgerPartner, type LoanView, type DebtView, type Period, type PartnerLedger, type SummaryVisibility } from './summary.ts';
+import { defaultPeriod, loadPartnerLedgers, maturityInfo, numbersOf, type LedgerPartner, type LoanView, type DebtView, type Period, type PartnerLedger, type PartnerNumbers, type SummaryVisibility } from './summary.ts';
+import { minorKey, parseSort, sortRows, type SortKey } from '../../lib/sort.ts';
 import { accountCodeOfPartnerType } from '../debt/rules.ts';
 import { assertPartnerTypeChange, loadPartnerTypeUsage } from './type-guard.ts';
 import { internalPartnerFieldsFor } from './internal.ts';
@@ -846,6 +847,8 @@ export interface PartnerListInput {
   q?: string;
   limit: number;
   offset: number;
+  /** `<cột>` / `-<cột>` (PARTNER_SORT_FIELDS); trống hoặc lạ = theo tên */
+  sort?: string;
   period?: Period;
   /** quyền xem số liệu công nợ / khoản vay / thu chi của người gọi */
   visible: SummaryVisibility;
@@ -861,20 +864,77 @@ export async function listPartners(input: PartnerListInput): Promise<{
   const filter = partnerFilter(input);
   const today = vnDate();
   const period = input.period ?? defaultPeriod(today);
-  const [total, rows] = await Promise.all([
-    Models.Partner.countDocuments(filter as never).exec(),
-    Models.Partner.find(filter as never)
-      .sort({ name_key: 1, _id: 1 })
-      .skip(input.offset)
-      .limit(input.limit)
-      .lean<PartnerLean[]>(),
-  ]);
-  const ledgers = await loadPartnerLedgers(rows.map(toLedgerPartner));
-  const names = await companyNamesOf(rows.map((r) => idOf(r.company_id)));
+  const spec = parseSort(input.sort, PARTNER_SORT_FIELDS);
+  const emptyLedger = (): PartnerLedger => ({ debts: [], loans: [], paid: [], has_activity: false });
+
+  let total: number;
+  let rows: PartnerLean[];
+  let ledgers: Map<string, PartnerLedger>;
+  let names: Map<string, string>;
+  if (spec && (PARTNER_LEDGER_SORT.has(spec.field) || PARTNER_MEMORY_SORT.has(spec.field))) {
+    // Cột cần sổ công nợ / tên công ty / tên ngân hàng (so sánh tiếng Việt): xếp trên TOÀN BỘ tập đã lọc rồi mới cắt trang.
+    // Chỉ nhánh này mới nạp sổ cho cả tập; không sắp xếp theo các cột đó thì vẫn chỉ nạp đúng một trang.
+    const all = await Models.Partner.find(filter as never).sort({ name_key: 1, _id: 1 }).lean<PartnerLean[]>();
+    total = all.length;
+    const allNames = await companyNamesOf(all.map((r) => idOf(r.company_id)));
+    const allLedgers = PARTNER_LEDGER_SORT.has(spec.field) ? await loadPartnerLedgers(all.map(toLedgerPartner)) : new Map<string, PartnerLedger>();
+    const metric = (r: PartnerLean): PartnerNumbers => numbersOf(r.type, allLedgers.get(idOf(r._id)) ?? emptyLedger(), period, today);
+    const getters = partnerSortGetters(metric, allNames, input.visible);
+    rows = sortRows(all, spec, getters).slice(input.offset, input.offset + input.limit);
+    names = allNames;
+    ledgers = allLedgers;
+    if (!PARTNER_LEDGER_SORT.has(spec.field)) ledgers = await loadPartnerLedgers(rows.map(toLedgerPartner));
+  } else {
+    const mongoSort: Record<string, 1 | -1> = spec
+      ? { [PARTNER_MONGO_SORT_PATH[spec.field] ?? spec.field]: spec.dir, _id: spec.dir }
+      : { name_key: 1, _id: 1 };
+    const [count, page] = await Promise.all([
+      Models.Partner.countDocuments(filter as never).exec(),
+      Models.Partner.find(filter as never).sort(mongoSort).skip(input.offset).limit(input.limit).lean<PartnerLean[]>(),
+    ]);
+    total = count;
+    rows = page;
+    ledgers = await loadPartnerLedgers(rows.map(toLedgerPartner));
+    names = await companyNamesOf(rows.map((r) => idOf(r.company_id)));
+  }
   const items = rows.map((r) =>
-    summaryOf(r, ledgers.get(idOf(r._id)) ?? { debts: [], loans: [], paid: [], has_activity: false }, period, today, names.get(idOf(r.company_id)) ?? null, input.visible),
+    summaryOf(r, ledgers.get(idOf(r._id)) ?? emptyLedger(), period, today, names.get(idOf(r.company_id)) ?? null, input.visible),
   );
   return { items, total, limit: input.limit, offset: input.offset, period };
+}
+
+/** Khoá sắp xếp danh sách đối tác = `key` của cột phía web. */
+export const PARTNER_SORT_FIELDS = [
+  'name', 'type', 'status', 'tax', 'company', 'bank',
+  'receivable', 'payable', 'overdue', 'outstanding', 'maturity', 'paid_in', 'paid_out',
+] as const;
+const PARTNER_MONGO_SORT_PATH: Record<string, string> = { name: 'name_key', tax: 'tax_code' };
+/** Cột chỉ cần dữ liệu đối tác nhưng so sánh trong bộ nhớ (tên công ty / ngân hàng, có dấu tiếng Việt). */
+const PARTNER_MEMORY_SORT: ReadonlySet<string> = new Set(['company', 'bank']);
+/** Cột cần số liệu từ sổ công nợ / khoản vay / thu chi. */
+const PARTNER_LEDGER_SORT: ReadonlySet<string> = new Set(['receivable', 'payable', 'overdue', 'outstanding', 'maturity', 'paid_in', 'paid_out']);
+
+/** Getter sắp xếp; nhóm số liệu không đủ quyền xem ⇒ null (luôn xuống cuối, không rò rỉ thứ tự). */
+export function partnerSortGetters(
+  metric: (r: PartnerLean) => PartnerNumbers,
+  companyNames: ReadonlyMap<string, string>,
+  visible: SummaryVisibility,
+): Record<string, (r: PartnerLean) => SortKey> {
+  return {
+    name: (r) => r.name,
+    type: (r) => r.type,
+    status: (r) => r.status,
+    tax: (r) => r.tax_code ?? null,
+    company: (r) => companyNames.get(idOf(r.company_id)) ?? null,
+    bank: (r) => [r.bank_name, r.account_number, r.tax_code].filter(Boolean).join(' ') || null,
+    receivable: (r) => (visible.debt ? minorKey(metric(r).receivable_remaining) : null),
+    payable: (r) => (visible.debt ? minorKey(metric(r).payable_remaining) : null),
+    overdue: (r) => (visible.debt ? minorKey(metric(r).overdue_amount) : null),
+    outstanding: (r) => (visible.loan ? minorKey(metric(r).outstanding) : null),
+    maturity: (r) => (visible.loan ? metric(r).next_maturity_date : null),
+    paid_in: (r) => (visible.cash ? minorKey(metric(r).paid_in_period) : null),
+    paid_out: (r) => (visible.cash ? minorKey(metric(r).paid_out_period) : null),
+  };
 }
 
 function toLedgerPartner(p: PartnerLean): LedgerPartner {
@@ -923,6 +983,10 @@ export function partnerRefOf(p: PartnerLean): PartnerRefView {
   };
 }
 
+/** Khoá sắp xếp của ô chọn / bảng gộp đối tác (có trần `limit` nên sắp xếp phải ở Mongo, trước khi cắt). */
+export const PARTNER_OPTION_SORT_FIELDS = ['code', 'name', 'bank', 'tax'] as const;
+const PARTNER_OPTION_SORT_PATH: Record<string, string> = { code: 'code', name: 'name_key', bank: 'bank_name', tax: 'tax_code' };
+
 /** Ô chọn đối tác (tìm theo tên / STK / MST, lọc loại). Mặc định chỉ đối tác đang hoạt động. */
 export async function partnerOptions(input: {
   companyIds: string[] | null;
@@ -932,11 +996,15 @@ export async function partnerOptions(input: {
   limit: number;
   /** Tra đúng các mã (khớp chính xác) — không áp trần `limit`: số bản ghi tối đa = số mã. */
   codes?: string[];
+  /** `<cột>` / `-<cột>` (PARTNER_OPTION_SORT_FIELDS); trống = theo tên */
+  sort?: string;
 }): Promise<PartnerRefView[]> {
   const filter = partnerFilter({ ...input, status: input.status ?? 'active' });
   if (input.codes) filter.code = { $in: input.codes };
   const limit = input.codes ? Math.max(1, input.codes.length) : input.limit;
-  const rows = await Models.Partner.find(filter as never).sort({ name_key: 1 }).limit(limit).lean<PartnerLean[]>();
+  const spec = parseSort(input.sort, PARTNER_OPTION_SORT_FIELDS);
+  const order: Record<string, 1 | -1> = spec ? { [PARTNER_OPTION_SORT_PATH[spec.field] as string]: spec.dir, _id: spec.dir } : { name_key: 1 };
+  const rows = await Models.Partner.find(filter as never).sort(order).limit(limit).lean<PartnerLean[]>();
   return rows.map(partnerRefOf);
 }
 
@@ -1020,29 +1088,31 @@ function debtOutOf(d: DebtView): DebtOut {
   };
 }
 
-/** Tab "Phiếu thu/chi": phiếu có `partner_id` = đối tác (cùng công ty), mới nhất trước. */
-export async function partnerDocuments(p: PartnerLean, q: { status?: string; kind?: 'spend' | 'income'; limit: number }): Promise<DocumentRowOut[]> {
+/** Khoá sắp xếp tab Phiếu thu/chi = `key` cột phía web → trường Mongo (sắp xếp TRƯỚC khi cắt `limit`). */
+export const PARTNER_DOC_SORT_FIELDS = ['code', 'kind', 'title', 'amount', 'date', 'status'] as const;
+const PARTNER_DOC_SORT_PATH: Record<string, string> = { code: 'code', kind: 'kind', title: 'title', amount: 'amount.minor', date: '_sort_date', status: 'status' };
+
+/** Tab "Phiếu thu/chi": phiếu có `partner_id` = đối tác (cùng công ty); mặc định mới nhất trước, hoặc theo `sort`. */
+export async function partnerDocuments(
+  p: PartnerLean,
+  q: { status?: string; kind?: 'spend' | 'income'; limit: number; sort?: string },
+): Promise<DocumentRowOut[]> {
   const filter: Record<string, unknown> = { company_id: p.company_id, partner_id: p._id };
   if (q.status) filter.status = q.status;
   if (q.kind) filter.kind = q.kind;
-  const rows = await Models.Document.find(filter as never)
-    .sort({ business_date: -1, _id: -1 })
-    .limit(q.limit)
-    .select({ code: 1, kind: 1, status: 1, title: 1, business_date: 1, planned_date: 1, amount: 1, execution: 1, tag_ids: 1 })
-    .lean<
-      {
-        _id: unknown;
-        code?: string;
-        kind: string;
-        status?: string;
-        title?: string;
-        business_date?: string;
-        planned_date?: string;
-        amount?: { minor?: unknown; currency?: string | null } | null;
-        execution?: { paid_at?: string | null } | null;
-        tag_ids?: unknown[];
-      }[]
-    >();
+  const spec = parseSort(q.sort, PARTNER_DOC_SORT_FIELDS);
+  const projection = { code: 1, kind: 1, status: 1, title: 1, business_date: 1, planned_date: 1, amount: 1, execution: 1, tag_ids: 1 };
+  const query = spec
+    ? Models.Document.aggregate([
+        { $match: filter },
+        // cột "Ngày" hiển thị planned_date ?? business_date → sắp xếp đúng giá trị đó
+        { $addFields: { _sort_date: { $ifNull: ['$planned_date', '$business_date'] } } },
+        { $sort: { [PARTNER_DOC_SORT_PATH[spec.field] as string]: spec.dir, _id: -1 } },
+        { $limit: q.limit },
+        { $project: projection },
+      ] as never[]).collation(spec.field === 'amount' ? { locale: 'en', numericOrdering: true } : { locale: 'vi' })
+    : Models.Document.find(filter as never).sort({ business_date: -1, _id: -1 }).limit(q.limit).select(projection).lean();
+  const rows = await (query as unknown as { exec(): Promise<unknown[]> }).exec().then((r) => r as DocLeanRow[]);
   return rows.map((d) => ({
     _id: idOf(d._id),
     code: String(d.code ?? ''),
@@ -1055,6 +1125,19 @@ export async function partnerDocuments(p: PartnerLean, q: { status?: string; kin
     paid_at: d.execution?.paid_at ?? null,
     tag_ids: (d.tag_ids ?? []).map((t) => idOf(t)),
   }));
+}
+
+interface DocLeanRow {
+  _id: unknown;
+  code?: string;
+  kind: string;
+  status?: string;
+  title?: string;
+  business_date?: string;
+  planned_date?: string;
+  amount?: { minor?: unknown; currency?: string | null } | null;
+  execution?: { paid_at?: string | null } | null;
+  tag_ids?: unknown[];
 }
 
 export interface DocumentRowOut {

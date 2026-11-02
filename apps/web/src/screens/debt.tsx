@@ -25,6 +25,7 @@ import {
   type StatusKey,
 } from '@fingate/shared';
 import { ApiRequestError } from '../app/api.ts';
+import { onSortChange, withServerSort } from '../app/table-sort.ts';
 import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
 import { usePartner } from '../app/v2/partners.ts';
 import {
@@ -97,6 +98,10 @@ function statusLabelVi(s: string): string {
   return STATUS_REGISTRY[s as StatusKey]?.labelVi ?? s;
 }
 
+/** Cột sắp xếp phía máy chủ của danh sách công nợ (khoá cột = tên trường `sort`); mặc định: hạn tăng dần. */
+const DEBT_SORT_KEYS = ['code', 'partner', 'direction', 'acct', 'value', 'applied', 'remaining', 'due', 'created_at'] as const;
+const DEBT_DEFAULT_SORT = 'due';
+
 const ddmmyyyy = (iso: string): string => dayjs(iso).format('DD/MM/YYYY');
 
 function partnerNameOf(r: { partner: PartnerRef | null; party_name: string }): string {
@@ -108,8 +113,6 @@ function accountLabelOf(partnerType: string | null): string {
   const acct = accountCodeOf(partnerType);
   return acct ? `TK ${acct} · ${PARTY_LABEL[partnerType ?? ''] ?? partnerType}` : 'Chọn đối tác để suy TK';
 }
-
-const cmpBig = (a: bigint, b: bigint): number => (a === b ? 0 : a > b ? 1 : -1);
 
 function KpiCard({ label, value, emphasis }: { label: string; value: MoneyWire; emphasis?: boolean }): ReactNode {
   return (
@@ -132,7 +135,6 @@ function debtColumns(): TableColumnsType<DebtRow> {
       title: 'Mã',
       dataIndex: 'code',
       key: 'code',
-      sorter: (a, b) => a.code.localeCompare(b.code),
       render: (v: string, r: DebtRow) => (
         <Link className="fg-link" to={`/cong-no/phieu/${r._id}`} style={{ whiteSpace: 'nowrap' }}>
           {v}
@@ -142,7 +144,6 @@ function debtColumns(): TableColumnsType<DebtRow> {
     {
       title: 'Đối tác',
       key: 'partner',
-      sorter: (a, b) => partnerNameOf(a).localeCompare(partnerNameOf(b), 'vi'),
       render: (_v, r: DebtRow) => (
         <div>
           <div>{partnerNameOf(r)}</div>
@@ -157,16 +158,14 @@ function debtColumns(): TableColumnsType<DebtRow> {
       title: 'Hướng',
       dataIndex: 'direction',
       key: 'direction',
-      sorter: (a, b) => a.direction.localeCompare(b.direction),
       render: (v: DebtDirection) => <FgToneChip tone={DIRECTION_TONE[v]}>{DEBT_DIRECTION_LABEL[v]}</FgToneChip>,
     },
-    { title: 'TK', dataIndex: 'account_code', key: 'acct', width: 90, sorter: (a, b) => a.account_code.localeCompare(b.account_code) },
+    { title: 'TK', dataIndex: 'account_code', key: 'acct', width: 90 },
     {
       title: 'Giá trị',
       dataIndex: 'value',
       key: 'value',
       align: 'right',
-      sorter: (a, b) => cmpBig(minorOf(a.value), minorOf(b.value)),
       render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} style={{ whiteSpace: 'nowrap' }} />,
     },
     {
@@ -174,7 +173,6 @@ function debtColumns(): TableColumnsType<DebtRow> {
       dataIndex: 'offset_applied',
       key: 'applied',
       align: 'right',
-      sorter: (a, b) => cmpBig(minorOf(a.offset_applied), minorOf(b.offset_applied)),
       render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} style={{ whiteSpace: 'nowrap' }} />,
     },
     {
@@ -182,7 +180,6 @@ function debtColumns(): TableColumnsType<DebtRow> {
       dataIndex: 'remaining',
       key: 'remaining',
       align: 'right',
-      sorter: (a, b) => cmpBig(minorOf(a.remaining), minorOf(b.remaining)),
       render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} emphasis style={{ whiteSpace: 'nowrap' }} />,
     },
     {
@@ -191,7 +188,6 @@ function debtColumns(): TableColumnsType<DebtRow> {
       dataIndex: 'due_date',
       key: 'due',
       width: 140,
-      sorter: (a, b) => a.due_date.localeCompare(b.due_date),
       render: (v: string, r: DebtRow) => (
         <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, whiteSpace: 'nowrap' }}>
           <span className="fg-num">{ddmmyyyy(v)}</span>
@@ -210,7 +206,6 @@ function debtColumns(): TableColumnsType<DebtRow> {
       dataIndex: 'created_at',
       key: 'created_at',
       align: 'right',
-      sorter: (a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''),
       render: (v: string | null) => <FgDateTime value={v} />,
     },
   ];
@@ -310,6 +305,7 @@ export function DebtListScreen(): ReactNode {
   const partner = usePartner(partnerId || null);
   /* Phân trang phía server (tham số `page` trên URL); KPI tính trên toàn bộ dòng khớp. */
   const page = Math.max(1, Number(searchParams.get('page')) || 1);
+  const sort = searchParams.get('sort') ?? '';
 
   const setParam = (key: string, value?: string): void => {
     const next = new URLSearchParams(searchParams);
@@ -326,6 +322,7 @@ export function DebtListScreen(): ReactNode {
     overdue_only: overdueOnly ? 'true' : undefined,
     partner_id: partnerId || undefined,
     q: q || undefined,
+    sort: sort || undefined,
     limit: DEBT_PAGE_SIZE,
     page,
   });
@@ -415,6 +412,8 @@ export function DebtListScreen(): ReactNode {
                 </div>
               );
             }
+            const columns = withServerSort(debtColumns(), DEBT_SORT_KEYS, sort, DEBT_DEFAULT_SORT);
+            const onTableChange = onSortChange((v) => setParam('sort', v || undefined));
             const open = data.items.filter((r) => minorOf(r.remaining) > 0n);
             const settled = data.items.filter((r) => minorOf(r.remaining) <= 0n);
             return (
@@ -425,7 +424,7 @@ export function DebtListScreen(): ReactNode {
                   <KpiCard label="Còn lại" value={data.totals.remaining} emphasis />
                 </div>
                 <div className="fg-card" style={{ padding: 0 }}>
-                  <FgTable rowKey="_id" tableLayout="auto" dataSource={open} columns={debtColumns()} />
+                  <FgTable rowKey="_id" tableLayout="auto" dataSource={open} columns={columns} onChange={onTableChange} />
                 </div>
                 {settled.length ? (
                   <div style={{ marginTop: 'var(--fg-space-4)' }}>
@@ -434,7 +433,7 @@ export function DebtListScreen(): ReactNode {
                     </FgButton>
                     {showSettled ? (
                       <div className="fg-card" style={{ padding: 0, marginTop: 'var(--fg-space-2)' }}>
-                        <FgTable rowKey="_id" size="small" tableLayout="auto" dataSource={settled} columns={debtColumns()} />
+                        <FgTable rowKey="_id" size="small" tableLayout="auto" dataSource={settled} columns={columns} onChange={onTableChange} />
                       </div>
                     ) : null}
                   </div>

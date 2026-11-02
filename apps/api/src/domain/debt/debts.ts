@@ -6,6 +6,7 @@
 import { ApiError, today } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
 import { scopedFind } from '../../lib/mongo.ts';
+import { parseSort, sortRows, type SortKey } from '../../lib/sort.ts';
 import { buildHistoryEntry, mirrorAudit } from '../audit/index.ts';
 import { emitDomainEvent } from '../events/index.ts';
 import { nextSequentialCode } from '../numbering/index.ts';
@@ -207,6 +208,22 @@ export interface DebtListInput {
   page: number;
 }
 
+type BuiltDebt = ReturnType<typeof buildDebt>;
+const itemStr = (b: BuiltDebt, k: string): string => String(b.item[k] ?? '');
+
+/** Trường sắp xếp được của danh sách công nợ (khoá cột phía web) → khoá so sánh trên khoản đã dựng. */
+export const DEBT_SORT_GETTERS: Record<string, (b: BuiltDebt) => SortKey> = {
+  code: (b) => itemStr(b, 'code'),
+  partner: (b) => itemStr(b, 'party_name'),
+  direction: (b) => itemStr(b, 'direction'),
+  acct: (b) => itemStr(b, 'account_code'),
+  value: (b) => b.value,
+  applied: (b) => b.applied,
+  remaining: (b) => b.figures.remaining,
+  due: (b) => itemStr(b, 'due_date'),
+  created_at: (b) => itemStr(b, 'created_at'),
+};
+
 /** Danh sách công nợ + tổng hợp; lọc quá hạn / tuổi nợ thực hiện sau khi suy chỉ tiêu. */
 export async function listDebts(scope: ScopeLike, q: DebtListInput) {
   const clauses = baseClauses(scope, q);
@@ -218,9 +235,11 @@ export async function listDebts(scope: ScopeLike, q: DebtListInput) {
     const rx = { $regex: escapeRegex(term), $options: 'i' };
     clauses.push({ $or: [{ partner_id: { $in: ids } }, { code: rx }, { contract_code: rx }] });
   }
-  const rows = await fetchDebts(scope, clauses, q.sort === 'value' ? { value_minor: -1 } : { due_date: 1 });
+  const rows = await fetchDebts(scope, clauses, { due_date: 1 });
   const ctx = await debtContext(rows);
   let built = rows.map((d) => buildDebt(d, ctx));
+  // sắp xếp theo cột người dùng chọn (ổn định trên thứ tự mặc định: hạn tăng dần); `sort` lạ/rỗng → giữ mặc định
+  built = sortRows(built, parseSort(q.sort, Object.keys(DEBT_SORT_GETTERS)), DEBT_SORT_GETTERS);
   if (q.overdue_only === 'true') built = built.filter((b) => b.figures.remaining > 0n && b.figures.overdue_days > 0);
   if (q.bucket) built = built.filter((b) => b.figures.aging_bucket === q.bucket);
   let remaining = 0n;

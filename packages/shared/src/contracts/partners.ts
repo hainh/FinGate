@@ -105,6 +105,8 @@ export const partnerSearchQuery = z.object({
    * (công ty có hơn 1.000 ngân hàng thì mã ngoài 1.000 đầu vẫn tra được). Tối đa 1.000 mã.
    */
   codes: z.string().max(12_000).optional(),
+  /** Sắp xếp trước khi cắt `limit`: `<cột>` / `-<cột>` (code, name, bank, tax); trống = theo tên. */
+  sort: z.string().max(32).optional(),
 });
 export type PartnerSearchQuery = z.infer<typeof partnerSearchQuery>;
 

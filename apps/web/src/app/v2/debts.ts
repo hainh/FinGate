@@ -670,6 +670,8 @@ export interface DebtListFilters {
   q?: string;
   overdue_only?: 'true';
   bucket?: AgingBucket;
+  /** `<cột>` tăng dần, `-<cột>` giảm dần (sắp xếp phía máy chủ). */
+  sort?: string;
   limit?: number;
   page?: number;
 }
@@ -769,6 +771,8 @@ export interface LoanListFilters {
   q?: string;
   /** `'true'` = chỉ tổng hợp (totals, by_bank), không tải `items`. */
   summary?: 'true';
+  /** `<cột>` tăng dần, `-<cột>` giảm dần (sắp xếp phía máy chủ). */
+  sort?: string;
   /** trang (đánh số từ 1) và cỡ trang — danh sách phân trang phía máy chủ. */
   page?: number;
   limit?: number;

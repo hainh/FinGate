@@ -6,6 +6,7 @@
 import { ApiError, addDays, today } from '@fingate/shared';
 import { Models } from '../db/models.ts';
 import { oid } from '../lib/mongo.ts';
+import { minorKey, parseSort, sortRows, type SortKey } from '../lib/sort.ts';
 import { loadPipelineDocs, plannedFlowsByAccount, plannedFlowsOf } from './ledger/planned.ts';
 import { bankAccountLabelOf, maskAccount } from './queries/index.ts';
 
@@ -167,15 +168,29 @@ export async function ledgerAccountViews(
 /** Cỡ trang mặc định của danh sách tài khoản tiền khi chỉ gửi `page` (màn BANK-01). */
 export const BANK_ACCOUNT_PAGE_SIZE = 50;
 
+/** Trường sắp xếp (khoá cột phía web): tk = nhãn tài khoản, num = số TK, cur = loại tiền, bal/proj/min = số tiền, st = trạng thái. */
+export const BANK_ACCOUNT_SORT_FIELDS = ['tk', 'kind', 'num', 'cur', 'bal', 'proj', 'min', 'st'] as const;
+const BANK_ACCOUNT_SORT_GETTERS: Record<string, (r: LedgerAccountView) => SortKey> = {
+  tk: (r) => r.label,
+  kind: (r) => r.kind,
+  num: (r) => r.account_number_masked,
+  cur: (r) => r.currency,
+  bal: (r) => minorKey(r.actual),
+  proj: (r) => minorKey(r.projected),
+  min: (r) => minorKey(r.min_balance),
+  st: (r) => r.status,
+};
+
 /**
  * Lọc theo loại tài khoản (`kind`) rồi cắt một trang (`page` đánh số từ 1, `limit`). Không gửi cả `page` lẫn
  * `limit` ⇒ trả toàn bộ. `total` là số tài khoản khớp `kind`, trước khi cắt trang.
  */
 export function pageAccountViews(
   rows: LedgerAccountView[],
-  opts: { kind?: string; page?: number; limit?: number } = {},
+  opts: { kind?: string; page?: number; limit?: number; sort?: string } = {},
 ): { items: LedgerAccountView[]; total: number } {
-  const listed = opts.kind ? rows.filter((r) => r.kind === opts.kind) : rows;
+  const filtered = opts.kind ? rows.filter((r) => r.kind === opts.kind) : rows;
+  const listed = sortRows(filtered, parseSort(opts.sort, BANK_ACCOUNT_SORT_FIELDS), BANK_ACCOUNT_SORT_GETTERS);
   if (opts.page === undefined && opts.limit === undefined) return { items: listed, total: listed.length };
   const page = opts.page ?? 1;
   const limit = opts.limit ?? BANK_ACCOUNT_PAGE_SIZE;

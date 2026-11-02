@@ -56,3 +56,20 @@ describe('pageAccountViews — lọc loại TK rồi cắt trang (BANK-01)', () 
     expect(r.total).toBe(60);
   });
 });
+
+describe('pageAccountViews — sắp xếp trước khi cắt trang', () => {
+  const acct = (id: string, label: string, actual: bigint, kind = 'bank') =>
+    ({ account_id: id, label, actual, projected: actual, min_balance: 0n, kind, currency: 'VND', status: 'active', account_number_masked: id }) as unknown as LedgerAccountView;
+  const rows = [acct('a', 'B', 5n), acct('b', 'A', 100n), acct('c', 'C', -7n)];
+
+  it('sort=bal xếp theo số dư (bigint) và áp trước khi cắt trang', () => {
+    expect(pageAccountViews(rows, { sort: 'bal' }).items.map((r) => r.account_id)).toEqual(['c', 'a', 'b']);
+    expect(pageAccountViews(rows, { sort: '-bal', page: 1, limit: 1 }).items.map((r) => r.account_id)).toEqual(['b']);
+  });
+
+  it('sort=tk theo nhãn; trường lạ / rỗng giữ thứ tự gốc', () => {
+    expect(pageAccountViews(rows, { sort: 'tk' }).items.map((r) => r.label)).toEqual(['A', 'B', 'C']);
+    expect(pageAccountViews(rows, { sort: 'xyz' }).items.map((r) => r.account_id)).toEqual(['a', 'b', 'c']);
+    expect(pageAccountViews(rows, { sort: '' }).items.map((r) => r.account_id)).toEqual(['a', 'b', 'c']);
+  });
+});

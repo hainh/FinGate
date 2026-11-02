@@ -31,6 +31,8 @@ export const partnerDirectoryQuery = z
     q: z.string().trim().max(200).optional(),
     limit: z.coerce.number().int().min(1).max(200).default(50),
     offset: z.coerce.number().int().min(0).max(100000).default(0),
+    /** `<cột>` tăng dần / `-<cột>` giảm dần (xem PARTNER_SORT_FIELDS); trống = theo tên. */
+    sort: z.string().trim().max(32).optional(),
     period_from: businessDate.optional().describe('Đầu kỳ thu/chi (mặc định: ngày 1 tháng hiện tại)'),
     period_to: businessDate.optional().describe('Cuối kỳ thu/chi (mặc định: hôm nay)'),
   })
@@ -46,6 +48,8 @@ export const partnerTabQuery = z.object({
   status: z.string().trim().max(40).optional(),
   kind: z.enum(['spend', 'income']).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
+  /** sắp xếp trước khi cắt `limit` (tab Phiếu): `<cột>` / `-<cột>`; trống = mới nhất trước. */
+  sort: z.string().trim().max(32).optional(),
 });
 export type PartnerTabQuery = z.infer<typeof partnerTabQuery>;
 

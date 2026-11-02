@@ -38,6 +38,7 @@ import { nextDocumentCode } from '../domain/numbering/index.ts';
 import { invalidateFor } from '../domain/side-effects.ts';
 import { emitVoucherEvent, type VoucherEventSubject } from '../domain/events/index.ts';
 import { syncInternalPartners } from '../domain/partner/internal.ts';
+import { minorKey, parseSort, sortRows, type SortKey } from '../lib/sort.ts';
 
 /** Chi tiết tài khoản tiền cho form sửa (BANK-02) — trả số TK đầy đủ (đã kiểm quyền ở route). */
 async function bankAccountDetail(id: string): Promise<Record<string, unknown>> {
@@ -131,6 +132,31 @@ async function withBankPartnerName<T extends { loan_id: string; bank_name: strin
     return p ? { ...r, bank_name: p.name } : r;
   });
 }
+
+/** BANK-05: khoá sắp xếp = `key` cột phía web. */
+const TX_SORT_FIELDS = ['at', 'dir', 'opening', 'amount', 'closing', 'total', 'content', 'cp', 'doc'] as const;
+interface TxSortItem {
+  at: string | null;
+  direction: string;
+  opening: unknown;
+  amount: unknown;
+  closing: unknown;
+  total: unknown;
+  content: string;
+  counterparty: string;
+  document: { code: string } | null;
+}
+const TX_SORT_GETTERS: Record<string, (r: TxSortItem) => SortKey> = {
+  at: (r) => (r.at ? new Date(r.at).getTime() : null),
+  dir: (r) => r.direction,
+  opening: (r) => minorKey(r.opening),
+  amount: (r) => minorKey(r.amount),
+  closing: (r) => minorKey(r.closing),
+  total: (r) => minorKey(r.total),
+  content: (r) => r.content,
+  cp: (r) => r.counterparty,
+  doc: (r) => r.document?.code ?? null,
+};
 
 export function financeRoutes(app: FastifyInstance): void {
   /* ------------------------------- BANK ------------------------------- */
@@ -524,7 +550,7 @@ export function financeRoutes(app: FastifyInstance): void {
         const isGroup = Boolean(account.is_group);
         if (!isGroup) assertCompanyScope(req, account.company_id ? String(account.company_id) : null);
 
-        const q = req.query as { limit?: string; from?: string; to?: string; partner?: string };
+        const q = req.query as { limit?: string; from?: string; to?: string; partner?: string; sort?: string };
         const limitRaw = Number(q.limit ?? 500);
         const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 2000) : 500;
         // Bộ lọc kỳ (YYYY-MM-DD, tuỳ chọn): bỏ trống = toàn bộ thời gian; `to` không vượt quá hôm nay.
@@ -612,10 +638,7 @@ export function financeRoutes(app: FastifyInstance): void {
           else outTotal += r.amount;
         }
 
-        const items = filtered
-          .slice(-limit) // `limit` bút toán mới nhất trong kết quả lọc
-          .reverse() // mới nhất lên trước
-          .map(({ entry, doc, direction, amount, opening, closing, partnerId, counterparty }) => {
+        const toItem = ({ entry, doc, direction, amount, opening, closing, partnerId, counterparty }: (typeof rows)[number]) => {
             const exec = (doc?.execution ?? null) as { paid_at?: string | null } | null;
             const createdAt = entry.created_at ? new Date(String(entry.created_at)).toISOString() : null;
             // ưu tiên mốc thực thi (nếu có giờ), còn lại dùng created_at (đủ giây).
@@ -649,7 +672,15 @@ export function financeRoutes(app: FastifyInstance): void {
                   }
                 : null,
             };
-          });
+        };
+        // Sắp xếp theo cột (`sort`): xếp TOÀN BỘ kết quả lọc rồi mới cắt `limit`; mặc định `limit` bút toán mới nhất, mới nhất trước.
+        const sortSpec = parseSort(q.sort, TX_SORT_FIELDS);
+        const items = sortSpec
+          ? sortRows(filtered.slice().reverse().map(toItem), sortSpec, TX_SORT_GETTERS).slice(0, limit)
+          : filtered
+              .slice(-limit) // `limit` bút toán mới nhất trong kết quả lọc
+              .reverse() // mới nhất lên trước
+              .map(toItem);
 
         return ok(
           reply,

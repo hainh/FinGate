@@ -29,6 +29,7 @@ import {
   type StatusKey,
 } from '@fingate/shared';
 import { ApiRequestError } from '../app/api.ts';
+import { onSortChange, withServerSort } from '../app/table-sort.ts';
 import { useAuth, useCurrentCompanyId } from '../app/store.tsx';
 import { useActiveBankCodes } from '../app/v2/partners.ts';
 import {
@@ -87,7 +88,6 @@ function statusLabelVi(s: string): string {
 
 const ddmmyyyy = (iso: string): string => dayjs(iso).format('DD/MM/YYYY');
 const bankNameOf = (r: { partner: { name: string } | null; bank_name: string }): string => r.partner?.name ?? r.bank_name;
-const cmpBig = (a: bigint, b: bigint): number => (a === b ? 0 : a > b ? 1 : -1);
 
 /** Trạng thái khoản nợ NH: nhãn + màu từ registry (không tự đặt màu). */
 function StatusTag({ status }: { status: string }): ReactNode {
@@ -127,7 +127,6 @@ function loanColumns(): TableColumnsType<LoanRow> {
       title: 'Mã',
       dataIndex: 'code',
       key: 'code',
-      sorter: (a, b) => a.code.localeCompare(b.code),
       render: (v: string, r: LoanRow) => (
         <Link className="fg-link" to={`/ngan-hang/khoan-vay/${r._id}`}>
           {v}
@@ -137,7 +136,6 @@ function loanColumns(): TableColumnsType<LoanRow> {
     {
       title: 'Ngân hàng',
       key: 'bank',
-      sorter: (a, b) => bankNameOf(a).localeCompare(bankNameOf(b), 'vi'),
       render: (_v, r: LoanRow) =>
         r.partner_id ? (
           <Link className="fg-link" to={`/doi-tac/${r.partner_id}`}>
@@ -147,13 +145,12 @@ function loanColumns(): TableColumnsType<LoanRow> {
           bankNameOf(r)
         ),
     },
-    { title: 'Công ty', dataIndex: 'company_name', key: 'co', sorter: (a, b) => a.company_name.localeCompare(b.company_name, 'vi') },
+    { title: 'Công ty', dataIndex: 'company_name', key: 'co' },
     {
       title: 'Số tiền vay',
       dataIndex: 'principal',
       key: 'principal',
       align: 'right',
-      sorter: (a, b) => cmpBig(minorOf(a.principal), minorOf(b.principal)),
       render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} />,
     },
     {
@@ -161,7 +158,6 @@ function loanColumns(): TableColumnsType<LoanRow> {
       dataIndex: 'repaid',
       key: 'repaid',
       align: 'right',
-      sorter: (a, b) => cmpBig(minorOf(a.repaid), minorOf(b.repaid)),
       render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} />,
     },
     {
@@ -169,21 +165,18 @@ function loanColumns(): TableColumnsType<LoanRow> {
       dataIndex: 'outstanding',
       key: 'outstanding',
       align: 'right',
-      sorter: (a, b) => cmpBig(minorOf(a.outstanding), minorOf(b.outstanding)),
       render: (v: MoneyWire) => <FgMoneyStack value={moneyFromWire(v)} emphasis />,
     },
     {
       title: 'Lãi suất',
       dataIndex: 'interest_rate',
       key: 'ir',
-      sorter: (a, b) => Number(a.interest_rate.replace(',', '.')) - Number(b.interest_rate.replace(',', '.')),
       render: (v: string) => `${interestRateText(v)} %/năm`,
     },
     {
       title: 'Hạn thanh toán',
       dataIndex: 'maturity_date',
       key: 'md',
-      sorter: (a, b) => a.maturity_date.localeCompare(b.maturity_date),
       render: (_v, r: LoanRow) => (
         <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
           <span className="fg-num">{ddmmyyyy(r.maturity_date)}</span>
@@ -195,7 +188,6 @@ function loanColumns(): TableColumnsType<LoanRow> {
       title: 'Trạng thái',
       dataIndex: 'status',
       key: 'st',
-      sorter: (a, b) => bankDebtStatusLabel(a.status).localeCompare(bankDebtStatusLabel(b.status), 'vi'),
       render: (v: string) => <StatusTag status={v} />,
     },
     { title: 'Nguồn', key: 'origin', render: (_v, r: LoanRow) => <OriginTag origin={r.origin} /> },
@@ -203,9 +195,7 @@ function loanColumns(): TableColumnsType<LoanRow> {
       title: 'Ngày tạo',
       dataIndex: 'created_at',
       key: 'created_at',
-      defaultSortOrder: 'descend',
       align: 'right',
-      sorter: (a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''),
       render: (v: string | null) => <FgDateTime value={v} />,
     },
   ];
@@ -456,6 +446,10 @@ function BankDebtImportModal({ open, onClose, onImported }: { open: boolean; onC
   );
 }
 
+/** Cột sắp xếp phía máy chủ của danh sách khoản vay (khoá cột = tên trường `sort`); mặc định: hạn thanh toán tăng dần. */
+const LOAN_SORT_KEYS = ['code', 'bank', 'co', 'principal', 'repaid', 'outstanding', 'ir', 'md', 'st', 'created_at'] as const;
+const LOAN_DEFAULT_SORT = 'md';
+
 /** Cỡ trang danh sách khoản vay (phân trang phía máy chủ — `items` chỉ gồm một trang). */
 const LOAN_PAGE_SIZE = 50;
 
@@ -466,7 +460,8 @@ export function BankDebtListScreen(): ReactNode {
   const [search, setSearch] = useState('');
   const q = useDebounced(search.trim(), 300);
   const [page, setPage] = useState(1);
-  const query = useLoanList({ status, q: q || undefined, page, limit: LOAN_PAGE_SIZE });
+  const [sort, setSort] = useState('');
+  const query = useLoanList({ status, q: q || undefined, sort: sort || undefined, page, limit: LOAN_PAGE_SIZE });
   const [importOpen, setImportOpen] = useState(false);
 
   const setStatus = (v?: string): void => {
@@ -550,7 +545,15 @@ export function BankDebtListScreen(): ReactNode {
               </div>
             ) : (
               <div className="fg-card" style={{ padding: 0 }}>
-                <FgTable rowKey="_id" dataSource={data.items} columns={loanColumns()} />
+                <FgTable
+                  rowKey="_id"
+                  dataSource={data.items}
+                  columns={withServerSort(loanColumns(), LOAN_SORT_KEYS, sort, LOAN_DEFAULT_SORT)}
+                  onChange={onSortChange((v) => {
+                    setPage(1);
+                    setSort(v);
+                  })}
+                />
                 {data.total > LOAN_PAGE_SIZE ? (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--fg-space-2)', padding: 'var(--fg-space-4) 0' }}>
                     <FgText style="caption" color="muted">

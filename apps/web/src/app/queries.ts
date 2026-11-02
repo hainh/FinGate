@@ -70,6 +70,8 @@ export interface QueueFilters {
   status?: string;
   partner_id?: string;
   tag_ids?: string[];
+  /** `<cột>` tăng dần, `-<cột>` giảm dần (xem DocListScreen.SORTABLE_COLUMNS). */
+  sort?: string;
 }
 
 export function useQueue(params: QueueFilters = {}, enabled = true) {
@@ -129,12 +131,12 @@ export function useDecisionPack(id: string | undefined, sourceAccountId?: string
 }
 
 /** "Tôi đã duyệt" (APPR-02). `q`: ô tìm (mã, tiêu đề, đối tác, STK/MST, tag) — cùng cách khớp với hàng chờ. */
-export function useProcessed(limit = 50, enabled = true, q?: string, page = 1) {
+export function useProcessed(limit = 50, enabled = true, q?: string, page = 1, sort?: string) {
   const { scope, can } = useAuth();
   return useQuery({
-    queryKey: ['queue-processed', scope, limit, q ?? '', page],
+    queryKey: ['queue-processed', scope, limit, q ?? '', page, sort ?? ''],
     enabled: enabled && can('approval:act'),
-    queryFn: () => apiCall<ListResult<QueueRow>>('/queue/processed', { query: { scope, limit, page, q: q || undefined } }),
+    queryFn: () => apiCall<ListResult<QueueRow>>('/queue/processed', { query: { scope, limit, page, q: q || undefined, sort: sort || undefined } }),
   });
 }
 
@@ -184,11 +186,11 @@ export function useBankAccounts(companyId?: string | null) {
 }
 
 /** BANK-01 — một trang tài khoản tiền: phân trang và lọc loại TK ở máy chủ (`totals` vẫn trên mọi tài khoản). */
-export function useBankAccountsPage(filters: { page: number; limit: number; kind?: 'bank' | 'cash' }) {
+export function useBankAccountsPage(filters: { page: number; limit: number; kind?: 'bank' | 'cash'; sort?: string }) {
   const { scope } = useAuth();
   return useQuery({
     queryKey: ['bank-accounts', 'page', scope, filters],
-    queryFn: () => apiCall<BankAccountListResult>('/bank-accounts', { query: { scope, ...filters } }),
+    queryFn: () => apiCall<BankAccountListResult>('/bank-accounts', { query: { scope, ...filters, sort: filters.sort || undefined } }),
   });
 }
 
@@ -221,15 +223,15 @@ export function useBalancesHistory(date?: string) {
 }
 
 /** BANK-05 — lịch sử giao dịch của một tài khoản tiền. `range` (YYYY-MM-DD, tuỳ chọn) — bỏ trống = toàn bộ thời gian. */
-export function useBankAccountTransactions(id: string | undefined, range: { from?: string; to?: string; partner?: string } = {}) {
+export function useBankAccountTransactions(id: string | undefined, range: { from?: string; to?: string; partner?: string; sort?: string } = {}) {
   const { scope } = useAuth();
-  const { from, to, partner } = range;
+  const { from, to, partner, sort } = range;
   return useQuery({
-    queryKey: ['bank-account-transactions', scope, id, from ?? '', to ?? '', partner ?? ''],
+    queryKey: ['bank-account-transactions', scope, id, from ?? '', to ?? '', partner ?? '', sort ?? ''],
     enabled: !!id,
     queryFn: () =>
       apiData<import('./types.ts').BankAccountTransactions>(`/bank-accounts/${id}/transactions`, {
-        query: { scope, ...(from ? { from } : {}), ...(to ? { to } : {}), ...(partner ? { partner } : {}) },
+        query: { scope, ...(from ? { from } : {}), ...(to ? { to } : {}), ...(partner ? { partner } : {}), ...(sort ? { sort } : {}) },
       }),
   });
 }

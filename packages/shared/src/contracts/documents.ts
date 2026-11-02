@@ -330,7 +330,7 @@ export const documentListQuery = z.object({
     .string()
     .max(60)
     .default('-waiting')
-    .describe('-waiting | -planned_date | -amount | -created_at | +created_at'),
+    .describe('<trường> tăng dần, -<trường> giảm dần; trường: waiting | code | title | status | amount | planned_date | created_at'),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   /**
    * Trang (đánh số từ 1) — FgPagination (docs/03_screens.md, docs/02_design_system.md §7.21: 20/50/100).
@@ -344,6 +344,7 @@ export type DocumentListQuery = z.infer<typeof documentListQuery>;
 /** GET /queue/processed — "Tôi đã duyệt": ô tìm + phân trang như danh sách phiếu. */
 export const queueProcessedQuery = z.object({
   q: z.string().max(200).optional(),
+  sort: z.string().max(60).optional().describe('Như documentListQuery.sort; mặc định -created_at'),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   page: z.coerce.number().int().min(1).max(10_000).default(1),
 });

@@ -29,6 +29,7 @@ import {
   type PartnerType,
 } from '@fingate/shared';
 import { SCOPE_ALL, useAuth, useCurrentCompanyId } from '../app/store.tsx';
+import { onSortChange, withServerSort } from '../app/table-sort.ts';
 import {
   debtDirectionOf,
   usePartner,
@@ -141,6 +142,9 @@ type ListDialog =
   | { kind: 'merge'; partner: PartnerListRow }
   | { kind: 'delete'; partner: PartnerListRow };
 
+/** Cột sắp xếp được ở máy chủ (khoá cột = tên trường `sort`). */
+const PARTNER_SORT_KEYS = ['name', 'company', 'type', 'bank', 'receivable', 'payable', 'overdue', 'outstanding', 'maturity', 'paid_in', 'paid_out', 'status'];
+
 export function PartnersScreen(): ReactNode {
   const { can, scope } = useAuth();
   const currentCompanyId = useCurrentCompanyId();
@@ -168,6 +172,7 @@ export function PartnersScreen(): ReactNode {
   const rawPeriod = get('period');
   const period = /^\d{4}-\d{2}$/.test(rawPeriod) ? rawPeriod : currentPeriod();
   const page = Math.max(1, Number(get('page')) || 1);
+  const sort = get('sort');
   const range = periodRange(period);
   const filters = useMemo<PartnerListFilters>(
     () => ({
@@ -178,8 +183,9 @@ export function PartnersScreen(): ReactNode {
       period_to: range.to,
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
+      sort: sort || undefined,
     }),
-    [type, status, qDebounced, range.from, range.to, page],
+    [type, status, qDebounced, range.from, range.to, page, sort],
   );
   const list = usePartnerList(filters);
 
@@ -451,7 +457,14 @@ export function PartnersScreen(): ReactNode {
                 {countUnit(data.total, 'đối tác')}
               </FgText>
               <div className="fg-card" style={{ padding: 0 }}>
-                <FgTable<PartnerListRow> rowKey="_id" dataSource={data.items} columns={columns} pagination={false} scroll={{ x: 1280 }} />
+                <FgTable<PartnerListRow>
+                  rowKey="_id"
+                  dataSource={data.items}
+                  columns={withServerSort(columns, PARTNER_SORT_KEYS, sort, 'name')}
+                  onChange={onSortChange((s) => setFilter('sort', s))}
+                  pagination={false}
+                  scroll={{ x: 1280 }}
+                />
               </div>
               {data.total > PAGE_SIZE ? (
                 <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--fg-space-4) 0' }}>
@@ -725,7 +738,9 @@ export function PartnerDetailScreen(): ReactNode {
 /* ================= tab chi tiết ================= */
 
 function VouchersTab({ partnerId }: { partnerId: string }): ReactNode {
-  const q = usePartnerVouchers(partnerId);
+  // tab chỉ tải một phần (trần số phiếu) ⇒ sắp xếp phía máy chủ rồi mới cắt
+  const [sort, setSort] = useState('');
+  const q = usePartnerVouchers(partnerId, sort);
   return (
     <FgQuery query={q} skeleton={<FgSkeletonTable rows={4} cols={5} />}>
       {(data) =>
@@ -740,7 +755,8 @@ function VouchersTab({ partnerId }: { partnerId: string }): ReactNode {
             rowKey="_id"
             dataSource={data.items}
             pagination={false}
-            columns={[
+            onChange={onSortChange(setSort)}
+            columns={withServerSort<PartnerVoucherRow>([
               {
                 title: 'Mã',
                 key: 'code',
@@ -770,7 +786,7 @@ function VouchersTab({ partnerId }: { partnerId: string }): ReactNode {
                 key: 'status',
                 render: (_v, r: PartnerVoucherRow) => <FgStatusChip status={r.status} />,
               },
-            ]}
+            ], ['code', 'kind', 'title', 'amount', 'date', 'status'], sort)}
           />
         )
       }

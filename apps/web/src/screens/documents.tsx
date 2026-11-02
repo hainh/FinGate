@@ -23,9 +23,10 @@ import {
   today,
 } from '@fingate/shared';
 import { useDocuments, useProcessed, useQueue, type DocListFilters, type QueueFilters } from '../app/queries.ts';
+import { onSortChange, withServerSort } from '../app/table-sort.ts';
 import type { QueueRow } from '../app/types.ts';
 import { FgButton, FgDateTime, FgMoneyStack, FgSelect, FgStatusChip, FgText } from '../components/primitives.tsx';
-import { FgEmptyState, FgPagination, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
+import { FgEmptyState, FgPagination, FgSkeletonTable, FgTable, useIsCardView } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useDebounced } from '../components/pagekit.tsx';
 import { SCOPE_ALL, useAuth } from '../app/store.tsx';
@@ -40,6 +41,12 @@ const STATUS_OPTIONS = [
   ...STATUS_KEYS.filter((k) => k !== 'overdue').map((k) => ({ value: k, label: statusLabel(k) })),
 ];
 
+/** Cột sắp xếp được trên máy chủ (khoá cột = tên trường `sort` của API). */
+const SORTABLE_COLUMNS = ['code', 'title', 'status', 'amount', 'waiting', 'planned_date', 'created_at'] as const;
+const DEFAULT_SORT = '-waiting';
+const PROCESSED_DEFAULT_SORT = '-created_at';
+
+/** Dạng thẻ (di động) không có tiêu đề cột để bấm → giữ ô chọn sắp xếp. */
 const SORTS = [
   { value: '-waiting', label: 'Chờ lâu nhất' },
   { value: '-amount', label: 'Số tiền lớn nhất' },
@@ -98,7 +105,7 @@ function TagList({ tags }: { tags: DocTagRef[] }): ReactNode {
   );
 }
 
-export function useDocColumns(sortable = false, showCreatedAt = false): TableColumnsType<QueueRow> {
+export function useDocColumns(showCreatedAt = false): TableColumnsType<QueueRow> {
   return useMemo(
     () =>
       [
@@ -106,7 +113,6 @@ export function useDocColumns(sortable = false, showCreatedAt = false): TableCol
           title: 'Mã / loại',
           dataIndex: 'code',
           key: 'code',
-          sorter: sortable ? (a: QueueRow, b: QueueRow) => a.code.localeCompare(b.code) : undefined,
           render: (_v: unknown, r: QueueRow) => (
             <div>
               <Link to={deepLink(r)} className="fg-link" style={{ fontWeight: 500 }}>
@@ -165,7 +171,6 @@ export function useDocColumns(sortable = false, showCreatedAt = false): TableCol
           dataIndex: 'amount',
           key: 'amount',
           align: 'right',
-          sorter: (a: QueueRow, b: QueueRow) => Number(BigInt(a.amount.minor) - BigInt(b.amount.minor)),
           render: (_v: unknown, r: QueueRow) => <FgMoneyStack value={moneyFromWire(r.amount)} emphasis />,
         },
         {
@@ -176,7 +181,7 @@ export function useDocColumns(sortable = false, showCreatedAt = false): TableCol
         },
         {
           title: 'Bàn xử lý',
-          key: 'owner',
+          key: 'waiting',
           render: (_v: unknown, r: QueueRow) =>
             r.current_owner ? (
               <OwnerLine owner={r.owner_name ?? r.current_owner} roleLabel={r.current_owner} waitingDays={r.waiting_days} />
@@ -190,7 +195,6 @@ export function useDocColumns(sortable = false, showCreatedAt = false): TableCol
           title: 'Hạn thanh toán',
           dataIndex: 'planned_date',
           key: 'planned_date',
-          sorter: sortable ? (a: QueueRow, b: QueueRow) => (a.planned_date ?? '').localeCompare(b.planned_date ?? '') : undefined,
           align: 'right',
           render: (v: string, r: QueueRow) => {
             const late = isDeadlinePast(v) && !['paid', 'cancelled', 'rejected'].includes(r.status);
@@ -213,13 +217,12 @@ export function useDocColumns(sortable = false, showCreatedAt = false): TableCol
                 dataIndex: 'created_at',
                 key: 'created_at',
                 align: 'right',
-                sorter: sortable ? (a: QueueRow, b: QueueRow) => (a.created_at ?? '').localeCompare(b.created_at ?? '') : undefined,
                 render: (v: string | null | undefined) => <FgDateTime value={v} />,
               },
             ]
           : []),
       ] as TableColumnsType<QueueRow>,
-    [sortable, showCreatedAt],
+    [showCreatedAt],
   );
 }
 
@@ -273,8 +276,6 @@ export interface DocListConfig {
   bulk?: boolean;
   createHref?: string;
   createLabel?: string;
-  /** sắp xếp trực tiếp trên cột bảng (ẩn dropdown "Sắp xếp" ở thanh lọc). */
-  sortOnTable?: boolean;
   /** thêm cột "Ngày tạo" (màn Thu / Chi). */
   showCreatedAt?: boolean;
   /**
@@ -291,7 +292,6 @@ export function DocListScreen({
   bulk,
   createHref,
   createLabel,
-  sortOnTable = false,
   showCreatedAt = false,
   swimlanes,
 }: DocListConfig): ReactNode {
@@ -347,7 +347,7 @@ export function DocListScreen({
       // chế độ swimlane tự nhóm theo trạng thái → bỏ lọc trạng thái để mọi lane có dữ liệu
       status: swimlanes ? undefined : get('status') || (fixed.status as DocListFilters['status']) || undefined,
       mine: (get('mine') as DocListFilters['mine']) || fixed.mine,
-      sort: get('sort') || fixed.sort || '-waiting',
+      sort: get('sort') || fixed.sort || DEFAULT_SORT,
       overdue_only: fixed.overdue_only,
       partner_id: partnerParam || undefined,
       tag_ids: tagIds.length ? tagIds : undefined,
@@ -367,19 +367,24 @@ export function DocListScreen({
       status: get('status') || undefined,
       partner_id: partnerParam || undefined,
       tag_ids: tagIds.length ? tagIds : undefined,
+      sort: get('sort') || DEFAULT_SORT,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [qDebounced, get('status'), partnerParam, tagIds, pageSize, page],
+    [qDebounced, get('status'), partnerParam, tagIds, pageSize, page, get('sort')],
   );
   const queue = useQueue(queueFilters, source === 'queue');
   const docs = useDocuments(filters, source === 'documents');
-  const processed = useProcessed(pageSize, source === 'processed', qDebounced || undefined, page);
+  const processed = useProcessed(pageSize, source === 'processed', qDebounced || undefined, page, get('sort') || PROCESSED_DEFAULT_SORT);
   const query = source === 'queue' ? queue : source === 'processed' ? processed : docs;
 
   const [selected, setSelected] = useState<Record<string, QueueRow>>({});
   const [bulkOpen, setBulkOpen] = useState(false);
   const anyFilter = Boolean(qDebounced || get('status') || get('mine') || partnerParam || tagIds.length);
-  const columns = useDocColumns(sortOnTable, showCreatedAt);
+  const baseColumns = useDocColumns(showCreatedAt);
+  // Tiêu đề cột chỉ hiển thị mũi tên; thứ tự do máy chủ trả theo `?sort=` (bảng phân trang — sắp trên trang là sai)
+  const defaultSort = source === 'processed' ? PROCESSED_DEFAULT_SORT : DEFAULT_SORT;
+  const columns = useMemo(() => withServerSort(baseColumns, SORTABLE_COLUMNS, get('sort'), defaultSort), [baseColumns, params, defaultSort]);
+  const isCardView = useIsCardView();
   // Duyệt hàng loạt chỉ dành cho người có quyền duyệt; kế toán thực thi không chọn bulk.
   const selectable = Boolean(bulk) && can('approval:act');
 
@@ -421,9 +426,9 @@ export function DocListScreen({
         {filterable ? (
           <TagFilter value={tagIds} onChange={(ids) => setFilter('tag_ids', ids.join(','))} companyId={scope === SCOPE_ALL ? null : scope} />
         ) : null}
-        {sortOnTable ? null : (
-          <FgSelect ariaLabel="Sắp xếp" options={SORTS} value={get('sort') || '-waiting'} onChange={(v) => setFilter('sort', v ?? '')} style={{ width: 180 }} />
-        )}
+        {isCardView ? (
+          <FgSelect ariaLabel="Sắp xếp" options={SORTS} value={get('sort') || defaultSort} onChange={(v) => setFilter('sort', v ?? '')} style={{ width: 180 }} />
+        ) : null}
         <FgSearchInput value={qText} onChange={setQText} />
         {anyFilter ? (
           <FgButton size="small" variant="ghost" onClick={clearAll}>
@@ -523,6 +528,7 @@ export function DocListScreen({
                 rowKey="_id"
                 columns={tableColumns}
                 dataSource={list}
+                onChange={onSortChange((v) => setFilter('sort', v))}
                 onRow={(r) => ({
                   onClick: (e) => {
                     if ((e.target as HTMLElement).closest('a,input,button')) return;
@@ -669,7 +675,6 @@ export function SpendListScreen(): ReactNode {
       fixed={{ kind: 'spend' }}
       createHref="/chi/moi"
       createLabel="+ Đề nghị chi"
-      sortOnTable
       showCreatedAt
       swimlanes={SPEND_LANES}
     />
@@ -683,7 +688,6 @@ export function SpendPendingScreen(): ReactNode {
       title="Chi chờ duyệt"
       source="documents"
       fixed={{ kind: 'spend', status: PENDING_APPROVAL_STATUSES }}
-      sortOnTable
       showCreatedAt
     />
   );
@@ -691,7 +695,7 @@ export function SpendPendingScreen(): ReactNode {
 
 /** CHI-07 — đã thanh toán. */
 export function SpendPaidScreen(): ReactNode {
-  return <DocListScreen title="Chi đã thanh toán" source="documents" fixed={{ kind: 'spend', status: 'paid' }} sortOnTable showCreatedAt />;
+  return <DocListScreen title="Chi đã thanh toán" source="documents" fixed={{ kind: 'spend', status: 'paid' }} showCreatedAt />;
 }
 
 /** THU-01 — danh sách thu (swimlane: đã duyệt chờ thu lên đầu cho kế toán thực hiện). */
@@ -703,7 +707,6 @@ export function IncomeListScreen(): ReactNode {
       fixed={{ kind: 'income' }}
       createHref="/thu/moi"
       createLabel="+ Khoản thu"
-      sortOnTable
       showCreatedAt
       swimlanes={INCOME_LANES}
     />
@@ -717,7 +720,6 @@ export function IncomeOverdueScreen(): ReactNode {
       title="Thu quá hạn"
       source="documents"
       fixed={{ kind: 'income', overdue_only: 'true' }}
-      sortOnTable
       showCreatedAt
     />
   );

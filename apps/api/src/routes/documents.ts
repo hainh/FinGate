@@ -242,7 +242,7 @@ export function documentRoutes(app: FastifyInstance): void {
           q: q.q?.trim() || undefined,
           limit: q.limit,
           page: q.page,
-          sort: '-created_at',
+          sort: q.sort ?? '-created_at',
         });
         return ok(reply, { items, total, limit: q.limit, page: q.page }, { maxAge: 15 });
       },

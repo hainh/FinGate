@@ -43,6 +43,8 @@ export const bankAccountListQuery = z.object({
   page: z.coerce.number().int().min(1).max(10_000).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   kind: accountKind.optional(),
+  /** `<cột>` tăng dần, `-<cột>` giảm dần (tk, kind, num, cur, bal, proj, min, st); trống ⇒ thứ tự mặc định. */
+  sort: z.string().max(32).optional(),
 });
 
 export const bankAccountRow = z.object({
@@ -361,6 +363,7 @@ export const debtListQuery = z.object({
   overdue_only: z.enum(['true', 'false']).optional(),
   counterparty: z.string().max(200).optional(),
   q: z.string().max(200).optional(),
+  /** Sắp xếp phía máy chủ: `<cột>` tăng dần, `-<cột>` giảm dần (code, partner, direction, acct, value, applied, remaining, due, created_at). */
   sort: z.string().max(40).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   page: z.coerce.number().int().min(1).default(1),

@@ -16,6 +16,7 @@ import { FgEmptyState, FgPagination, FgSegmented, FgSkeletonTable, FgTable } fro
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery } from '../components/pagekit.tsx';
 import type { BankAccountRow } from '../app/types.ts';
+import { onSortChange, withServerSort } from '../app/table-sort.ts';
 
 /** Cỡ trang danh sách tài khoản (phân trang phía máy chủ — `items` chỉ gồm một trang). */
 const BANK_ACCOUNT_PAGE_SIZE = 50;
@@ -25,10 +26,12 @@ export function BankAccountsScreen(): ReactNode {
   const navigate = useNavigate();
   const [kindFilter, setKindFilter] = useState<'all' | 'cash' | 'bank'>('all');
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState('');
   const query = useBankAccountsPage({
     page,
     limit: BANK_ACCOUNT_PAGE_SIZE,
     kind: kindFilter === 'all' ? undefined : kindFilter,
+    sort,
   });
   const canEdit = (r: BankAccountRow) => can('bank:write') && (!r.is_group || can('admin:group_accounts'));
   return (
@@ -86,7 +89,11 @@ export function BankAccountsScreen(): ReactNode {
                       style: { cursor: 'pointer' },
                       title: 'Xem lịch sử giao dịch',
                     })}
-                    columns={[
+                    onChange={onSortChange((s) => {
+                      setSort(s);
+                      setPage(1);
+                    })}
+                    columns={withServerSort<BankAccountRow>([
                       {
                         title: 'Tài khoản',
                         key: 'tk',
@@ -170,7 +177,7 @@ export function BankAccountsScreen(): ReactNode {
                             </span>
                           ) : null,
                       },
-                    ]}
+                    ], ['tk', 'kind', 'num', 'cur', 'bal', 'proj', 'min', 'st'], sort)}
                   />
                   {data.total > BANK_ACCOUNT_PAGE_SIZE ? (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--fg-space-2)', padding: 'var(--fg-space-4) 0' }}>

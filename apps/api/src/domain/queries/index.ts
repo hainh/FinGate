@@ -28,6 +28,7 @@ import {
 } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
 import { cacheThrough } from '../../lib/cache.ts';
+import { parseSort } from '../../lib/sort.ts';
 import { oid, scopedAggregate, scopedCount, withScope, type Scope } from '../../lib/mongo.ts';
 import { waitingDays } from '../calendar/index.ts';
 import { parseRate, simpleInterest } from '../loan-schedule/index.ts';
@@ -344,25 +345,26 @@ export function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** Cột bảng sắp xếp được trên máy chủ (`sort=<trường>` tăng dần, `sort=-<trường>` giảm dần). */
+export const QUEUE_SORT_FIELDS = ['code', 'title', 'status', 'amount', 'planned_date', 'created_at', 'waiting'] as const;
+
+const QUEUE_SORT_PATHS: Record<string, string> = {
+  code: 'code',
+  title: 'title',
+  status: 'status',
+  amount: 'amount.minor',
+  planned_date: 'planned_date',
+  created_at: 'created_at',
+};
+
 export function sortForQueue(sort?: string): Record<string, 1 | -1> {
-  switch (sort) {
-    case '-amount':
-      return { 'amount.minor': -1 };
-    case '-planned_date':
-      return { planned_date: -1 };
-    case 'planned_date':
-      return { planned_date: 1 };
-    case 'created_at':
-      return { created_at: 1 };
-    case '-created_at':
-      return { created_at: -1 };
-    case 'waiting':
-      return { sla_deadline: -1 };
-    case '-waiting':
-    default:
-      // "chờ lâu nhất" lên đầu (screens §8.3 APPR-01)
-      return { sla_deadline: 1, updated_at: 1 };
+  const spec = parseSort(sort, QUEUE_SORT_FIELDS);
+  if (spec?.field === 'waiting') {
+    // "chờ lâu nhất" (giảm dần) lên đầu = hạn SLA sớm nhất (screens §8.3 APPR-01)
+    return spec.dir === -1 ? { sla_deadline: 1, updated_at: 1 } : { sla_deadline: -1, updated_at: -1 };
   }
+  if (spec) return { [QUEUE_SORT_PATHS[spec.field]!]: spec.dir };
+  return { sla_deadline: 1, updated_at: 1 };
 }
 
 export async function queryQueue(input: QueueQuery): Promise<{ items: QueueRow[]; total: number }> {
@@ -372,15 +374,12 @@ export async function queryQueue(input: QueueQuery): Promise<{ items: QueueRow[]
   const skip = ((input.page ?? 1) - 1) * input.limit;
   // `_id` là khoá tie-break: các khoá sắp xếp (hạn SLA, số tiền, ngày) không duy nhất, nếu không thì
   // phân trang skip/limit có thể trả trùng hoặc sót hồ sơ giữa các trang.
-  const [rows, total] = await Promise.all([
-    Models.Document.find(f as never)
-      .select(LIST_PROJECTION as never)
-      .sort({ ...sortForQueue(input.sort), _id: 1 })
-      .skip(skip)
-      .limit(input.limit)
-      .lean(),
-    Models.Document.countDocuments(f as never),
-  ]);
+  let find = Models.Document.find(f as never)
+    .select(LIST_PROJECTION as never)
+    .sort({ ...sortForQueue(input.sort), _id: 1 });
+  // tiêu đề tiếng Việt: so sánh theo bảng chữ cái (có dấu); chỉ bật khi sắp theo tiêu đề để các truy vấn khác vẫn dùng index
+  if (parseSort(input.sort, QUEUE_SORT_FIELDS)?.field === 'title') find = find.collation({ locale: 'vi' });
+  const [rows, total] = await Promise.all([find.skip(skip).limit(input.limit).lean(), Models.Document.countDocuments(f as never)]);
   const items = await decorateRows(rows as unknown as Record<string, unknown>[]);
   return { items, total };
 }

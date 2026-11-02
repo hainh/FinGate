@@ -161,6 +161,8 @@ export const loanListQuery = z.object({
   q: z.string().max(200).optional(),
   /** `true` = chỉ tổng hợp (totals, by_bank), không trả `items`: màn đáo hạn không tải cả danh sách chỉ để cộng tổng. */
   summary: z.enum(['true', 'false']).optional(),
+  /** Sắp xếp phía máy chủ: `<cột>` tăng dần, `-<cột>` giảm dần (code, bank, co, principal, repaid, outstanding, ir, md, st, created_at). */
+  sort: z.string().max(40).optional(),
   /** Trang (đánh số từ 1): `items` chỉ gồm `limit` khoản của trang; `total`, `totals`, `by_bank` luôn tính trên mọi khoản khớp. */
   page: z.coerce.number().int().min(1).max(10_000).default(1),
   /** Cỡ trang (trần 1.000: mục "Sắp giải ngân" và form đảo hạn cần đủ khoản của một lần tải, vẫn có trần). */

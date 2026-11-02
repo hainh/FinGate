@@ -214,6 +214,8 @@ export interface PartnerOptionsParams {
   q?: string;
   status?: PartnerStatus;
   limit?: number;
+  /** `<cột>` / `-<cột>` (code, name, bank, tax); trống = theo tên. */
+  sort?: string;
 }
 
 export interface PartnerListFilters {
@@ -226,6 +228,8 @@ export interface PartnerListFilters {
   period_to?: string;
   limit?: number;
   offset?: number;
+  /** `<cột>` tăng dần / `-<cột>` giảm dần; trống = theo tên. */
+  sort?: string;
 }
 
 /** Chiều của khoản công nợ: v2 `direction`, fallback từ v1 `side` (debit = phải thu). */
@@ -340,6 +344,8 @@ export interface PartnerCopySourceFilters {
   q?: string;
   offset?: number;
   limit?: number;
+  /** `<cột>` / `-<cột>` (name, type, bank, company…); trống = theo tên. */
+  sort?: string;
 }
 
 /**
@@ -350,13 +356,14 @@ export function usePartnerCopySource(companyId: string | null | undefined, filte
   const q = filters.q?.trim() || undefined;
   const offset = filters.offset ?? 0;
   const limit = filters.limit ?? 50;
+  const sort = filters.sort || undefined;
   return useQuery({
-    queryKey: ['partners-copy-source', companyId ?? '', q ?? '', offset, limit],
+    queryKey: ['partners-copy-source', companyId ?? '', q ?? '', offset, limit, sort ?? ''],
     enabled: !!companyId,
     queryFn: () =>
       apiCall<PartnerListResult>('/partners', {
         scope: companyId ?? undefined,
-        query: { company_id: companyId ?? undefined, status: 'active', q, offset, limit },
+        query: { company_id: companyId ?? undefined, status: 'active', q, offset, limit, sort },
       }),
   });
 }
@@ -379,14 +386,14 @@ export function usePartnerDuplicateCheck(body: PartnerDuplicateCheckBody | null)
 }
 
 /** Tab Phiếu thu/chi của đối tác. */
-export function usePartnerVouchers(partnerId: string | undefined) {
+export function usePartnerVouchers(partnerId: string | undefined, sort = '') {
   const { scope } = useAuth();
   return useQuery({
-    queryKey: ['partner-vouchers', scope, partnerId ?? ''],
+    queryKey: ['partner-vouchers', scope, partnerId ?? '', sort],
     enabled: !!partnerId,
     // đổi đối tác: không hiện phiếu của đối tác trước trong lúc tải
     placeholderData: undefined,
-    queryFn: () => apiCall<{ items: PartnerVoucherRow[]; total: number }>(`/partners/${partnerId}/documents`, { query: { scope, limit: 100 } }),
+    queryFn: () => apiCall<{ items: PartnerVoucherRow[]; total: number }>(`/partners/${partnerId}/documents`, { query: { scope, limit: 100, sort: sort || undefined } }),
   });
 }
 
