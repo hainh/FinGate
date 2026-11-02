@@ -13,6 +13,7 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    allowedHosts: ["breaking-does-logical-dispatch.trycloudflare.com"]
   },
   // Khai báo dep sớm để Vite không re-optimize giữa session (tách bản react-router khi lazy).
   // @fingate/shared KHÔNG pre-bundle: là workspace ESM được build lại liên tục — để Vite
