@@ -18,6 +18,7 @@ import { FgQuery, useToast } from '../components/pagekit.tsx';
 import { PartnerPicker } from '../components/partner-picker.tsx';
 import { TagFilter } from '../components/tag-input.tsx';
 import type { ReportResult } from '../app/types.ts';
+import { usePageTitle } from '../lib/page-title.ts';
 
 /** Preset cần đối tác để có nội dung (sổ chi tiết đối tác). */
 const PARTNER_LEDGER_PRESET = 'so-chi-tiet-doi-tac';
@@ -110,6 +111,8 @@ export function ReportRunnerScreen(): ReactNode {
     partner_id: partnerId ?? undefined,
     tag_ids: tagIds.length ? tagIds.join(',') : undefined,
   });
+  // Header chung "Báo cáo" — tab trình duyệt mang tên báo cáo cụ thể (effect cha chạy sau FgPageHeader nên ghi đè được).
+  usePageTitle(query.data ? `Báo cáo · ${query.data.title}` : undefined);
 
   return (
     <>

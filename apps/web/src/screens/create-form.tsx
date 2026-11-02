@@ -64,6 +64,7 @@ import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useToast } from '../components/pagekit.tsx';
 import { PartnerPicker, partnerTypesFor } from '../components/partner-picker.tsx';
 import { TagInput } from '../components/tag-input.tsx';
+import { usePageTitle } from '../lib/page-title.ts';
 
 type PageKind = 'spend' | 'income' | 'rollover' | 'internal';
 
@@ -643,6 +644,8 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
   const lockedAfterApproval = !!loaded && !loaded.can.edit;
   const titlePrefix = `${id ? 'Sửa' : 'Tạo mới'} ${DOC_KIND_LABEL[kind].toLowerCase()}`;
   const pageTitle = !scopeAll && companyName ? `${titlePrefix} cho ${companyName}` : titlePrefix;
+  // Tab trình duyệt khi sửa: kèm mã phiếu để phân biệt nhiều tab đang mở.
+  usePageTitle(loaded ? `${titlePrefix} ${loaded.code}` : undefined);
 
   // Không tải được hồ sơ (vd. 403 ngoài phạm vi): hiện trạng thái lỗi như màn chi tiết (ERR-01), không hiện form trống.
   // Lỗi tải lại nền sau khi đã có hồ sơ không thay form đang sửa.

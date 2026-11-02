@@ -19,6 +19,8 @@ import { FgCard } from '../components/cards.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgEmptyState, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
 import { FgQuery, useToast } from '../components/pagekit.tsx';
+import { usePageTitle } from '../lib/page-title.ts';
+import { bankAccountTitleName } from './bank-history.tsx';
 
 const GROUP = 'group';
 
@@ -116,6 +118,8 @@ export function BankAccountFormScreen(): ReactNode {
   const companies = useCompanies();
   const existing = useBankAccount(id);
   const loaded = existing.data;
+  // Tab trình duyệt khi sửa: kèm tên tài khoản (header giữ "Sửa tài khoản tiền").
+  usePageTitle(id && loaded ? `Sửa · ${bankAccountTitleName(loaded)}` : undefined);
 
   const canGroup = can('admin:group_accounts');
   // Công ty đích = phạm vi đang chọn (xem useCurrentCompanyId).

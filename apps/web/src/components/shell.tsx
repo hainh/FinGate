@@ -15,6 +15,7 @@ import { useBadges, useUnreadCount } from '../app/queries.ts';
 import { apiData, openDownload } from '../app/api.ts';
 import { FgButton, FgText } from './primitives.tsx';
 import { useToast } from './pagekit.tsx';
+import { usePageTitle } from '../lib/page-title.ts';
 
 interface NavItem {
   to: string;
@@ -397,6 +398,8 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
 /** tiêu đề trang chuẩn §5.3 + meta scope/thời điểm. */
 export function FgPageHeader({ title, meta, actions }: { title: string; meta?: ReactNode; actions?: ReactNode }): ReactNode {
   const { me } = useAuth();
+  // Tiêu đề tab = tiêu đề màn (cụ thể theo bản ghi: mã phiếu, tên đối tác…), ghi đè mặc định theo route.
+  usePageTitle(title);
   return (
     <div className="fg-page-head">
       <div>

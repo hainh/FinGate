@@ -3,8 +3,9 @@
  * Screen lazy-load theo nhóm (budget bundle: report/admin route lazy).
  */
 
-import { useEffect, type ReactNode } from 'react';
-import { Navigate, Route, Routes, useLocation } from 'react-router';
+import { useEffect, useLayoutEffect, type ReactNode } from 'react';
+import { matchPath, Navigate, Route, Routes, useLocation } from 'react-router';
+import { formatPageTitle } from './lib/page-title.ts';
 import { useAuth } from './app/store.tsx';
 import { FgAppShell } from './components/shell.tsx';
 import { ActivateScreen, LoginScreen, ForgotPasswordScreen, ResetPasswordScreen } from './screens/auth.tsx';
@@ -144,8 +145,88 @@ function AdminHomeRedirect(): ReactNode {
   return <Navigate to="/403" replace />;
 }
 
+/**
+ * Tiêu đề tab trình duyệt theo route (khớp lần lượt, pattern cụ thể đứng trước).
+ * Màn có tên cụ thể hơn ghi đè bằng usePageTitle (lib/page-title.ts).
+ */
+const ROUTE_TITLES: [pattern: string, title: string][] = [
+  ['/dang-nhap', 'Đăng nhập'],
+  ['/kich-hoat', 'Kích hoạt tài khoản'],
+  ['/mat-khau/quen', 'Quên mật khẩu'],
+  ['/mat-khau/dat-lai', 'Đặt lại mật khẩu'],
+  ['/403', 'Không có quyền truy cập'],
+  ['/dashboard', 'Tổng quan'],
+  ['/cho-toi-duyet', 'Chờ tôi duyệt'],
+  ['/toi-da-duyet', 'Tôi đã duyệt'],
+  ['/can-bo-sung', 'Cần bổ sung'],
+  ['/can-xu-ly', 'Cần xử lý'],
+  ['/chi', 'Phiếu chi'],
+  ['/chi/cho-duyet', 'Phiếu chi chờ duyệt'],
+  ['/chi/da-thanh-toan', 'Phiếu chi đã thanh toán'],
+  ['/chi/moi', 'Tạo phiếu chi'],
+  ['/chi/:id/sua', 'Sửa phiếu chi'],
+  ['/thu', 'Phiếu thu'],
+  ['/thu/qua-han', 'Phiếu thu quá hạn'],
+  ['/thu/moi', 'Tạo phiếu thu'],
+  ['/thu/:id/sua', 'Sửa phiếu thu'],
+  ['/ngan-hang/taikhoan', 'Tài khoản ngân hàng'],
+  ['/ngan-hang/taikhoan/moi', 'Thêm tài khoản ngân hàng'],
+  ['/ngan-hang/taikhoan/:id/sua', 'Sửa tài khoản ngân hàng'],
+  ['/ngan-hang/taikhoan/:id', 'Lịch sử giao dịch tài khoản'],
+  ['/ngan-hang/khoan-vay', 'Nợ ngân hàng'],
+  ['/ngan-hang/khoan-vay/moi', 'Thêm khoản vay'],
+  ['/ngan-hang/khoan-vay/:id/sua', 'Sửa khoản vay'],
+  ['/ngan-hang/khoan-vay/:id/lich-tra', 'Lịch trả nợ'],
+  ['/ngan-hang/khoan-vay/:id', 'Chi tiết khoản vay'],
+  ['/ngan-hang/dao-han', 'Đáo hạn'],
+  ['/ngan-hang/dao-han/chuan-bi', 'Chuẩn bị đáo hạn'],
+  ['/ngan-hang/dao-han/phuong-an/moi', 'Tạo phương án đáo hạn'],
+  ['/ngan-hang/dao-han/phuong-an/:id/sua', 'Sửa phương án đáo hạn'],
+  ['/ngan-hang/chuyen-noi-bo', 'Chuyển tiền nội bộ'],
+  ['/ngan-hang/chuyen-noi-bo/moi', 'Tạo lệnh chuyển nội bộ'],
+  ['/ngan-hang/chuyen-noi-bo/:id/sua', 'Sửa lệnh chuyển nội bộ'],
+  ['/cong-no', 'Công nợ'],
+  ['/cong-no/moi', 'Tạo phiếu công nợ'],
+  ['/cong-no/phieu/:id/sua', 'Sửa phiếu công nợ'],
+  ['/cong-no/phieu/:id', 'Chi tiết phiếu công nợ'],
+  ['/doi-tac', 'Đối tác'],
+  ['/doi-tac/:id', 'Chi tiết đối tác'],
+  ['/dong-tien', 'Dòng tiền'],
+  ['/baocao', 'Báo cáo'],
+  ['/baocao/:preset', 'Báo cáo'],
+  ['/ban-tin/ngay', 'Bản tin ngày'],
+  ['/thong-bao', 'Thông báo'],
+  ['/tim-kiem', 'Tìm kiếm'],
+  ['/ho-so/chi/:id', 'Chi tiết phiếu chi'],
+  ['/ho-so/thu/:id', 'Chi tiết phiếu thu'],
+  ['/ho-so/noi-bo/:id', 'Chi tiết lệnh chuyển nội bộ'],
+  ['/ho-so/dao-han/:id', 'Chi tiết phương án đáo hạn'],
+  ['/ho-so/:loai/:id', 'Chi tiết hồ sơ'],
+  ['/quantri', 'Quản trị'],
+  ['/quantri/nguoidung', 'Quản trị · Người dùng'],
+  ['/quantri/cong-ty', 'Quản trị · Công ty'],
+  ['/quantri/quy-trinh-duyet', 'Quản trị · Quy trình duyệt'],
+  ['/quantri/nguong-duyet', 'Quản trị · Ngưỡng duyệt'],
+  ['/quantri/audit', 'Quản trị · Nhật ký hệ thống'],
+  ['/quantri/sao-luu', 'Quản trị · Sao lưu'],
+  ['/quantri/tags', 'Quản lý tag'],
+  ['/quantri/dinh-ky', 'Chi định kỳ'],
+  ['/quantri/tu-dong', 'Quy tắc tự động'],
+  ['/canh-bao', 'Cảnh báo'],
+  ['/ca-nhan', 'Cá nhân & cài đặt'],
+];
+
+/** Đặt tiêu đề mặc định theo route — layout effect chạy trước effect của màn nên usePageTitle ghi đè được. */
+function useRouteTitle(pathname: string): void {
+  useLayoutEffect(() => {
+    const hit = ROUTE_TITLES.find(([pattern]) => matchPath(pattern, pathname));
+    document.title = formatPageTitle(hit ? hit[1] : 'Không tìm thấy trang');
+  }, [pathname]);
+}
+
 export function AppRoutes(): ReactNode {
   const location = useLocation();
+  useRouteTitle(location.pathname);
   return (
     <Routes key={location.pathname}>
       <Route path="/dang-nhap" element={<LoginScreen />} />
