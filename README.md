@@ -20,6 +20,7 @@ pnpm install
 cp .env.example .env            # rồi sửa SESSION_SECRET / FIELD_KEY / TASK_TOKEN
 pnpm infra:up                   # MongoDB 8.0 single-node replica set rs0 (port 27017)
 pnpm dev                        # shared (tsc -w) + api (node --watch) + web (vite :5173)
+docker exec -i ff850b4e3c1f mongorestore --archive --gzip < ./fingate-20261104-104302.archive.gz # restore data from production to test
 ```
 
 Kiểm tra nhanh:
