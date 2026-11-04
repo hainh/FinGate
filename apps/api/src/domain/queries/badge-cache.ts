@@ -27,7 +27,9 @@ export function badgeCacheKey(input: {
   role?: string;
   canPay: boolean;
   tagIds?: readonly string[] | null;
+  /** APPR-01: số đếm của một tab (`turn` / `later`) khác số của cả hàng chờ ⇒ phải khác khoá. */
+  awaiting?: 'turn' | 'later';
 }): string {
   const pay = input.canPay ? 'pay' : '';
-  return `${BADGE_CACHE_PREFIX}${input.userId}:${scopeCacheKey(input.companyIds)}:${input.role ?? ''}:${pay}${tagFilterSuffix(input.tagIds)}`;
+  return `${BADGE_CACHE_PREFIX}${input.userId}:${scopeCacheKey(input.companyIds)}:${input.role ?? ''}:${pay}${tagFilterSuffix(input.tagIds)}${input.awaiting ? `:${input.awaiting}` : ''}`;
 }

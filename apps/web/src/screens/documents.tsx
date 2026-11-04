@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { Select, type TableColumnsType } from 'antd';
+import { Badge, Select, type TableColumnsType } from 'antd';
 import {
   STATUS_KEYS,
   daysBetween,
@@ -22,11 +22,11 @@ import {
   sum,
   today,
 } from '@fingate/shared';
-import { useDocuments, useProcessed, useQueue, type DocListFilters, type QueueFilters } from '../app/queries.ts';
+import { useAwaitingTurnCount, useDocuments, useProcessed, useQueue, type DocListFilters, type QueueFilters } from '../app/queries.ts';
 import { onSortChange, withServerSort } from '../app/table-sort.ts';
 import type { QueueRow } from '../app/types.ts';
 import { FgButton, FgDateTime, FgMoneyStack, FgSelect, FgStatusChip, FgText } from '../components/primitives.tsx';
-import { FgEmptyState, FgPagination, FgSkeletonTable, FgTable, useIsCardView } from '../components/uitk.tsx';
+import { FgEmptyState, FgPagination, FgSkeletonTable, FgTable, FgTabs, useIsCardView } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useDebounced } from '../components/pagekit.tsx';
 import { SCOPE_ALL, useAuth } from '../app/store.tsx';
@@ -58,6 +58,8 @@ const MINE_OPTIONS = [
   { value: '', label: 'Mọi hồ sơ' },
   { value: 'created', label: 'Do tôi tạo' },
   { value: 'to_approve', label: 'Chờ tôi duyệt' },
+  // APPR-01 · tab "Chờ đến lượt tôi duyệt": phiếu CHƯA duyệt, còn phải qua cấp dưới tôi duyệt xong
+  { value: 'waiting_turn', label: 'Chờ đến lượt tôi duyệt' },
   { value: 'approved_by_me', label: 'Tôi đã duyệt' },
 ];
 
@@ -268,6 +270,12 @@ function PartnerFilter({ value, onChange }: { value: string; onChange: (id: stri
   );
 }
 
+/**
+ * Tab của hàng chờ "Chờ tôi duyệt" (APPR-01): `turn` = phiếu đến lượt tôi duyệt NGAY,
+ * `later` = phiếu còn phải qua cấp dưới tôi duyệt xong mới tới lượt tôi.
+ */
+type ApprovalTab = 'turn' | 'later';
+
 export interface DocListConfig {
   title: string;
   source: 'queue' | 'documents' | 'processed';
@@ -283,6 +291,21 @@ export interface DocListConfig {
    * cùng (vd màn Chi: "Đã duyệt — chờ chi" lên đầu cho kế toán). Bỏ lọc trạng thái.
    */
   swimlanes?: { key: string; title: string; statuses: string[] }[];
+  /**
+   * APPR-01 — chia hàng chờ thành 2 tab theo thứ tự cấp duyệt (docs/03_screens.md):
+   * "Chờ tôi duyệt" (đến lượt tôi ngay, badge = số phiếu) và "Chờ đến lượt tôi duyệt"
+   * (còn phải qua cấp dưới duyệt xong). Chỉ để lại ô tìm, đối tác, tag.
+   */
+  approvalTabs?: boolean;
+}
+
+/** Thanh lọc của danh sách dùng chung (một hàng trên màn lớn, tự xuống dòng khi hẹp). */
+function FilterBar({ children }: { children: ReactNode }): ReactNode {
+  return (
+    <div className="fg-filterbar" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+      {children}
+    </div>
+  );
 }
 
 export function DocListScreen({
@@ -294,6 +317,7 @@ export function DocListScreen({
   createLabel,
   showCreatedAt = false,
   swimlanes,
+  approvalTabs = false,
 }: DocListConfig): ReactNode {
   const { can, scope } = useAuth();
   const canCreate = can('doc:create');
@@ -304,6 +328,17 @@ export function DocListScreen({
     const next = new URLSearchParams(params);
     if (v) next.set(k, v);
     else next.delete(k);
+    next.delete('page');
+    setParams(next);
+  };
+
+  // APPR-01: tab trên URL (?tab=later) để deep-link / F5 / quay lại giữ đúng tab đang xem.
+  const activeTab: ApprovalTab = approvalTabs && get('tab') === 'later' ? 'later' : 'turn';
+  const setTab = (tab: ApprovalTab) => {
+    const next = new URLSearchParams(params);
+    if (tab === 'later') next.set('tab', 'later');
+    else next.delete('tab');
+    // đổi tab là đổi tập hồ sơ ⇒ về trang 1 (không giữ số trang của tab kia)
     next.delete('page');
     setParams(next);
   };
@@ -339,6 +374,8 @@ export function DocListScreen({
   const partnerParam = filterable ? get('partner_id') : '';
   const tagParam = filterable ? get('tag_ids') : '';
   const tagIds = useMemo(() => parseTagParam(tagParam), [tagParam]);
+  // "Chờ đến lượt tôi duyệt" (ô "Phạm vi hồ sơ" của màn danh sách) = mine=to_approve + awaiting=later.
+  const untilMyTurn = source === 'documents' && get('mine') === 'waiting_turn';
 
   const filters: DocListFilters = useMemo(
     () => ({
@@ -346,7 +383,8 @@ export function DocListScreen({
       q: qDebounced || undefined,
       // chế độ swimlane tự nhóm theo trạng thái → bỏ lọc trạng thái để mọi lane có dữ liệu
       status: swimlanes ? undefined : get('status') || (fixed.status as DocListFilters['status']) || undefined,
-      mine: (get('mine') as DocListFilters['mine']) || fixed.mine,
+      mine: untilMyTurn ? 'to_approve' : (get('mine') as DocListFilters['mine']) || fixed.mine,
+      awaiting: untilMyTurn ? 'later' : undefined,
       sort: get('sort') || fixed.sort || DEFAULT_SORT,
       overdue_only: fixed.overdue_only,
       partner_id: partnerParam || undefined,
@@ -355,24 +393,26 @@ export function DocListScreen({
       page,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [qDebounced, get('status'), get('mine'), get('sort'), fixed, swimlanes, partnerParam, tagIds, pageSize, page],
+    [qDebounced, get('status'), get('mine'), get('sort'), fixed, swimlanes, partnerParam, tagIds, pageSize, page, untilMyTurn],
   );
 
-  // Hàng chờ nhận đủ bộ lọc của server (q, trạng thái, đối tác, tag) — trước đây bị bỏ, bảng không bao giờ được lọc.
+  // Hàng chờ nhận đủ bộ lọc của server (q, đối tác, tag, tab) — APPR-01 bỏ ô lọc trạng thái (2 tab chia sẵn).
   const queueFilters: QueueFilters = useMemo(
     () => ({
       limit: pageSize,
       page,
       q: qDebounced || undefined,
-      status: get('status') || undefined,
       partner_id: partnerParam || undefined,
       tag_ids: tagIds.length ? tagIds : undefined,
       sort: get('sort') || DEFAULT_SORT,
+      ...(approvalTabs ? { awaiting: activeTab } : { status: get('status') || undefined }),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [qDebounced, get('status'), partnerParam, tagIds, pageSize, page, get('sort')],
+    [qDebounced, get('status'), partnerParam, tagIds, pageSize, page, get('sort'), approvalTabs, activeTab],
   );
   const queue = useQueue(queueFilters, source === 'queue');
+  // Badge tab "Chờ tôi duyệt" = số phiếu đến lượt tôi duyệt (cùng endpoint /queue, cùng bộ lọc phạm vi).
+  const turnCount = useAwaitingTurnCount(approvalTabs);
   const docs = useDocuments(filters, source === 'documents');
   const processed = useProcessed(pageSize, source === 'processed', qDebounced || undefined, page, get('sort') || PROCESSED_DEFAULT_SORT);
   const query = source === 'queue' ? queue : source === 'processed' ? processed : docs;
@@ -383,7 +423,11 @@ export function DocListScreen({
   const baseColumns = useDocColumns(showCreatedAt);
   // Tiêu đề cột chỉ hiển thị mũi tên; thứ tự do máy chủ trả theo `?sort=` (bảng phân trang — sắp trên trang là sai)
   const defaultSort = source === 'processed' ? PROCESSED_DEFAULT_SORT : DEFAULT_SORT;
-  const columns = useMemo(() => withServerSort(baseColumns, SORTABLE_COLUMNS, get('sort'), defaultSort), [baseColumns, params, defaultSort]);
+  const columns = useMemo(
+    () => withServerSort(baseColumns, SORTABLE_COLUMNS, get('sort'), defaultSort),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [baseColumns, params, defaultSort],
+  );
   const isCardView = useIsCardView();
   // Duyệt hàng loạt chỉ dành cho người có quyền duyệt; kế toán thực thi không chọn bulk.
   const selectable = Boolean(bulk) && can('approval:act');
@@ -415,15 +459,43 @@ export function DocListScreen({
         }
       />
 
-      <div className="fg-filterbar">
-        {swimlanes ? null : (
-          <FgSelect ariaLabel="Lọc theo trạng thái" options={STATUS_OPTIONS} value={get('status')} onChange={(v) => setFilter('status', v ?? '')} style={{ width: 220 }} />
+      {approvalTabs ? (
+        <FgTabs
+          activeKey={activeTab}
+          onChange={(k: string) => setTab(k === 'later' ? 'later' : 'turn')}
+          items={[
+            {
+              key: 'turn',
+              label: (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  Chờ tôi duyệt
+                  <Badge
+                    count={turnCount.data?.summary?.count ?? 0}
+                    overflowCount={9999}
+                    showZero
+                    size="small"
+                    color="var(--fg-action-primary)"
+                  />
+                </span>
+              ),
+            },
+            { key: 'later', label: 'Chờ đến lượt tôi duyệt' },
+          ]}
+          style={{ marginBottom: 'var(--fg-space-2)' }}
+        />
+      ) : null}
+
+      <FilterBar>
+        {swimlanes || approvalTabs ? null : (
+          <FgSelect ariaLabel="Lọc theo trạng thái" options={STATUS_OPTIONS} value={get('status')} onChange={(v) => setFilter('status', v ?? '')} style={{ width: 200 }} />
         )}
         {source === 'documents' ? (
-          <FgSelect ariaLabel="Phạm vi hồ sơ" options={MINE_OPTIONS} value={get('mine')} onChange={(v) => setFilter('mine', v ?? '')} style={{ width: 170 }} />
+          <FgSelect ariaLabel="Phạm vi hồ sơ" options={MINE_OPTIONS} value={get('mine')} onChange={(v) => setFilter('mine', v ?? '')} style={{ width: 190 }} />
         ) : null}
-        {filterable && can('partner:read') ? <PartnerFilter value={partnerParam} onChange={(id) => setFilter('partner_id', id)} /> : null}
-        {filterable ? (
+        {filterable && !approvalTabs && can('partner:read') ? (
+          <PartnerFilter value={partnerParam} onChange={(id) => setFilter('partner_id', id)} />
+        ) : null}
+        {filterable && !approvalTabs ? (
           <TagFilter value={tagIds} onChange={(ids) => setFilter('tag_ids', ids.join(','))} companyId={scope === SCOPE_ALL ? null : scope} />
         ) : null}
         {isCardView ? (
@@ -435,7 +507,7 @@ export function DocListScreen({
             Xóa lọc
           </FgButton>
         ) : null}
-      </div>
+      </FilterBar>
 
       <FgQuery
         query={query}
@@ -490,8 +562,20 @@ export function DocListScreen({
                 <FgEmptyState
                   glyph="✓"
                   tone="success"
-                  title={source === 'queue' ? 'Không có hồ sơ nào chờ bạn' : 'Chưa có hồ sơ nào'}
-                  description={source === 'queue' ? 'Hàng chờ trống — mọi khoản đã được xử lý.' : undefined}
+                  title={
+                    source !== 'queue'
+                      ? 'Chưa có hồ sơ nào'
+                      : activeTab === 'later'
+                        ? 'Không có phiếu nào đang chờ cấp dưới duyệt'
+                        : 'Không có hồ sơ nào chờ bạn'
+                  }
+                  description={
+                    source !== 'queue'
+                      ? undefined
+                      : activeTab === 'later'
+                        ? 'Mọi phiếu có bước duyệt của bạn đều đã đến lượt bạn xử lý.'
+                        : 'Hàng chờ trống — mọi khoản đã được xử lý.'
+                  }
                   action={createHref && canCreate ? <Link to={createHref}><FgButton variant="primary">{createLabel}</FgButton></Link> : undefined}
                 />
               </div>
@@ -629,10 +713,12 @@ function FgSearchInput({ value, onChange }: { value: string; onChange: (v: strin
       onChange={(e) => onChange(e.target.value)}
       placeholder="Tìm mã, nội dung, đối tác, STK, MST, tag…"
       aria-label="Tìm kiếm trong danh sách"
+      // cùng chiều cao với ô chọn (FgSelect mặc định của antd) để cả hàng lọc thẳng trên một dòng
       style={{
         flex: '1 1 220px',
+        minWidth: 200,
         maxWidth: 360,
-        height: 36,
+        height: 'var(--fg-control-lg, 48px)',
         padding: '0 12px',
         borderRadius: 'var(--fg-radius-md)',
         border: '1px solid var(--fg-border-default)',
@@ -651,9 +737,12 @@ function useUrlSearchParamsShim(): [URLSearchParams, (p: URLSearchParams) => voi
 
 /* --------- các route cụ thể chỉ là config của khung --------- */
 
-/** APPR-01 — sort mặc định chờ lâu nhất, bulk bật. */
+/**
+ * APPR-01 — 2 tab chia theo thứ tự cấp duyệt, sort mặc định chờ lâu nhất, bulk bật.
+ * "Chờ tôi duyệt" (badge = số phiếu đến lượt tôi) · "Chờ đến lượt tôi duyệt" (?tab=later, không badge).
+ */
 export function ApprovalQueueScreen(): ReactNode {
-  return <DocListScreen title="Chờ tôi duyệt" source="queue" bulk />;
+  return <DocListScreen title="Chờ tôi duyệt" source="queue" bulk approvalTabs />;
 }
 
 /** APPR-02 — đã duyệt. */

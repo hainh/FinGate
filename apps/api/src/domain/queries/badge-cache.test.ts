@@ -33,6 +33,14 @@ describe('badgeCacheKey — badge "chờ tôi duyệt" phải khoá theo phạm 
     expect(badgeCacheKey({ ...base, tagIds: ['64d000000000000000000001'] })).not.toBe(k);
   });
 
+  it('badge của tab turn / later khác badge cả hàng chờ (APPR-01)', () => {
+    const base = { userId: U, companyIds: [CTA], canPay: true };
+    const all = badgeCacheKey(base);
+    const turn = badgeCacheKey({ ...base, awaiting: 'turn' });
+    const later = badgeCacheKey({ ...base, awaiting: 'later' });
+    expect(new Set([all, turn, later]).size).toBe(3);
+  });
+
   it('mọi khoá bắt đầu bằng tiền tố theo người dùng để xoá đúng badge của người đó', () => {
     const k = badgeCacheKey({ userId: U, companyIds: [CTA], canPay: true, tagIds: [CTB] });
     expect(k.startsWith(`${BADGE_CACHE_PREFIX}${U}:`)).toBe(true);

@@ -330,6 +330,11 @@ export const documentListQuery = z.object({
   department_id: objectId.optional(),
   created_by: objectId.optional(),
   mine: z.enum(['created', 'to_approve', 'approved_by_me']).optional(),
+  /**
+   * Chia "chờ tôi duyệt" theo cấp duyệt (APPR-01): `turn` = phiếu ĐẾN LƯỢT tôi duyệt ngay,
+   * `later` = phiếu còn phải qua cấp dưới tôi duyệt xong mới tới lượt tôi. Bỏ trống = cả hai.
+   */
+  awaiting: z.enum(['turn', 'later']).optional(),
   from: businessDate.optional(),
   to: businessDate.optional(),
   amount_min: z.string().regex(/^\d+$/).optional(),

@@ -61,7 +61,10 @@ export function useBadges() {
   });
 }
 
-/** Bộ lọc gửi lên hàng chờ "Chờ tôi duyệt" (GET /queue): ô tìm, trạng thái, đối tác, tag (v2 §5.2, §12). */
+/**
+ * Bộ lọc gửi lên hàng chờ "Chờ tôi duyệt" (GET /queue): ô tìm, đối tác, tag (v2 §5.2, §12) + `awaiting`
+ * — APPR-01 chia 2 tab: `turn` = đúng phiếu đến lượt tôi duyệt, `later` = phiếu còn chờ cấp dưới duyệt xong.
+ */
 export interface QueueFilters {
   limit?: number;
   /** trang (đánh số từ 1) — FgPagination. */
@@ -70,6 +73,7 @@ export interface QueueFilters {
   status?: string;
   partner_id?: string;
   tag_ids?: string[];
+  awaiting?: 'turn' | 'later';
   /** `<cột>` tăng dần, `-<cột>` giảm dần (xem DocListScreen.SORTABLE_COLUMNS). */
   sort?: string;
 }
@@ -81,6 +85,20 @@ export function useQueue(params: QueueFilters = {}, enabled = true) {
     // Hàng chờ phục vụ cả người duyệt (approval:act) lẫn kế toán thực thi (payment:mark).
     enabled: enabled && (can('approval:act') || can('payment:mark')),
     queryFn: () => apiCall<ListResult<QueueRow>>('/queue', { query: { scope, ...params } }),
+  });
+}
+
+/**
+ * Số phiếu trên badge tab "Chờ tôi duyệt" (APPR-01) — cùng endpoint nên key nằm dưới `['queue', …]`:
+ * duyệt xong là `invalidateQueries({ queryKey: ['queue'] })` sẵn có làm tươi badge và bảng cùng lúc.
+ * `limit: 1` chỉ để lấy `summary` (số của CHÍNH bộ lọc đang xem, không phải cả hàng chờ).
+ */
+export function useAwaitingTurnCount(enabled = true) {
+  const { scope, can } = useAuth();
+  return useQuery({
+    queryKey: ['queue', scope, 'awaiting-turn-count'],
+    enabled: enabled && (can('approval:act') || can('payment:mark')),
+    queryFn: () => apiCall<ListResult<QueueRow>>('/queue', { query: { scope, awaiting: 'turn', limit: 1 } }),
   });
 }
 

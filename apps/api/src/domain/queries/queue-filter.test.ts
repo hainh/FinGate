@@ -44,6 +44,32 @@ describe('queueFilter — "chờ tôi duyệt" gồm cả việc thực thi cho 
     expect(f.$and).toBeUndefined();
     expect(f.status).toBeUndefined();
   });
+
+  it('awaiting=turn → đúng "đến lượt tôi": vẫn gồm việc chi chờ tôi thực thi', () => {
+    const f = queueFilter(base({ mine: 'to_approve', role: 'staff', canPay: true, awaiting: 'turn' }));
+    const union = (f.$and as Record<string, unknown>[])[0]!.$or as Record<string, unknown>[];
+    expect(union).toHaveLength(3);
+    expect(union[1]).toMatchObject({ 'source.fund': { $in: ['cash', 'fund'] } });
+    expect(union[2]).toEqual({ kind: 'spend', status: { $in: [...EXECUTION_STATUSES] } });
+    expect(f.status).toEqual({ $in: [...DECISION_STATUSES, ...EXECUTION_STATUSES] });
+  });
+
+  it('awaiting=later → chỉ phiếu còn chờ cấp dưới: "có bước tôi chờ" VÀ "không phải cấp thấp nhất"', () => {
+    const f = queueFilter(base({ mine: 'to_approve', role: 'staff', canPay: true, awaiting: 'later' }));
+    // toàn bộ điều kiện hàng chờ nằm trong một phần tử `$and` (không đè `$or` của ô tìm kiếm)
+    const cond = (f.$and as Record<string, unknown>[])[0]!;
+    // $nor phải ở cấp TRUY VẤN (toán tử so khớp), không phải biểu thức trong $expr
+    expect(cond.$nor).toBeDefined();
+    const [anyPending] = cond.$and as Record<string, unknown>[];
+    expect(anyPending).toHaveProperty('$expr');
+    // trừ đúng hai nhánh của "đến lượt tôi": cấp thấp nhất, và phiếu quỹ tiền mặt mọi cấp thấy
+    const nor = cond.$nor as Record<string, unknown>[];
+    expect(nor).toHaveLength(2);
+    expect(nor[0]).toHaveProperty('$expr');
+    expect(nor[1]).toMatchObject({ kind: { $in: ['spend', 'income'] } });
+    // chưa tới lượt ai làm được ⇒ không có trạng thái chờ thực thi
+    expect(f.status).toEqual({ $in: [...DECISION_STATUSES] });
+  });
 });
 
 describe('queueFilter — đối tác & tag (v2)', () => {

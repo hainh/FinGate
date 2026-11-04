@@ -480,7 +480,7 @@ Chỉ UI và hook phía web; không đổi API hay contract. Đã đối chiếu
 | DELETE `/documents/:id/links/:linkId` | mới, `link:manage`, body `{reason ≥ 5, request_id?}`. Gỡ mềm. Liên kết không nối với phiếu này ⇒ 404. | 404 FG-WF-001 |
 | POST `/documents/:id/transition` | approve / approve_with_reason đổi `amount_minor` khác số tiền hiện tại ⇒ 422 FG-WF-005 nếu đã có lượt `R3` của phiếu (`automation_runs`, `source_type: document`). Đổi tài khoản vẫn được. | 422 FG-WF-005 |
 | POST `/documents/:id/delete` | gỡ mềm mọi liên kết còn hiệu lực của phiếu trước khi xoá cứng. | |
-| GET `/documents`, GET `/queue` | thêm `partner_id`, `tag_ids`. | |
+| GET `/documents`, GET `/queue` | thêm `partner_id`, `tag_ids`. `awaiting=turn\|later` (cả hai endpoint, đi với `mine=to_approve`) chia "chờ tôi duyệt" theo cấp duyệt: `turn` = bước của tôi là cấp thấp nhất còn chờ (đến lượt tôi ngay), `later` = còn phải qua cấp dưới duyệt xong; phần bù nhau nên `turn` ∪ `later` = hàng chờ đầy đủ, `later` không gồm phiếu chờ thực thi. `/queue` trả `summary` của ĐÚNG lượt đọc (dùng cho badge tab). | |
 | ~~GET `/documents/payees`~~ | đã bỏ (§22.1), không còn client gọi | |
 | GET `/documents/:id` và mọi phản hồi chi tiết | `partner`, `partner_id`, `payee` (dẫn xuất từ đối tác; v1 giữ nguyên nếu chưa có đối tác), `tag_ids`, `tags` (`_id`, `name`, `color`), `options.loan` (xem 13.3), `transfer_target` (+ `company_name`, `account_label`), `target` (v1), `origin`, `links`, `automation_runs` (≤ 20, mới nhất trước), `can.tag`, `can.link`. | |
 

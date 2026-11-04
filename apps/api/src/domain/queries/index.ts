@@ -158,6 +158,12 @@ export interface QueueQuery {
   status?: string | string[];
   companyId?: string;
   mine?: 'created' | 'to_approve' | 'approved_by_me';
+  /**
+   * Chia hàng chờ "chờ tôi duyệt" làm hai loại theo thứ tự cấp duyệt (docs/03_screens.md APPR-01):
+   * `turn` = bước của tôi là cấp THẤP NHẤT còn chờ (đến lượt tôi ngay); `later` = phiếu CÒN cấp dưới
+   * tôi phải duyệt xong mới đến lượt tôi. Bỏ trống = cả hai (hàng chờ + badge như trước).
+   */
+  awaiting?: 'turn' | 'later';
   from?: string;
   to?: string;
   q?: string;
@@ -200,39 +206,62 @@ const LIST_PROJECTION = {
 } as const;
 
 /**
+ * Vị từ "bước `$$<v>` là của người gọi": gán thẳng `user_id`, hoặc bước CHƯA gán người mà đúng
+ * vai trò đang hoạt động (tài khoản/assignment của cấp duyệt được tạo SAU khi hồ sơ đã gửi).
+ *
+ * Tên biến `v` phải KHÁC tên biến của `$filter` bọc ngoài: cùng một `$$s` thì `$filter`/`$map` con
+ * làm mờ (`shadow`) biến ngoài và kết quả đúng/sai im lặng — bug từng làm "chờ đến lượt tôi duyệt"
+ * trả về 0 phiếu.
+ */
+function stepOwnedBy(v: string, userId: string, role?: Role): Record<string, unknown> {
+  return role
+    ? {
+        $or: [
+          { $eq: [{ $toString: { $ifNull: [`$$${v}.user_id`, null] } }, userId] },
+          { $and: [{ $eq: [{ $ifNull: [`$$${v}.user_id`, null] }, null] }, { $eq: [`$$${v}.role`, role] }] },
+        ],
+      }
+    : { $eq: [{ $toString: { $ifNull: [`$$${v}.user_id`, null] } }, userId] };
+}
+
+/**
  * "Chờ tôi duyệt" chỉ gồm hồ sơ mà bước của người gọi là cấp THẤP NHẤT còn chờ:
  * mọi cấp dưới trong ma trận duyệt của phiếu đó đã duyệt xong. Cấp cao hơn vẫn
  * thấy phiếu ở các danh sách khác (không truyền `mine`) để duyệt nhảy cấp (blueprint §IV).
  *
  * Bước chưa gán người (`user_id: null`) — xảy ra khi tài khoản/assignment của cấp
  * duyệt được tạo SAU khi hồ sơ đã gửi. Khi đó ai đúng vai trò cũng xử lý được.
+ *
+ * `order` nhỏ nhất lấy bằng `$reduce` + `$min` trên ĐÚNG mảng đã lọc: `$min`/`$map` lồng trong
+ * `$filter`/`$expr` có thể trả giá trị sai (đã gặp) — `$reduce` trên biến `$let` là dạng chạy đúng.
  */
 function lowestPendingOwnerFilter(userId: string, role?: Role): Record<string, unknown> {
-  const owned = ownedStepCond(userId, role);
   return {
     $expr: {
       $let: {
-        vars: {
-          pending: {
-            $filter: {
-              input: '$approval.steps',
-              as: 's',
-              cond: { $in: ['$$s.state', ['current', 'waiting']] },
-            },
-          },
-        },
+        vars: { pending: pendingStepsOf('$approval.steps', 's') },
         in: {
-          $anyElementTrue: {
-            $map: {
-              input: '$$pending',
-              as: 's',
-              in: { $and: [{ $eq: ['$$s.order', { $min: '$$pending.order' }] }, owned] },
+          $let: {
+            vars: { lowest: { $reduce: { input: '$$pending', initialValue: Number.MAX_SAFE_INTEGER, in: { $min: ['$$value', '$$this.order'] } } } },
+            in: {
+              $anyElementTrue: {
+                $map: {
+                  input: '$$pending',
+                  as: 'p',
+                  in: { $and: [{ $eq: ['$$p.order', '$$lowest'] }, stepOwnedBy('p', userId, role)] },
+                },
+              },
             },
           },
         },
       },
     },
   };
+}
+
+/** Các bước còn chờ (`current`/`waiting`) của phiếu — mảng đã lọc, dùng làm biến `$let`. */
+function pendingStepsOf(input: unknown, alias: string): Record<string, unknown> {
+  return { $filter: { input, as: alias, cond: { $in: [`$$${alias}.state`, ['current', 'waiting']] } } };
 }
 
 /**
@@ -241,32 +270,44 @@ function lowestPendingOwnerFilter(userId: string, role?: Role): Record<string, u
  * Quỹ phụ (`fund`) hoạt động như tiền mặt nên đi chung nhóm này — so theo tập `CASH_LIKE_ACCOUNT_KINDS`.
  */
 function cashAnyPendingOwnerFilter(userId: string, role?: Role): Record<string, unknown> {
+  return cashAnyPendingCond(userId, role);
+}
+
+function cashAnyPendingCond(userId: string, role?: Role): Record<string, unknown> {
   return {
     'source.fund': { $in: [...CASH_LIKE_ACCOUNT_KINDS] },
     kind: { $in: ['spend', 'income'] },
-    $expr: {
-      $anyElementTrue: {
-        $map: {
-          input: {
-            $filter: { input: '$approval.steps', as: 's', cond: { $in: ['$$s.state', ['current', 'waiting']] } },
-          },
-          as: 's',
-          in: ownedStepCond(userId, role),
-        },
-      },
-    },
+    ...anyPendingOwnerFilter(userId, role),
   };
 }
 
-function ownedStepCond(userId: string, role?: Role): Record<string, unknown> {
-  return role
-    ? {
-        $or: [
-          { $eq: [{ $toString: '$$s.user_id' }, userId] },
-          { $and: [{ $eq: ['$$s.user_id', null] }, { $eq: ['$$s.role', role] }] },
-        ],
-      }
-    : { $eq: [{ $toString: '$$s.user_id' }, userId] };
+/**
+ * "Chờ ĐẾN lượt tôi duyệt": phiếu mà bước của người gọi còn chờ nhưng CHƯA phải cấp thấp nhất —
+ * tức phải qua cấp dưới duyệt xong mới đến lượt. Đây là phần bù của `lowestPendingOwnerFilter`
+ * (và của nhóm quỹ tiền mặt "thấy ngay khi lập xong") trong cùng tập `anyPendingOwnerFilter`,
+ * nên `turn` ∪ `later` đúng bằng tổng "chờ tôi duyệt": mỗi phiếu chỉ nằm ở MỘT trong hai loại.
+ *
+ * `$nor` phải ở cấp TRUY VẤN (không phải trong `$expr`) — nó là toán tử so khớp, không phải biểu thức.
+ *
+ * Việc thực thi của kế toán (phiếu chi đã duyệt xong, chờ chi) không có bước duyệt nào còn chờ
+ * nên không bao giờ rơi vào nhóm này.
+ */
+function laterPendingOwnerFilter(userId: string, role?: Role): Record<string, unknown> {
+  return {
+    $and: [anyPendingOwnerFilter(userId, role)],
+    $nor: [lowestPendingOwnerFilter(userId, role), cashAnyPendingCond(userId, role)],
+  };
+}
+
+/** Phiếu có ÍT NHẤT MỘT bước của người gọi còn chờ (bất kể cấp). */
+function anyPendingOwnerFilter(userId: string, role?: Role): Record<string, unknown> {
+  return {
+    $expr: {
+      $anyElementTrue: {
+        $map: { input: pendingStepsOf('$approval.steps', 's'), as: 'q', in: stepOwnedBy('q', userId, role) },
+      },
+    },
+  };
 }
 
 /** Phiếu chi đã duyệt xong đang chờ kế toán thực thi (không còn bước duyệt nào). */
@@ -274,14 +315,30 @@ function executionQueueFilter(): Record<string, unknown> {
   return { kind: 'spend', status: { $in: [...EXECUTION_STATUSES] } };
 }
 
-/** "Việc ở bàn tôi" = bước duyệt của tôi là cấp thấp nhất còn chờ, + (nếu được chi) phiếu chờ thực thi. */
-function toApproveFilter(input: Pick<QueueQuery, 'userId' | 'role' | 'canPay'>): Record<string, unknown> {
+/**
+ * "Việc ở bàn tôi" = bước duyệt của tôi là cấp thấp nhất còn chờ, + (nếu được chi) phiếu chờ thực thi.
+ *
+ * `awaiting` (APPR-01 chia 2 tab): `turn` = đúng như trên; `later` = phiếu còn phải qua cấp dưới tôi
+ * duyệt xong mới đến lượt tôi (chưa làm được gì — nên KHÔNG kèm phiếu chờ chi); bỏ trống = hợp hai loại
+ * (giữ nguyên hành vi cũ của hàng chờ và badge).
+ */
+function toApproveFilter(
+  input: Pick<QueueQuery, 'userId' | 'role' | 'canPay' | 'awaiting'>,
+): Record<string, unknown> {
+  if (input.awaiting === 'later') return laterPendingOwnerFilter(input.userId, input.role);
   const parts: Record<string, unknown>[] = [
     lowestPendingOwnerFilter(input.userId, input.role),
     cashAnyPendingOwnerFilter(input.userId, input.role),
   ];
   if (input.canPay) parts.push(executionQueueFilter());
   return parts.length > 1 ? { $or: parts } : parts[0]!;
+}
+
+function toApproveStatuses(input: Pick<QueueQuery, 'canPay' | 'awaiting'>): readonly string[] {
+  // `later` chưa tới lượt ai làm được nên không có phiếu chờ thực thi; `turn` / bỏ trống = "việc ở bàn tôi"
+  // (kế toán có `payment:mark` vẫn thấy phiếu chi chờ chi).
+  const exec = input.canPay && input.awaiting !== 'later' ? EXECUTION_STATUSES : [];
+  return [...DECISION_STATUSES, ...exec];
 }
 
 export function queueFilter(input: QueueQuery): Record<string, unknown> {
@@ -295,14 +352,14 @@ export function queueFilter(input: QueueQuery): Record<string, unknown> {
   if (input.mine === 'to_approve') {
     // gộp bằng `$and` để không đè lên `$or` của ô tìm kiếm (input.q) ở dưới.
     const cond = toApproveFilter(input);
-    if ('$or' in cond) {
+    if ('$or' in cond || '$and' in cond || '$nor' in cond) {
       const and = (filter.$and as Record<string, unknown>[] | undefined) ?? [];
       and.push(cond);
       filter.$and = and;
     } else {
       Object.assign(filter, cond);
     }
-    if (!input.status) filter.status = { $in: [...DECISION_STATUSES, ...(input.canPay ? EXECUTION_STATUSES : [])] };
+    if (!input.status) filter.status = { $in: toApproveStatuses(input) };
   }
   if (input.mine === 'approved_by_me') {
     filter['approval.steps'] = { $elemMatch: { user_id: input.userId, state: 'done' } };
@@ -521,13 +578,15 @@ export async function awaitingBadge(
   canPay = false,
   /** [v2 §6.2] chỉ đếm phiếu có ÍT NHẤT MỘT trong các tag (rỗng = không lọc). */
   tagIds: string[] = [],
+  /** APPR-01: `turn` = đếm đúng phiếu đến lượt tôi duyệt (badge tab); bỏ trống = cả hàng chờ. */
+  awaiting?: 'turn' | 'later',
 ): Promise<{ count: number; total_minor: bigint }> {
   // Khoá gồm PHẠM VI công ty: số đếm phụ thuộc công ty đang chọn (withScope), không được dùng chung giữa các công ty.
-  const key = badgeCacheKey({ userId, companyIds: scope.companyIds, role, canPay, tagIds });
+  const key = badgeCacheKey({ userId, companyIds: scope.companyIds, role, canPay, tagIds, awaiting });
   return cacheThrough(key, async () => {
     const f = withScope(scopeOf(scope), {
-      ...toApproveFilter({ userId, role, canPay }),
-      status: { $in: [...DECISION_STATUSES, ...(canPay ? EXECUTION_STATUSES : [])] },
+      ...toApproveFilter({ userId, role, canPay, awaiting }),
+      status: { $in: toApproveStatuses({ canPay, awaiting }) },
       ...(tagIds.length ? { tag_ids: { $in: tagIds } } : {}),
     });
     const count = await Models.Document.countDocuments(f as never);

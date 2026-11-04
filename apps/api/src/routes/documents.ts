@@ -149,6 +149,7 @@ export function documentRoutes(app: FastifyInstance): void {
           status: q.status as string[] | string | undefined,
           companyId: q.company_id,
           mine: q.mine,
+          awaiting: q.awaiting,
           from: q.from,
           to: q.to,
           q: q.q,
@@ -168,6 +169,10 @@ export function documentRoutes(app: FastifyInstance): void {
   /**
    * APPR-01 — hàng chờ của chính tôi: hồ sơ tới lượt tôi duyệt, VÀ (với kế toán có
    * `payment:mark`) phiếu chi đã duyệt xong đang chờ thực thi.
+   *
+   * `awaiting` chia hàng chờ làm 2 tab (docs/03_screens.md APPR-01): `turn` = đúng phiếu đến lượt tôi
+   * duyệt/chi, `later` = phiếu còn phải qua cấp dưới tôi duyệt xong. `summary` là số của CHÍNH lượt đọc
+   * này (cùng bộ lọc) để chân danh sách và badge tab luôn khớp bảng.
    */
   app.route(
     defineRoute({
@@ -192,6 +197,7 @@ export function documentRoutes(app: FastifyInstance): void {
             role: actor.role,
             canPay,
             mine: 'to_approve',
+            awaiting: q.awaiting,
             kind: q.kind,
             status: q.status,
             companyId: q.company_id,
@@ -203,7 +209,7 @@ export function documentRoutes(app: FastifyInstance): void {
             limit: q.limit,
             page: q.page,
           }),
-          awaitingBadge(scope, actor.user_id, actor.role, canPay),
+          awaitingBadge(scope, actor.user_id, actor.role, canPay, undefined, q.awaiting),
         ]);
         return ok(
           reply,
