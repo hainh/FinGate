@@ -21,6 +21,7 @@ import type { ScopeLike } from '../domain/types.ts';
 import { checkTie } from '../domain/tie/index.ts';
 import { createBackup, pruneBackups } from '../domain/backup/index.ts';
 import { drainAutomation } from '../domain/automation/engine.ts';
+import { deliverPendingPushes } from '../domain/push/index.ts';
 import { dbUp } from '../lib/mongo.ts';
 
 export type TaskName =
@@ -36,7 +37,8 @@ export type TaskName =
   | 'archive'
   | 'cleanup'
   | 'backup'
-  | 'automation';
+  | 'automation'
+  | 'push';
 
 export interface JobResult {
   task: string;
@@ -92,13 +94,12 @@ export async function runTask(name: TaskName, windowKey?: string): Promise<JobRe
   }
 }
 
-/**
- * Cửa sổ dedupe: 15 phút cho sla/alerts (cron mỗi 15'), theo NGÀY cho newsletter/recurring
+/** Cửa sổ dedupe: 15 phút cho sla/alerts (cron mỗi 15'), theo NGÀY cho newsletter/recurring
  * (chạy muộn do instance ngủ vẫn chỉ một bản mỗi ngày).
  */
 function defaultWindow(name: TaskName): string {
   const now = new Date();
-  if (name === 'sla-scan' || name === 'alerts' || name === 'reconcile' || name === 'automation') {
+  if (name === 'sla-scan' || name === 'alerts' || name === 'reconcile' || name === 'automation' || name === 'push') {
     return `${now.toISOString().slice(0, 13)}:${String(Math.floor(now.getUTCMinutes() / 15) * 10).padStart(2, '0')}`;
   }
   if (name === 'backup') {
@@ -239,6 +240,13 @@ const DISPATCH: Record<TaskName, () => Promise<Record<string, unknown>>> = {
 
   /** v2: xử lý hàng sự kiện nghiệp vụ → quy tắc tự động (cũng chạy định kỳ trong tiến trình — xem startAutomationLoop). */
   automation: async () => drainAutomation() as unknown as Promise<Record<string, unknown>>,
+
+  /**
+   * NOTI-03 — đẩy một lượt Web Push thủ công. Bình thường không cần: vòng `startPushLoop` trong
+   * tiến trình tự chạy mỗi 30s. Dùng khi Profile C (instance ngủ) muốn GitHub Actions schedule
+   * đánh thức server và đẩy ngay, hoặc để kiểm thử end-to-end.
+   */
+  push: async () => deliverPendingPushes() as unknown as Promise<Record<string, unknown>>,
 };
 
 /**

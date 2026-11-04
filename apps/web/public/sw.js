@@ -147,26 +147,42 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-/* ---------------- Web Push (NOTI-03 — cần VAPID + bảng push_subscriptions ở server) ---------------- */
+/* ---------------- Web Push (NOTI-03) ----------------
+ * Server gửi payload JSON: { title, body, url, tag } (xem apps/api/src/domain/push/index.ts).
+ * Handler chạy KỂ CẢ KHI APP ĐÃ ĐÓNG — đây là lý do tồn tại của phần này.
+ * Phải gọi `showNotification` cho mọi push (nếu không Chrome sẽ báo lỗi "userVisibleOnly").
+ */
+
+/** Đọc payload push: chuỗi JSON, chuỗi thường, hoặc rỗng (push "chỉ để đánh thức"). */
+function parsePushPayload(event) {
+  const fallback = { title: 'FinGate', body: 'Bạn có cập nhật mới', url: '/' };
+  if (!event.data) return fallback;
+  const text = event.data.text();
+  try {
+    const json = JSON.parse(text);
+    return { ...fallback, ...(json && typeof json === 'object' ? json : {}) };
+  } catch {
+    // Không phải JSON: dùng nguyên văn làm nội dung.
+    return { ...fallback, body: text.slice(0, 300) };
+  }
+}
 
 self.addEventListener('push', (event) => {
-  let payload = { title: 'FinGate', body: '', url: '/' };
-  try {
-    if (event.data) payload = { ...payload, ...JSON.parse(event.data.text()) };
-  } catch {
-    if (event.data) payload.body = event.data.text();
-  }
+  const payload = parsePushPayload(event);
   event.waitUntil(
     self.registration.showNotification(payload.title || 'FinGate', {
       body: payload.body || '',
       icon: '/icon-192.png',
       badge: '/icon-192.png',
+      // Cùng tag ⇒ thông báo sau THAY THẾ cái trước (không dồn 10 cái cho 10 phiếu).
+      tag: payload.tag || 'fg-approval',
+      renotify: true,
       data: { url: payload.url || '/' },
-      tag: payload.tag,
     }),
   );
 });
 
+/** Bấm thông báo: mở đúng hồ sơ. Ưu tiên cửa sổ đang mở (nếu đã mở app thì điều hướng nó). */
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const target = (event.notification.data && event.notification.data.url) || '/';
@@ -176,7 +192,12 @@ self.addEventListener('notificationclick', (event) => {
       for (const client of all) {
         if (new URL(client.url).origin !== self.location.origin) continue;
         await client.focus();
-        if ('navigate' in client) await client.navigate(target).catch(() => undefined);
+        try {
+          // `navigate` chỉ có trên WindowClient; bọc trong try để trình duyệt cũ không vỡ.
+          if ('navigate' in client) await client.navigate(target);
+        } catch {
+          /* không điều hướng được thì chỉ cần focus */
+        }
         return;
       }
       await self.clients.openWindow(target);

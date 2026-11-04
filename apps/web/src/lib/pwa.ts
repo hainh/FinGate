@@ -52,6 +52,7 @@ export async function requestPushPermission(): Promise<PushPermission> {
 /* ------------- Đăng ký service worker ------------- */
 
 let swRegistered = false;
+let swReady: Promise<ServiceWorkerRegistration | null> | null = null;
 
 export function registerServiceWorker(): void {
   if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
@@ -61,16 +62,109 @@ export function registerServiceWorker(): void {
   // và dễ gây khó chịu khi Vite đổi port. `import.meta.env.DEV` do Vite thay lúc build.
   if (import.meta.env.DEV) return;
   const onReady = (): void => {
-    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((err) => {
-      // Không có SW thì app vẫn chạy bình thường — chỉ mất khả năng cài đặt/offline shell.
-      console.warn('[pwa] không đăng ký được service worker:', (err as Error).message);
-    });
+    swReady = navigator.serviceWorker
+      .register('/sw.js', { scope: '/' })
+      // `ready` chỉ resolve khi đã có SW ĐANG ĐIỀU KHIỂN trang — điều kiện bắt buộc để
+      // `pushManager.subscribe` không ném "no active Service Worker".
+      .then(() => navigator.serviceWorker.ready)
+      .catch((err) => {
+        // Không có SW thì app vẫn chạy bình thường — chỉ mất khả năng cài đặt/offline shell/push.
+        console.warn('[pwa] không đăng ký được service worker:', (err as Error).message);
+        return null;
+      });
   };
   if (document.readyState === 'complete') onReady();
   else window.addEventListener('load', onReady, { once: true });
 }
 
-/* ------------- Thông báo "Chờ tôi duyệt" ------------- */
+/** Registration đã sẵn sàng (null nếu không hỗ trợ / chưa cài). */
+async function registration(): Promise<ServiceWorkerRegistration | null> {
+  if (!('serviceWorker' in navigator)) return null;
+  if (swReady) return swReady;
+  // Trường hợp SW đã đăng ký từ lần trước (tải trang mới nhưng `registerServiceWorker` chưa chạy):
+  // vẫn dùng được registration đang có.
+  try {
+    return (await navigator.serviceWorker.getRegistration()) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/* ------------- Web Push: đăng ký thiết bị với server ------------- */
+
+/** `applicationServerKey` của `pushManager.subscribe` — BufferSource từ chuỗi base64url của VAPID. */
+function urlBase64ToUint8Array(base64: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+  const normalized = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(normalized);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+/** Subscription hiện có của thiết bị này (nếu đã đăng ký). */
+export async function currentPushSubscription(): Promise<PushSubscription | null> {
+  const reg = await registration();
+  if (!reg) return null;
+  try {
+    return await reg.pushManager.getSubscription();
+  } catch {
+    return null;
+  }
+}
+
+export type SubscribeResult =
+  | { ok: true; endpoint: string }
+  | { ok: false; reason: 'unsupported' | 'denied' | 'no_sw' | 'error'; message?: string };
+
+/**
+ * Đăng ký thiết bị nhận Web Push tới server FinGate.
+ *
+ * Thứ tự QUAN TRỌNG: phải có quyền Notification + service worker đang hoạt động TRƯỚC khi subscribe
+ * (iOS chỉ cho khi app đã "Thêm vào MH chính" và chạy trong app đó).
+ * `publicKey` do server trả qua GET /notifications/push/status — KHÔNG hard-code ở client, vì đổi khoá
+ * VAPID phải chỉ là một thay đổi phía server.
+ */
+export async function subscribeToPush(publicKey: string): Promise<SubscribeResult> {
+  if (!pushSupported()) return { ok: false, reason: 'unsupported' };
+  if (Notification.permission !== 'granted') return { ok: false, reason: 'denied' };
+  if (!publicKey) return { ok: false, reason: 'unsupported' };
+
+  const reg = await registration();
+  if (!reg) return { ok: false, reason: 'no_sw' };
+
+  try {
+    const existing = await reg.pushManager.getSubscription();
+    // Đã subscribe bằng khoá KHÁC (server vừa đổi VAPID) ⇒ phải huỷ rồi tạo lại, nếu không push
+    // service sẽ từ chối mọi lần gửi của server.
+    if (existing && existing.options?.applicationServerKey) {
+      const want = urlBase64ToUint8Array(publicKey);
+      const have = new Uint8Array(existing.options.applicationServerKey as ArrayBuffer);
+      const same = want.length === have.length && want.every((b, i) => b === have[i]);
+      if (!same) await existing.unsubscribe().catch(() => false);
+    }
+    const sub =
+      (await reg.pushManager.getSubscription()) ??
+      (await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
+      }));
+    return { ok: true, endpoint: sub.endpoint };
+  } catch (err) {
+    return { ok: false, reason: 'error', message: (err as Error).message };
+  }
+}
+
+/** Huỷ đăng ký trên thiết bị; trả endpoint vừa huỷ để client báo server xoá. */
+export async function unsubscribeFromPush(): Promise<string | null> {
+  const sub = await currentPushSubscription();
+  if (!sub) return null;
+  const endpoint = sub.endpoint;
+  await sub.unsubscribe().catch(() => false);
+  return endpoint;
+}
+
+/* ------------- Mốc "đã báo" (chuông dự phòng khi chưa có Web Push) ------------- */
 
 export interface ApprovalNotification {
   title: string;

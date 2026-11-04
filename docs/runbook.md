@@ -238,4 +238,26 @@ bind-mount `deploy/backups/`). File: `fingate-YYYYMMDD-HHmmss.archive.gz`. KHÔN
 - **UI**: nút **“⤓ Sao lưu & tải về”** ở sidebar (chỉ hiện với `admin:backup`)
   tạo + tải ngay; màn **Quản trị → Sao lưu** (`/quantri/sao-luu`) liệt kê & tải lại bản cũ.
 
+### 7.5 Thông báo đẩy "chờ tôi duyệt" (Web Push — NOTI-03)
+
+Chi tiết đầy đủ: `docs/07_pwa-mobile.md`. Tóm tắt vận hành:
+
+```bash
+npx web-push generate-vapid-keys     # sinh MỘT LẦN, giữ nguyên
+```
+
+Điền `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` vào `.env` (hoặc
+`deploy/fingate.env`) rồi khởi động lại API. Log boot phải có dòng `Web Push: đang chạy`;
+chưa cấu hình thì `Web Push: TẮT` và app tự quay về thông báo-khi-app-mở.
+
+- Vòng đẩy chạy **trong tiến trình API** mỗi `PUSH_INTERVAL_SECONDS` (mặc định 30s), như vòng sao lưu.
+  Chỉ nên có **một** instance chạy vòng này (an toàn nếu trùng: bản ghi được giành nguyên tử nên
+  không gửi 2 lần).
+- Đẩy thủ công / đánh thức instance ngủ: `POST /api/v1/tasks/push` với header `x-task-token`.
+- Tắt tạm: `PUSH_ENABLED=false`.
+- Bảng `push_subscriptions`: mỗi thiết bị một dòng, `endpoint` unique. Subscription chết (push service
+  trả 404/410) được **tự xoá**; thiết bị của một người có thể xem/thu hồi bằng cách
+  *Cá nhân & cài đặt → Tắt trên thiết bị này*.
+- Đổi khoá VAPID ⇒ thiết bị đăng ký lại (client tự làm ở lần mở app kế tiếp); nên đổi ngoài giờ duyệt.
+
 

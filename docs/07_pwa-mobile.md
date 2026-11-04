@@ -4,6 +4,8 @@
 > Kết luận: **không phải viết app native**. FinGate đã có giao diện responsive + manifest + icon, nên
 > chỉ cần thêm một service worker nhỏ là **cài được lên màn hình chính** (Android + iPhone) và chạy
 > toàn màn hình như app thật. Toàn bộ thay đổi ở đây **không đụng vào logic nghiệp vụ / tiền / duyệt**.
+>
+> **Thông báo "chờ tôi duyệt" dùng Web Push ⇒ đến cả khi app đã đóng** (§3–§4).
 
 ## 1. Người dùng cài app thế nào
 
@@ -34,57 +36,101 @@ Mở icon → giữ danh sách chọn nhanh: **Chờ tôi duyệt**, **Tiền h�
 | --- | --- |
 | `apps/web/public/site.webmanifest` | `id`, `start_url`, `scope`, `lang: vi`, icon **maskable**, `shortcuts` |
 | `apps/web/public/icon-maskable-512.png` | Icon nền full-bleed để Android cắt tròn không lem viền |
-| `apps/web/public/sw.js` | Service worker: precache vỏ app, **không cache `/api/`**; có sẵn handler Web Push |
-| `apps/web/src/lib/pwa.ts` | Đăng ký SW + quyền Notification |
-| `apps/web/src/app/push-notifications.ts` | Hook poll + bắn thông báo hệ thống |
+| `apps/web/public/sw.js` | Service worker: precache vỏ app, **không cache `/api/`**; handler `push` + `notificationclick` |
+| `apps/web/src/lib/pwa.ts` | Đăng ký SW, đăng ký/huỷ Web Push thiết bị |
+| `apps/web/src/app/push-notifications.ts` | Chọn đường thông báo (Web Push ↔ chuông dự phòng) |
 | `apps/web/index.html` | Thẻ `apple-mobile-web-app-*` |
 | `apps/web/src/screens/admin.tsx` | Nút **"Bật thông báo"** trong *Cá nhân & cài đặt → Hiển thị* |
-| `apps/api/src/domain/queries/push-pending.ts` | Nhặt "phiếu mới chờ tôi duyệt" (idempotent) |
-| `apps/api/src/routes/dashboard.ts` | `GET /notifications/push-pending`, `POST /notifications/push-seen` |
-| `apps/api/src/db/models.ts` + `indexes.ts` | Trường `push_seen_at` + index |
+| `apps/api/src/domain/push/index.ts` | Gửi Web Push qua push service + vòng đẩy 30s |
+| `apps/api/src/domain/queries/push-pending.ts` | Nhặt thông báo duyệt chưa bắn (idempotent) |
+| `apps/api/src/routes/dashboard.ts` | `push/status`, `push/subscribe`, `push/unsubscribe`, `push-pending` |
+| `apps/api/src/db/models.ts` + `indexes.ts` | `push_subscriptions` (endpoint unique) + `push_seen_at` |
 
 ## 3. Thông báo "có phiếu mới chờ tôi duyệt"
 
 Server **đã** tạo sẵn một bản ghi `Notification` cho đúng người duyệt mỗi khi phiếu tới lượt họ
-(`notifyNextApprover`). Phần thiếu chỉ là "ai đó rung chuông trên thiết bị".
+(`notifyNextApprover`). Phần còn lại là đẩy nó tới thiết bị.
 
-- App poll `GET /api/v1/notifications/push-pending?since=<mốc>` mỗi 30 giây khi đang đăng nhập.
-- Server nguyên tử giành từng bản ghi bằng `findOneAndUpdate({ push_seen_at: null })` ⇒ **không bắn
-  trùng** dù nhiều tab / retry / hai vòng poll chạy song song (có 9 test cho đúng chỗ này).
-- Chỉ báo loại `kind: 'approval'` (phiếu tới lượt duyệt / duyệt xong cần thanh toán). Không báo tin hệ thống.
-- Bật lần đầu **không** dội loạt thông báo cũ: mốc `fg.push.ack` trong localStorage được đặt khi bật
-  quyền và xoá khi đăng xuất.
+### 3.1 Web Push — báo cả khi app đã đóng (mặc định)
 
-### Giới hạn cần biết (không phải bug)
+1. Người dùng bấm **Bật thông báo** → cấp quyền → client `pushManager.subscribe(publicKey)`.
+2. Client `POST /api/v1/notifications/push/subscribe` → lưu `push_subscriptions`
+   (`endpoint` unique: đăng ký lại cùng máy chỉ làm mới khoá; đăng nhập tài khoản khác trên cùng máy
+   thì endpoint chuyển sang người mới).
+3. Server chạy vòng đẩy mỗi `PUSH_INTERVAL_SECONDS` (mặc định 30s): nhặt `Notification` duyệt chưa bắn,
+   **nguyên tử giành** bằng `findOneAndUpdate({ push_seen_at: null })` rồi gửi qua push service.
+4. Service worker nhận `push` → `showNotification`; bấm vào → `notificationclick` mở đúng hồ sơ.
+
+Vì sao đúng-một-lần: hai vòng/ hai instance chạy song song không thể cùng giành một bản ghi (có test).
+Push service trả **404/410** ⇒ subscription đã chết (gỡ app, tắt thông báo) → tự xoá bản ghi; lỗi lặp
+5 lần thì cũng xoá.
+
+### 3.2 Chuông dự phòng — chỉ khi app đang mở
+
+Khi server **chưa** cấu hình VAPID (hoặc trình duyệt không cho subscribe), app quay về poll
+`GET /notifications/push-pending?since=<mốc>` mỗi 30s.
+
+> ⚠️ Hai đường **dùng chung cờ `push_seen_at`**, nên client chỉ chạy MỘT đường tại một thời điểm
+> (`App.tsx` chọn `'push'` / `'local'`). Bật cả hai sẽ giành mất thông báo của nhau.
+
+## 4. Cấu hình Web Push (một lần, phía server)
+
+```bash
+npx web-push generate-vapid-keys     # sinh Public Key + Private Key
+```
+
+Điền vào `.env` (hoặc `deploy/fingate.env`) rồi **khởi động lại API**:
+
+```
+VAPID_PUBLIC_KEY=BN...
+VAPID_PRIVATE_KEY=...
+VAPID_SUBJECT=mailto:ops@congty.vn
+```
+
+- Log lúc boot in `Web Push: đang chạy` hoặc `Web Push: TẮT (chưa có ...)`.
+- **Đổi khoá VAPID ⇒ mọi thiết bị phải bật lại**: client tự phát hiện khoá cũ (`applicationServerKey`
+  khác) và tự subscribe lại ở lần mở app kế tiếp — người dùng chỉ cần mở app một lần.
+- Gửi thủ công một lượt (để test / để cron đánh thức server):
+  `curl -X POST -H "x-task-token: $TASK_TOKEN" $PUBLIC_URL/api/v1/tasks/push`
+- Tắt tạm: `PUSH_ENABLED=false` (app tự quay về chuông dự phòng ở lần tải kế tiếp).
+
+### iOS — điều kiện bắt buộc
+
+| Yêu cầu | Ghi chú |
+| --- | --- |
+| iOS **16.4+** | dưới mức này Safari không có Web Push |
+| Đã **"Thêm vào MH chính"** | push chỉ hoạt động trong app đã cài, KHÔNG trong tab Safari |
+| Bật trong **app đã cài** đó | nút "Bật thông báo" nằm ở *Cá nhân & cài đặt*, mở từ icon ngoài màn hình chính |
+
+### Giới hạn còn lại
 
 | Tình huống | Nhận thông báo? |
 | --- | --- |
-| App đang mở (tab hiện) | ✅ trong ≤ 30 giây |
-| App ở nền nhưng chưa bị hệ điều hành đóng (~5 phút) | ⚠️ phần lớn có, tuỳ máy |
-| App đã bị vuốt đóng / iOS khoá máy | ❌ không |
+| App đã đóng (vuốt tắt), máy khoá | ✅ Web Push (có VAPID + đã đăng ký) |
+| App đang mở | ✅ Web Push ngay, không cần poll |
+| Chưa cấu hình VAPID | ⚠️ chỉ khi app còn mở |
+| Người dùng tắt quyền thông báo ở hệ điều hành | ❌ không (là quyết định của người dùng) |
 
-Muốn báo **cả khi app đã đóng** thì phải làm **Web Push thật**: cặp khoá VAPID + bảng
-`push_subscriptions` + job đẩy từ server. Đó là hạ tầng mới (NOTI-03 ở mức P4 trong
-`docs/03_screens.md`). Phía client **đã sẵn sàng**: `sw.js` đã có handler `push` / `notificationclick`
+Độ trễ: thông báo đến sau khi vòng đẩy phía server chạy (≤ ~30 giây sau khi phiếu vào hàng chờ), cộng
+độ trễ của push service (thường 1–5 giây). Máy phải bật nguồn và có mạng.
 
-- `showNotification()`. Khi làm, server chỉ cần đẩy payload:
-
-```json
-{ "title": "PC-2026-00001 đang chờ bạn duyệt", "body": "PC-2026-00001 · 500 tr · gửi bởi KTV", "url": "/ho-so/chi/<id>" }
-```
-
-## 4. Kiểm thử
+## 5. Kiểm thử
 
 ```bash
 pnpm -F @fingate/web build     # sw.js + manifest + icon có trong apps/web/dist
-pnpm -F @fingate/api test      # 773 test, có push-pending.test.ts
+pnpm -F @fingate/api test      # gồm push/index.test.ts (gửi Web Push) + push-pending.test.ts
 pnpm -F @fingate/web test
 ```
 
-Thử trên máy: đăng nhập → *Cá nhân & cài đặt* → **Bật thông báo** → cấp quyền → dùng một tài khoản khác
-lập phiếu chi có người này trong chuỗi duyệt → sau ~30 giây hiện thông báo, bấm vào mở đúng hồ sơ.
+Thử end-to-end:
+1. Cấu hình VAPID + khởi động lại API, đăng nhập trên điện thoại (đã cài app nếu là iOS).
+2. *Cá nhân & cài đặt* → **Bật thông báo** → cấp quyền → dòng trạng thái phải ghi
+   "thông báo đến cả khi app đã đóng".
+3. **Đóng hẳn app** (vuốt tắt).
+4. Tài khoản khác lập phiếu chi có người này là cấp duyệt kế tiếp.
+5. Trong ≤ ~35 giây, thông báo hiện trên màn hình khoá. Bấm vào → mở thẳng hồ sơ.
 
-## 5. Nếu sau này cần lên Google Play / App Store
+## 6. Nếu sau này cần lên Google Play / App Store
 
 Vẫn không phải viết lại UI. Hai vỏ native dùng đúng bundle web hiện tại:
 

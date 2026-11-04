@@ -16,6 +16,7 @@ import { ensureAutomationRules } from './domain/automation/engine.ts';
 import './domain/automation/rules/index.ts'; // đăng ký bộ xử lý R1–R6 (trước khi chu kỳ tự động chạy)
 import { startAutomationLoop } from './jobs/index.ts';
 import { startBackupLoop } from './domain/backup/index.ts';
+import { pushReady, startPushLoop } from './domain/push/index.ts';
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -46,6 +47,13 @@ async function main(): Promise<void> {
   const stopAutomation = startAutomationLoop(app.log);
   // ADM-14: sao lưu mỗi 30' trong tiến trình — chỉ khi BACKUP_AUTO=true (bật trên đúng một instance).
   const stopBackup = env.BACKUP_AUTO === 'true' ? startBackupLoop(app.log, { ready: dbUp }) : () => undefined;
+  // NOTI-03: đẩy Web Push "phiếu chờ tôi duyệt" (thông báo cả khi app đã đóng). Tự tắt êm nếu
+  // chưa cấu hình VAPID. Đặt SAU listen để không làm chậm giờ app nhận request đầu tiên.
+  const stopPush = startPushLoop(app.log, { ready: dbUp });
+  app.log.info(
+    { web_push: pushReady(), interval_s: env.PUSH_INTERVAL_SECONDS },
+    pushReady() ? 'Web Push: đang chạy' : 'Web Push: TẮT (chưa có VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY)',
+  );
 
   let closing = false;
   const shutdown = (signal: string): void => {
@@ -53,6 +61,7 @@ async function main(): Promise<void> {
     closing = true;
     stopAutomation();
     stopBackup();
+    stopPush();
     app.log.info(`${signal}: đang đóng`);
     const timer = setTimeout(() => {
       app.log.error('quá 10s, buộc thoát');

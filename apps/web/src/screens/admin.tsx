@@ -41,7 +41,7 @@ import { FgQuery, toastOk, useToast } from '../components/pagekit.tsx';
 import { PartnerPicker } from '../components/partner-picker.tsx';
 import { ROLES_LABEL, auditActionLabel } from '../components/labels.ts';
 import { ApiRequestError, apiCall } from '../app/api.ts';
-import { enableApprovalNotifications, usePushPermission } from '../app/push-notifications.ts';
+import { disableApprovalNotifications, enableApprovalNotifications, usePushPermission, usePushStatus } from '../app/push-notifications.ts';
 import { RECURRING_PARTNER_TYPES, useCreateRecurring, useRecurringRules, type RecurringCadence, type RecurringCreateInput, type RecurringRow } from '../app/v2/exec.ts';
 import { APPROVAL_ORDER, DOC_KIND_LABEL, DOC_KINDS, type DocKind } from '@fingate/shared';
 import type { ApprovalThresholdCompany, ApprovalThresholdResult, CompanyRow, InviteLinkResult, MatrixEntry, PersonnelRow, AuditRow } from '../app/types.ts';
@@ -2301,22 +2301,28 @@ export function SettingsScreen(): ReactNode {
 
 /**
  * Bật/tắt thông báo hệ thống khi có phiếu mới vào hàng "Chờ tôi duyệt".
- * iOS chỉ cho xin quyền khi app đã "Thêm vào MH chính" và từ CÚ CHẠM của người dùng — nên là nút,
- * không tự xin khi mở app.
+ *
+ * Hai mức hiển thị:
+ *  - **Web Push** (server có VAPID + thiết bị đăng ký được): báo CẢ KHI APP ĐÃ ĐÓNG.
+ *  - **Chỉ khi app mở**: server chưa cấu hình VAPID, hoặc trình duyệt không cho subscribe.
+ * iOS chỉ cho xin quyền khi app đã "Thêm vào MH chính" và từ CÚ CHẠM của người dùng — nên là nút.
  */
 function ApprovalNotificationToggle(): ReactNode {
   const permission = usePushPermission();
+  const status = usePushStatus();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [pushed, setPushed] = useState<boolean | null>(null);
   const supported = permission !== 'unsupported';
+
+  const on = permission === 'granted';
+  const serverHasPush = Boolean(status?.enabled && status.public_key);
 
   return (
     <div style={{ borderTop: '1px solid var(--fg-border-default)', paddingTop: 'var(--fg-space-4)' }}>
       <div className="fg-stat-row" style={{ padding: 0 }}>
         <span className="fg-stat-label">Thông báo phiếu mới chờ tôi duyệt</span>
-        <FgTag tone={permission === 'granted' ? 'success' : 'attention'}>
-          {permission === 'granted' ? '✓ Đã bật' : permission === 'denied' ? 'Bị chặn' : 'Chưa bật'}
-        </FgTag>
+        <FgTag tone={on ? 'success' : 'attention'}>{on ? '✓ Đã bật' : permission === 'denied' ? 'Bị chặn' : 'Chưa bật'}</FgTag>
       </div>
       {!supported ? (
         <FgText style="caption" color="muted">
@@ -2324,10 +2330,30 @@ function ApprovalNotificationToggle(): ReactNode {
           MH chính”, rồi bật tại đây.
         </FgText>
       ) : permission === 'granted' ? (
-        <FgText style="caption" color="muted">
-          Đang bật — phiếu mới vào hàng chờ sẽ hiện thông báo trên thiết bị (cập nhật ~30 giây khi app còn
-          mở). Tắt lại bằng cài đặt trình duyệt/hệ thống.
-        </FgText>
+        <>
+          <FgText style="caption" color="muted">
+            {pushed || (pushed === null && serverHasPush)
+              ? `Đang bật — thông báo đến cả khi app đã đóng (${status?.devices ?? 0} thiết bị đã đăng ký).`
+              : 'Đang bật — thông báo chỉ hiện khi app còn mở (máy chủ chưa cấu hình Web Push).'}
+          </FgText>
+          <div style={{ marginTop: 'var(--fg-space-2)' }}>
+            <FgButton
+              size="small"
+              loading={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await disableApprovalNotifications();
+                  setPushed(false);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Tắt trên thiết bị này
+            </FgButton>
+          </div>
+        </>
       ) : permission === 'denied' ? (
         <FgText style="caption" color="muted">
           Trình duyệt đang chặn thông báo cho trang này. Mở cài đặt trang (biểu tượng ổ khoá cạnh địa chỉ) →
@@ -2342,8 +2368,9 @@ function ApprovalNotificationToggle(): ReactNode {
               setBusy(true);
               setErr(null);
               try {
-                const ok = await enableApprovalNotifications();
-                if (!ok) setErr('Bạn chưa cho phép thông báo.');
+                const result = await enableApprovalNotifications();
+                if (result === 'denied') setErr('Bạn chưa cho phép thông báo.');
+                else setPushed(result === 'push');
               } catch (e) {
                 setErr((e as Error).message);
               } finally {

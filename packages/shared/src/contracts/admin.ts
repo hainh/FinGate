@@ -366,6 +366,27 @@ export const notificationListQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30),
 });
 
+/* ---------------- NOTI-03 · Web Push (thông báo cả khi app đã đóng) ---------------- */
+
+/**
+ * Đăng ký một thiết bị nhận Web Push. `endpoint` + `keys` do `PushSubscription.toJSON()` của trình
+ * duyệt sinh ra — KHÔNG tự tạo, không tái sử dụng giữa các máy.
+ * Giới hạn độ dài để một client lỗi không nhồi payload khổng lồ vào DB.
+ */
+export const pushSubscribeBody = z.object({
+  endpoint: z.string().min(10).max(2000),
+  keys: z.object({
+    p256dh: z.string().min(10).max(500),
+    auth: z.string().min(4).max(500),
+  }),
+  /** UA rút gọn, chỉ để người dùng phân biệt thiết bị trong danh sách. */
+  user_agent: z.string().max(300).optional(),
+});
+
+export const pushUnsubscribeBody = z.object({
+  endpoint: z.string().min(10).max(2000),
+});
+
 /* ------------------------------------------------------------------ *
  * ADM-12 audit log · ADM-13 phiên · ADM-13 db-stats · settings · search
  * ------------------------------------------------------------------ */

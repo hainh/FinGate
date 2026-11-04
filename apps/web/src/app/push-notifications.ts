@@ -1,33 +1,65 @@
 /**
- * FinGate web — thông báo hệ thống khi có phiếu mới CHỜ TÔI DUYỆT.
+ * FinGate web — thông báo khi có phiếu mới CHỜ TÔI DUYỆT.
  *
- * Luồng một vòng poll (30s, dùng chính `refetchInterval` react-query của dự án):
- *   1. GET `/notifications/push-pending?since=<mốc đã báo>` → server nhặt các bản ghi duyệt CHƯA bắn và
- *      nguyên tử đánh dấu `push_seen_at` (xem apps/api/src/domain/queries/push-pending.ts) nên hai tab
- *      hoặc StrictMode double-mount KHÔNG bắn trùng.
- *   2. Bắn `Notification` bằng SW registration (nếu có) để bấm vào là mở đúng hồ sơ; không có SW thì dùng
- *      `new Notification()` của trang (vẫn bấm được, chỉ không giữ khi đóng tab).
- *   3. Lưu `cursor` server trả về làm mốc lần sau.
+ * HAI ĐƯỜNG, dùng chung quyền Notification:
  *
- * Không có quyền Notification ⇒ poll tự tắt (không gọi API thừa).
+ *  A. **Web Push (chính)** — thiết bị đã đăng ký với server; server đẩy qua push service nên thông báo
+ *     đến **cả khi app đã đóng**. Page không làm gì cả: `sw.js` tự nhận `push` và hiện thông báo.
+ *     Đây là chế độ dùng khi server đã cấu hình VAPID + đã `subscribeToPush` thành công.
+ *
+ *  B. **Chuông poll (dự phòng)** — app đang mở, server chưa cấu hình VAPID (hoặc thiết bị chưa đăng ký
+ *     được, ví dụ Chrome desktop chặn push). Poll 30s hỏi `/notifications/push-pending`.
+ *
+ * ⚠️ HAI ĐƯỜNG DÙNG CHUNG CỜ `push_seen_at` Ở SERVER, nên **không bao giờ chạy cả hai cùng lúc**: bên nào
+ * lấy trước thì bên kia mất thông báo. Vì vậy `useApprovalNotifications` chỉ bật (A) hoặc (B), và tắt
+ * hẳn khi chưa biết trạng thái server.
  */
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { apiCall } from './api.ts';
-import { getAck, pushPermission, pushSupported, requestPushPermission, setAck, type PushPermission } from '../lib/pwa.ts';
+import { apiCall, apiData } from './api.ts';
+import {
+  currentPushSubscription,
+  getAck,
+  pushPermission,
+  pushSupported,
+  requestPushPermission,
+  setAck,
+  subscribeToPush,
+  unsubscribeFromPush,
+  type PushPermission,
+} from '../lib/pwa.ts';
 
-interface PushPendingResponse {
-  data?: {
-    count: number;
-    cursor: string;
-    items: { title: string; body: string; href: string }[];
-  };
-  count?: number;
-  cursor?: string;
-  items?: { title: string; body: string; href: string }[];
+/* ---------------- Trạng thái Web Push phía server ---------------- */
+
+export interface PushStatus {
+  /** Server đã cấu hình VAPID và đang bật gửi. */
+  enabled: boolean;
+  /** Khoá công khai để `pushManager.subscribe`. */
+  public_key: string;
+  /** Số thiết bị của tôi đã đăng ký. */
+  devices: number;
 }
 
-/** Theo dõi quyền Notification để UI (nút bật/tắt) cập nhật ngay — quyền không có event chuẩn. */
+export function usePushStatus() {
+  const [status, setStatus] = useState<PushStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void apiData<PushStatus>('/notifications/push/status')
+      .then((s) => {
+        if (alive) setStatus(s);
+      })
+      .catch(() => {
+        if (alive) setStatus({ enabled: false, public_key: '', devices: 0 });
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return status;
+}
+
+/* ---------------- Quyền Notification ---------------- */
+
 const permListeners = new Set<() => void>();
 let permSnapshot: PushPermission = pushSupported() ? pushPermission() : 'unsupported';
 
@@ -61,12 +93,67 @@ export function usePushPermission(): PushPermission {
   return value;
 }
 
-/** Gọi sau khi người dùng vừa cấp quyền, để các component khác thấy ngay. */
-export function notifyPermissionChanged(): void {
+/**
+ * Bật thông báo: xin quyền → (nếu server có VAPID) đăng ký thiết bị → báo server lưu endpoint.
+ * @returns 'push' nếu Web Push hoạt động (báo cả khi app đóng), 'local' nếu chỉ có chuông poll.
+ */
+export async function enableApprovalNotifications(): Promise<'push' | 'local' | 'denied'> {
+  const permission = await requestPushPermission();
   refreshPermission();
+  if (permission !== 'granted') return 'denied';
+  const done = await subscribeCurrentDevice();
+  return done ? 'push' : 'local';
 }
 
-/** Hiện thông báo: ưu tiên SW (bấm mở đúng hồ sơ, còn khi app ở nền). */
+/**
+ * Đăng ký thiết bị này với server. Trả true nếu server đã lưu endpoint (Web Push dùng được).
+ * Không ném lỗi: mọi thất bại đều quay về chuông poll.
+ */
+export async function subscribeCurrentDevice(): Promise<boolean> {
+  try {
+    const status = await apiData<PushStatus>('/notifications/push/status');
+    if (!status.enabled || !status.public_key) return false;
+    const sub = await subscribeToPush(status.public_key);
+    if (!sub.ok) return false;
+    await apiCall('/notifications/push/subscribe', {
+      method: 'POST',
+      body: {
+        endpoint: sub.endpoint,
+        keys: await keysOf(),
+        user_agent: navigator.userAgent.slice(0, 280),
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Khoá `p256dh`/`auth` của subscription hiện tại (server cần để mã hoá payload). */
+async function keysOf(): Promise<{ p256dh: string; auth: string }> {
+  const sub = await currentPushSubscription();
+  const json = sub?.toJSON() as { keys?: { p256dh?: string; auth?: string } } | undefined;
+  return { p256dh: json?.keys?.p256dh ?? '', auth: json?.keys?.auth ?? '' };
+}
+
+/** Tắt thông báo trên thiết bị này: huỷ đăng ký trình duyệt + báo server xoá endpoint. */
+export async function disableApprovalNotifications(): Promise<void> {
+  const endpoint = await unsubscribeFromPush();
+  if (endpoint) {
+    await apiCall('/notifications/push/unsubscribe', { method: 'POST', body: { endpoint } }).catch(() => undefined);
+  }
+}
+
+/* ---------------- Chuông poll (dự phòng) ---------------- */
+
+interface PushPendingResponse {
+  data?: { count: number; cursor: string; items: { title: string; body: string; href: string }[] };
+  count?: number;
+  cursor?: string;
+  items?: { title: string; body: string; href: string }[];
+}
+
+/** Hiện thông báo từ trang: ưu tiên SW (bấm mở đúng hồ sơ, còn khi app ở nền). */
 async function showNotification(n: { title: string; body: string; href: string }, tag: string): Promise<void> {
   const options: NotificationOptions = {
     body: n.body || undefined,
@@ -92,28 +179,21 @@ async function showNotification(n: { title: string; body: string; href: string }
   };
 }
 
-/** Trả về true nếu bật được (đã có quyền), false nếu không. */
-export async function enableApprovalNotifications(): Promise<boolean> {
-  const result = await requestPushPermission();
-  refreshPermission();
-  return result === 'granted';
-}
-
 /**
- * Đang đăng nhập ⇒ poll mỗi 30s, bắn thông báo cho phiếu mới vào hàng chờ của tôi.
- * Tách riêng khỏi UI để gắn MỘT lần trong `App.tsx`.
+ * Poll 30s khi: đã đăng nhập + đã có quyền + server KHÔNG có Web Push (hoặc thiết bị chưa đăng ký).
+ * Gắn MỘT lần trong `App.tsx`.
  */
-export function useApprovalNotifications(enabled: boolean): void {
-  const permission = usePushPermission();
+export function useApprovalNotifications(enabled: boolean, mode: 'push' | 'local' | 'off'): void {
   const [signedInAt] = useState(() => Date.now());
 
   useEffect(() => {
-    if (!enabled || permission !== 'granted') return;
+    // Chế độ 'push': server tự đẩy, page KHÔNG được chạm vào push_seen_at (xem ghi chú đầu file).
+    if (!enabled || mode !== 'local') return;
     let cancelled = false;
     let running = false;
 
     const tick = async (): Promise<void> => {
-      if (running || document.visibilityState === 'hidden') return; // tab ẩn: không spam, để SW lo
+      if (running || document.visibilityState === 'hidden') return; // tab ẩn: để hệ điều hành lo
       running = true;
       try {
         // Mốc: lần báo cuối, hoặc lúc đăng nhập (không báo tồn đọng trước khi vào app).
@@ -125,7 +205,6 @@ export function useApprovalNotifications(enabled: boolean): void {
         const items = res.data?.items ?? res.items ?? [];
         const cursor = res.data?.cursor ?? res.cursor;
         if (cursor) setAck(cursor);
-        // Bắn tuần tự để giữ thứ tự phiếu đến; mỗi phiếu một tag riêng để không đè nhau.
         for (const [i, n] of items.entries()) {
           await showNotification(n, `fg-approval-${cursor}-${i}`);
         }
@@ -142,15 +221,10 @@ export function useApprovalNotifications(enabled: boolean): void {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [enabled, permission, signedInAt]);
+  }, [enabled, mode, signedInAt]);
 }
 
-/** Đồng bộ: người dùng đã bật thông báo chưa (dùng cho nhãn nút). */
-export function approvalNotificationsOn(): boolean {
-  return pushSupported() && pushPermission() === 'granted';
-}
-
-/** Xoá mốc đã báo (dùng khi đăng xuất để người dùng khác trên máy không "ăn" mốc cũ). */
+/** Xoá mốc "đã báo" của chuông dự phòng (gọi khi đăng xuất — máy có thể được dùng bởi người khác). */
 export function resetPushAck(): void {
   try {
     localStorage.removeItem('fg.push.ack');
@@ -158,3 +232,5 @@ export function resetPushAck(): void {
     /* ignore */
   }
 }
+
+export { pushSupported };

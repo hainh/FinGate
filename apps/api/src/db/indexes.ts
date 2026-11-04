@@ -129,6 +129,11 @@ export const INDEXES: Record<string, IndexDef[]> = {
   departments: [{ key: { company_id: 1, active: 1 } }],
   users: [{ key: { email: 1 }, options: { unique: true } }],
   settings: [{ key: { key: 1 }, options: { unique: true } }],
+  /** Web Push: endpoint do push service cấp là duy nhất trên toàn hệ thống. */
+  push_subscriptions: [
+    { key: { endpoint: 1 }, options: { unique: true } },
+    { key: { user_id: 1 } },
+  ],
 };
 
 const COLLECTION_MODEL: Record<string, keyof typeof Models> = {
@@ -154,6 +159,7 @@ const COLLECTION_MODEL: Record<string, keyof typeof Models> = {
   departments: 'Department',
   users: 'User',
   settings: 'Setting',
+  push_subscriptions: 'PushSubscription',
   // v2
   partners: 'Partner',
   tags: 'Tag',

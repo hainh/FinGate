@@ -26,10 +26,12 @@ import { Models } from '../db/models.ts';
 import { defineRoute, requireActor, requireScope, validate } from '../lib/http.ts';
 import { ok } from '../lib/serialize.ts';
 import { scopedFind, scopedOne } from '../lib/mongo.ts';
-import { cashflowHistoryQuery, dashboardQuery, reportQuery, searchQuery, newsletterQuery, notificationListQuery } from '@fingate/shared';
+import { cashflowHistoryQuery, dashboardQuery, reportQuery, searchQuery, newsletterQuery, notificationListQuery, pushSubscribeBody, pushUnsubscribeBody } from '@fingate/shared';
 import { asBigInt, awaitingBadge, cashKttIdsForScope, cashflowHistory, compact, dashboardOverview, docHref, maturityLadder, scopeOf, wire } from '../domain/queries/index.ts';
 import { tagFilterSuffix } from '../domain/queries/dashboard-tags.ts';
 import { collectPushPending } from '../domain/queries/push-pending.ts';
+import { pushReady } from '../domain/push/index.ts';
+import { getEnv } from '../env.ts';
 import { parseIdList } from '../domain/vouchers/rules.ts';
 import { buildNewsletter, cachedNewsletter, storeNewsletter } from '../domain/newsletter/index.ts';
 import { reportPreset } from '../domain/reports/index.ts';
@@ -386,16 +388,18 @@ export function dashboardRoutes(app: FastifyInstance): void {
   );
 
   /**
-   * NOTI-03 (tối giản, không VAPID) — "phiếu mới vào hàng chờ của tôi" cho thông báo trên thiết bị.
+   * NOTI-03 — "phiếu mới vào hàng chờ của tôi" cho thông báo ĐANG MỞ (chuông dự phòng).
    *
-   * Không phải Web Push: server không đẩy được tới máy khi app đóng (chưa có VAPID + bảng
-   * `push_subscriptions`, ADR-07 chốt poll thay WebSocket). Endpoint này cho app đang chạy (kể cả nền)
-   * biết CÓ BAO NHIÊU phiếu mới vào đúng hàng "Chờ tôi duyệt" / "chờ tôi thanh toán" kể từ lần báo trước,
-   * để bắn 1 thông báo hệ thống. Chỉ ĐỌC: không tạo, không sửa dữ liệu nghiệp vụ.
+   * Người dùng nay nhận Web Push từ server (chạy cả khi app đóng — xem domain/push/). Endpoint này giữ
+   * lại làm lớp đệm cho môi trường chưa cấu hình VAPID: app đang mở vẫn thấy thông báo ngay cả khi
+   * server chưa đẩy được. Chỉ ĐỌC: không tạo, không sửa dữ liệu nghiệp vụ.
    *
    * `since` = mốc ISO client đã báo lần cuối (thiếu/hỏng ⇒ 24 giờ gần nhất). Đếm trên chính
    * `Notifications` server đã tạo cho người duyệt (`notifyNextApprover`) ⇒ số đếm khớp đúng màn
    * "Thông báo", không phải tự suy lại ma trận duyệt.
+   *
+   * LƯU Ý: chính client phải kiểm tra `webPush` (GET /me) trước — khi Web Push đã bật thì KHÔNG gọi
+   * endpoint này nữa, vì cả hai dùng chung cờ `push_seen_at` và sẽ "giành" mất thông báo của nhau.
    */
   app.route(
     defineRoute({
@@ -445,6 +449,85 @@ export function dashboardRoutes(app: FastifyInstance): void {
           { $set: { push_seen_at: new Date() } },
         ).exec();
         return { data: { marked: res.modifiedCount ?? 0 } };
+      },
+    }),
+  );
+
+  /* ---------------- NOTI-03 · Web Push (thông báo cả khi app đã đóng) ---------------- */
+
+  /**
+   * Trạng thái Web Push cho client: có bật ở server không + public key VAPID để `pushManager.subscribe`.
+   * Trả về CÙNG một chỗ với số thiết bị đã đăng ký để màn Cá nhân hiện được "đang bật trên 2 thiết bị".
+   */
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/notifications/push/status',
+      config: { perms: [] as Permission[], screen: 'NOTI-03', summary: 'Trạng thái Web Push' },
+      handler: async (req) => {
+        const actor = requireActor(req);
+        const env = getEnv();
+        const devices = await Models.PushSubscription.countDocuments({ user_id: actor.user_id }).exec();
+        return {
+          data: {
+            enabled: pushReady(),
+            /** Khoá công khai: client dùng để subscribe. Rỗng khi chưa cấu hình. */
+            public_key: env.pushConfigured ? env.VAPID_PUBLIC_KEY : '',
+            devices,
+          },
+        };
+      },
+    }),
+  );
+
+  /**
+   * Đăng ký một thiết bị nhận Web Push.
+   *
+   * `endpoint` do push service cấp — DUY NHẤT ong mỗi lần cài đặt. Dùng upsert theo endpoint:
+   *  - đăng ký lại trên cùng máy ⇒ chỉ làm mới khoá, không tạo bản trùng (index unique bảo vệ);
+   *  - đăng nhập tài khoản KHÁC trên cùng máy ⇒ `user_id` chuyển sang người mới. Điều này ĐÚNG về
+   *    bảo mật: máy thuộc về người đang đăng nhập, không được để thông báo của tài khoản cũ chảy sang.
+   */
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/notifications/push/subscribe',
+      config: { perms: [] as Permission[], screen: 'NOTI-03', summary: 'Đăng ký thiết bị nhận thông báo' },
+      handler: async (req) => {
+        const actor = requireActor(req);
+        if (!pushReady()) throw new ApiError({ code: 'FG-VAL-001', detail: 'Máy chủ chưa cấu hình Web Push (VAPID)' });
+        const body = validate(pushSubscribeBody, req.body);
+        await Models.PushSubscription.updateOne(
+          { endpoint: body.endpoint },
+          {
+            $set: {
+              user_id: actor.user_id,
+              keys: { p256dh: body.keys.p256dh, auth: body.keys.auth },
+              user_agent: body.user_agent ?? '',
+              fails: 0,
+              updated_at: new Date(),
+            },
+            $setOnInsert: { created_at: new Date(), last_ok_at: null },
+          },
+          { upsert: true },
+        ).exec();
+        const devices = await Models.PushSubscription.countDocuments({ user_id: actor.user_id }).exec();
+        return { data: { ok: true, devices } };
+      },
+    }),
+  );
+
+  /** Huỷ đăng ký thiết bị (xảy ra sau khi client `subscription.unsubscribe()`). Chỉ xoá của chính mình. */
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/notifications/push/unsubscribe',
+      config: { perms: [] as Permission[], screen: 'NOTI-03', summary: 'Huỷ đăng ký nhận thông báo' },
+      handler: async (req) => {
+        const actor = requireActor(req);
+        const body = validate(pushUnsubscribeBody, req.body);
+        const res = await Models.PushSubscription.deleteOne({ user_id: actor.user_id, endpoint: body.endpoint } as never).exec();
+        return { data: { ok: true, removed: res.deletedCount ?? 0 } };
       },
     }),
   );

@@ -56,6 +56,27 @@ const envSchema = z.object({
   /** bỏ qua mail ở dev/test: log ra console thay vì gửi */
   MAIL_MODE: z.enum(['smtp', 'log', 'off']).default('log'),
 
+  /* ---------------- Web Push (thông báo cả khi app đã đóng) ----------------
+   * VAPID: cặp khoá để push service (FCM/APNs/Mozilla) tin rằng server này được phép
+   * gửi tới ứng dụng ở `VAPID_SUBJECT`. Sinh một lần rồi GIỮ NGUYÊN:
+   *   npx web-push generate-vapid-keys
+   * Đổi khoá ⇒ mọi thiết bị đã đăng ký phải đăng ký lại (hết hạn hiệu lực của subscription cũ
+   * với khoá cũ, và push service trả 403). Public key cũng được gửi xuống client qua /me.
+   * Bỏ trống ⇒ tính năng Web Push TẮT êm (không lỗi boot, client ẩn nút bật thông báo).
+   */
+  VAPID_PUBLIC_KEY: z.string().default(''),
+  VAPID_PRIVATE_KEY: z.string().default(''),
+  /** Liên hệ của người vận hành: `mailto:ops@congty.vn` hoặc URL. Push service dùng khi cần cảnh báo. */
+  VAPID_SUBJECT: z.string().default('mailto:admin@fingate.local'),
+  /**
+   * Chu kỳ đẩy thông báo duyệt (giây). Chạy TRONG tiến trình API như vòng sao lưu — mỗi lượt nhặt
+   * các `Notification` chưa bắn và gửi tới mọi thiết bị đã đăng ký của người nhận.
+   * 0 = tắt vòng trong tiến trình (vẫn gọi được qua `POST /api/v1/tasks/push`).
+   */
+  PUSH_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(30),
+  /** Bật/tắt Web Push mà không cần xoá khoá (dùng khi tạm ngừng gửi). */
+  PUSH_ENABLED: z.enum(['true', 'false']).default('true'),
+
   /**
    * Bắt xác thực lại (mật khẩu/OTP) trước hành động duyệt/chi.
    * MẶC ĐỊNH TẮT — bật `true` nếu muốn yêu cầu step-up như ADR-14.
@@ -98,7 +119,13 @@ const envSchema = z.object({
   VERSION: z.string().default('0.1.0'),
 });
 
-export type Env = z.infer<typeof envSchema> & { isProd: boolean; isTest: boolean; isDev: boolean };
+export type Env = z.infer<typeof envSchema> & {
+  isProd: boolean;
+  isTest: boolean;
+  isDev: boolean;
+  /** Web Push dùng được: có đủ cặp khoá VAPID và không bị tắt bằng `PUSH_ENABLED=false`. */
+  pushConfigured: boolean;
+};
 
 let cached: Env | undefined;
 
@@ -114,6 +141,7 @@ export function loadEnv(overrides: Record<string, string | undefined> = {}): Env
   env.isProd = env.NODE_ENV === 'production';
   env.isTest = env.NODE_ENV === 'test';
   env.isDev = env.NODE_ENV === 'development';
+  env.pushConfigured = env.PUSH_ENABLED === 'true' && Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY);
 
   if (!env.SESSION_SECRET || !env.FIELD_KEY || !env.TASK_TOKEN) {
     if (env.isProd) {

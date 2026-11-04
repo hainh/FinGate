@@ -1264,6 +1264,36 @@ export const SettingSchema = new Schema(
   { collection: 'settings', versionKey: false },
 );
 
+/**
+ * Thiết bị đã đăng ký nhận Web Push (NOTI-03). Một người có thể có NHIỀU thiết bị (điện thoại + tablet).
+ *
+ * `endpoint` là URL duy nhất do push service cấp (FCM/APNs/Mozilla) — unique để đăng ký lại trên cùng
+ * thiết bị không tạo bản trùng; người dùng đăng nhập tài khoản khác trên cùng máy thì `user_id` được
+ * chuyển sang người mới (máy chỉ thuộc về người đang đăng nhập).
+ *
+ * `fails` đếm số lần gửi thất bại liên tiếp; vượt ngưỡng thì xoá bản ghi (subscription đã chết —
+ * người dùng xoá app / tắt thông báo / đổi khoá VAPID). Đây là đường tự dọn, không cần job riêng.
+ */
+export const PushSubscriptionSchema = new Schema(
+  {
+    user_id: { type: Schema.Types.ObjectId, required: true },
+    endpoint: { type: String, required: true },
+    keys: {
+      p256dh: { type: String, required: true },
+      auth: { type: String, required: true },
+    },
+    /** Chuỗi UA rút gọn để người dùng phân biệt "điện thoại của tôi" với máy khác trong danh sách. */
+    user_agent: { type: String, default: '' },
+    fails: { type: Number, default: 0 },
+    last_ok_at: { type: Date, default: null },
+    created_at: { type: Date, default: () => new Date() },
+    updated_at: { type: Date, default: () => new Date() },
+  },
+  { collection: 'push_subscriptions', versionKey: false },
+);
+PushSubscriptionSchema.index({ endpoint: 1 }, { unique: true });
+PushSubscriptionSchema.index({ user_id: 1 });
+
 /** Bộ đếm sinh mã phiếu `PC-2026-00123` — CAS `$inc` trên 1 document (domain/numbering). */
 export const CounterSchema = new Schema(
   {
@@ -1314,6 +1344,7 @@ export const Models = {
   Job: model('Job', JobSchema),
   Setting: model('Setting', SettingSchema),
   Counter: model('Counter', CounterSchema),
+  PushSubscription: model('PushSubscription', PushSubscriptionSchema),
   /* v2 */
   Partner: model('Partner', PartnerSchema),
   Tag: model('Tag', TagSchema),
