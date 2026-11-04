@@ -6,13 +6,17 @@
  *
  * Bộ lọc loại TK (Tất cả / Tiền mặt / Ngân hàng / Quỹ phụ): `kind` gửi xuống server, và server trả
  * `totals` ĐÃ tính trên tập đã lọc ⇒ KPI đổi theo nút lọc đang chọn (không tự cộng từ `items`).
+ *
+ * Phạm vi công ty con: khi bộ chuyển phạm vi đang chọn MỘT công ty con (`scope` ≠ 'all'), màn này chỉ hiện
+ * tài khoản / quỹ của công ty con đó — KHÔNG hiện tài khoản của Tập đoàn nữa (`group=subsidiary`, KPI cũng
+ * tính lại trên tập đó). Ở "Tất cả công ty" thì vẫn thấy TK Tập đoàn để theo dõi số dư như trước.
  */
 
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { moneyFromWire } from '@fingate/shared';
-import { useBankAccountsPage } from '../app/queries.ts';
-import { useAuth } from '../app/store.tsx';
+import { useBankAccountsPage, useCompanies } from '../app/queries.ts';
+import { SCOPE_ALL, useAuth } from '../app/store.tsx';
 import { FgButton, FgMoney, FgMoneyStack, FgText } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
 import { FgEmptyState, FgPagination, FgSegmented, FgSkeletonTable, FgTable } from '../components/uitk.tsx';
@@ -41,25 +45,38 @@ const KIND_CHIP: Record<string, { label: string; style: CSSProperties }> = {
 };
 
 export function BankAccountsScreen(): ReactNode {
-  const { can } = useAuth();
+  const { can, scope } = useAuth();
   const navigate = useNavigate();
+  const companies = useCompanies();
   const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState('');
+  // Phạm vi là MỘT công ty (≠ "Tất cả công ty") ⇒ chỉ xem tài khoản của công ty con đó: server bỏ hẳn
+  // tài khoản / quỹ của Tập đoàn. Chức danh cấp Tập đoàn chọn pháp nhân Tập đoàn thì vẫn xem TK Tập đoàn
+  // (đó là công ty của chính họ). Chưa tải xong danh sách công ty ⇒ chưa gửi cờ (server trả như cũ).
+  const scopedCompany = scope === SCOPE_ALL ? null : (companies.data?.items ?? []).find((c) => c._id === scope);
+  const viewingSubsidiary = scopedCompany ? !scopedCompany.is_group : false;
+  // Chưa tải xong danh sách công ty: chưa biết phạm vi là công ty con hay pháp nhân Tập đoàn ⇒ hiện như cũ.
+  const scopeKnown = scope === SCOPE_ALL || !!scopedCompany;
   const query = useBankAccountsPage({
     page,
     limit: BANK_ACCOUNT_PAGE_SIZE,
     kind: kindFilter === 'all' ? undefined : kindFilter,
+    group: viewingSubsidiary ? 'subsidiary' : undefined,
     sort,
   });
   const canEdit = (r: BankAccountRow) => can('bank:write') && (!r.is_group || can('admin:group_accounts'));
-  // Nhãn KPI theo bộ lọc đang chọn — totals do server tính trên ĐÚNG tập đã lọc.
+  // Nhãn KPI theo bộ lọc đang chọn — totals do server tính trên ĐÚNG tập đã lọc (kể cả phạm vi công ty con).
   const filterLabel = KIND_FILTER_OPTIONS.find((o) => o.value === kindFilter)?.label ?? 'Tất cả';
   return (
     <>
       <FgPageHeader
         title="Tài khoản tiền"
-        meta="Số dư lấy từ sổ cái và phiếu chờ thực thi — không nhập tay. Tiền mặt, quỹ phụ & ngân hàng của công ty và Tập đoàn"
+        meta={
+          viewingSubsidiary && scopedCompany
+            ? `Số dư lấy từ sổ cái và phiếu chờ thực thi — không nhập tay. Chỉ tài khoản của ${scopedCompany.name} (không gồm tài khoản Tập đoàn)`
+            : 'Số dư lấy từ sổ cái và phiếu chờ thực thi — không nhập tay. Tiền mặt, quỹ phụ & ngân hàng của công ty và Tập đoàn'
+        }
         actions={can('bank:write') ? <FgTooltipNew /> : undefined}
       />
       <div style={{ marginBottom: 'var(--fg-space-3)' }}>
@@ -74,6 +91,8 @@ export function BankAccountsScreen(): ReactNode {
       </div>
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={7} />}>
         {(data) => {
+          // Phạm vi chưa rõ (đang tải danh sách công ty): lọc thêm ở client để không nháy TK Tập đoàn.
+          const rows = scopeKnown ? data.items : data.items.filter((r) => !r.is_group);
           return (
             <>
               {data.totals ? (
@@ -96,7 +115,7 @@ export function BankAccountsScreen(): ReactNode {
                   </FgCard>
                 </div>
               ) : null}
-              {!data.items.length && page > 1 ? (
+              {!rows.length && page > 1 ? (
                 <div className="fg-card">
                   <FgEmptyState glyph="◇" title="Trang này không còn tài khoản nào" action={<FgButton onClick={() => setPage(1)}>Về trang 1</FgButton>} />
                 </div>
@@ -104,7 +123,7 @@ export function BankAccountsScreen(): ReactNode {
                 <div className="fg-card" style={{ padding: 0 }}>
                   <FgTable<BankAccountRow>
                     rowKey="_id"
-                    dataSource={data.items}
+                    dataSource={rows}
                     onRow={(r) => ({
                       onClick: () => navigate(`/ngan-hang/taikhoan/${r._id}`),
                       style: { cursor: 'pointer' },

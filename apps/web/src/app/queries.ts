@@ -188,9 +188,11 @@ export function useBankAccounts(companyId?: string | null) {
 /**
  * BANK-01 — một trang tài khoản tiền: phân trang và lọc loại TK ở máy chủ. `kind` (`bank` | `cash` | `fund`)
  * được gửi xuống server và `totals` tính trên ĐÚNG tập đã lọc theo `kind` (không dùng `items` để tự cộng —
- * `items` chỉ là một trang). Query key chứa toàn bộ `filters` nên đổi bộ lọc là cache tách riêng, refetch đúng.
+ * `items` chỉ là một trang). `group: 'subsidiary'` = bỏ hẳn tài khoản / quỹ của Tập đoàn — màn Tài khoản tiền
+ * gửi khi phạm vi đang chọn là MỘT công ty con; `totals` cũng tính lại trên tập không có TK Tập đoàn.
+ * Query key chứa toàn bộ `filters` nên đổi bộ lọc là cache tách riêng, refetch đúng.
  */
-export function useBankAccountsPage(filters: { page: number; limit: number; kind?: 'bank' | 'cash' | 'fund'; sort?: string }) {
+export function useBankAccountsPage(filters: { page: number; limit: number; kind?: 'bank' | 'cash' | 'fund'; group?: 'all' | 'subsidiary'; sort?: string }) {
   const { scope } = useAuth();
   return useQuery({
     queryKey: ['bank-accounts', 'page', scope, filters],

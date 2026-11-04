@@ -48,6 +48,12 @@ export interface LedgerAccountOptions {
   includeClosed?: boolean;
   /** công ty con vẫn thấy tài khoản Tập đoàn (màn BANK-01). */
   includeGroup?: boolean;
+  /**
+   * Bỏ HẲN tài khoản / quỹ của Tập đoàn (`is_group = true`) khỏi kết quả. Màn "Tài khoản tiền" (BANK-01)
+   * bật khi phạm vi đang chọn là MỘT công ty con — chỉ xem tiền của công ty đó, không lẫn quỹ Tập đoàn.
+   * Áp sau mọi bộ lọc khác (kể cả `forCompany` trỏ vào pháp nhân Tập đoàn).
+   */
+  excludeGroupAccounts?: boolean;
   /** công ty của phiếu (picker nguồn tiền) — §VIII. */
   forCompany?: { id: string; isGroup: boolean };
   asOf?: string;
@@ -69,12 +75,15 @@ export function composeAccountBalance(input: {
   };
 }
 
-export async function ledgerAccountViews(
+/**
+ * Điều kiện tìm tài khoản tiền của màn "Tài khoản tiền" (BANK-01) và của bộ chọn nguồn tiền (§VIII).
+ * `excludeGroupAccounts` bỏ HẲN tài khoản / quỹ của Tập đoàn — màn Tài khoản tiền bật khi phạm vi đang chọn
+ * là MỘT công ty con (chỉ xem tiền của công ty đó). Tách thành hàm thuần để kiểm thử được điều kiện Mongo.
+ */
+export function accountFilter(
   scope: { companyIds: string[] | null },
   opts: LedgerAccountOptions = {},
-): Promise<LedgerAccountView[]> {
-  const asOf = opts.asOf ?? today();
-  const horizonEnd = addDays(asOf, opts.horizonDays ?? 30);
+): Record<string, unknown> {
   const base = opts.includeClosed ? {} : { status: { $ne: 'closed' } };
   const filter: Record<string, unknown> = opts.forCompany
     ? opts.forCompany.isGroup
@@ -85,6 +94,23 @@ export async function ledgerAccountViews(
       : opts.includeGroup
         ? { ...base, $or: [{ company_id: { $in: scope.companyIds } }, { is_group: true }] }
         : { ...base, company_id: { $in: scope.companyIds } };
+  // Màn "Tài khoản tiền" khi phạm vi là MỘT công ty con: không hiện tài khoản / quỹ của Tập đoàn.
+  if (opts.excludeGroupAccounts) {
+    const noGroup = { is_group: { $ne: true } };
+    const or = filter.$or as Record<string, unknown>[] | undefined;
+    if (or) filter.$or = or.map((c) => ({ ...c, ...noGroup }));
+    else Object.assign(filter, noGroup);
+  }
+  return filter;
+}
+
+export async function ledgerAccountViews(
+  scope: { companyIds: string[] | null },
+  opts: LedgerAccountOptions = {},
+): Promise<LedgerAccountView[]> {
+  const asOf = opts.asOf ?? today();
+  const horizonEnd = addDays(asOf, opts.horizonDays ?? 30);
+  const filter = accountFilter(scope, opts);
   const accounts = await Models.BankAccount.find(filter as never)
     .select({ company_id: 1, bank_name: 1, account_name: 1, account_number: 1, kind: 1, currency: 1, min_balance_minor: 1, is_group: 1, status: 1 })
     .lean();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountTotals, composeAccountBalance, pageAccountViews, type LedgerAccountView } from './accounts.ts';
+import { accountFilter, accountTotals, composeAccountBalance, pageAccountViews, type LedgerAccountView } from './accounts.ts';
 
 describe('composeAccountBalance — số dư = sổ cái + dự kiến (không phong toả)', () => {
   it('projected = thực tế + vào dự kiến − ra dự kiến', () => {
@@ -133,5 +133,33 @@ describe('pageAccountViews — sắp xếp trước khi cắt trang', () => {
     expect(pageAccountViews(rows, { sort: 'tk' }).items.map((r) => r.label)).toEqual(['A', 'B', 'C']);
     expect(pageAccountViews(rows, { sort: 'xyz' }).items.map((r) => r.account_id)).toEqual(['a', 'b', 'c']);
     expect(pageAccountViews(rows, { sort: '' }).items.map((r) => r.account_id)).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('accountFilter — phạm vi công ty con không hiện tài khoản Tập đoàn (màn Tài khoản tiền)', () => {
+  const scope = { companyIds: ['c1', 'c2'] };
+
+  it("bật excludeGroupAccounts ⇒ loại is_group, giữ nguyên phạm vi công ty", () => {
+    const f = accountFilter(scope, { excludeGroupAccounts: true });
+    expect(f).toEqual({ status: { $ne: 'closed' }, company_id: { $in: ['c1', 'c2'] }, is_group: { $ne: true } });
+  });
+
+  it('mặc định (không bật) ⇒ điều kiện như cũ, không đụng tới is_group', () => {
+    expect(accountFilter(scope, {})).toEqual({ status: { $ne: 'closed' }, company_id: { $in: ['c1', 'c2'] } });
+  });
+
+  it('includeGroup + excludeGroupAccounts ⇒ mỗi nhánh $or đều bị loại TK Tập đoàn', () => {
+    const f = accountFilter(scope, { includeGroup: true, excludeGroupAccounts: true });
+    // nhánh `is_group: true` bị chặn lại thành rỗng: chỉ còn tài khoản của công ty con trong phạm vi.
+    expect(f.$or).toEqual([{ company_id: { $in: ['c1', 'c2'] }, is_group: { $ne: true } }, { is_group: { $ne: true } }]);
+  });
+
+  it('phạm vi Tất cả công ty (companyIds null) + excludeGroupAccounts ⇒ chỉ còn công ty con', () => {
+    expect(accountFilter({ companyIds: null }, { excludeGroupAccounts: true })).toEqual({ status: { $ne: 'closed' }, is_group: { $ne: true } });
+  });
+
+  it('includeClosed giữ ảnh hưởng của trạng thái nhưng vẫn bỏ TK Tập đoàn', () => {
+    const f = accountFilter({ companyIds: null }, { includeClosed: true, excludeGroupAccounts: true });
+    expect(f).toEqual({ is_group: { $ne: true } });
   });
 });

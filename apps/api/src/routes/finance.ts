@@ -187,9 +187,14 @@ export function financeRoutes(app: FastifyInstance): void {
         }
         // Màn BANK-01: công ty con thấy tài khoản Tập đoàn để theo dõi số dư;
         // khi chọn nguồn tiền cho phiếu (for_company) server đã lọc theo công ty.
+        // `group=subsidiary` (màn Tài khoản tiền khi phạm vi là MỘT công ty con): bỏ hẳn
+        // tài khoản / quỹ của Tập đoàn — không hiện trong danh sách lẫn KPI. Phạm vi
+        // "Tất cả công ty" không gửi tham số này nên vẫn thấy TK Tập đoàn như trước.
+        const excludeGroupAccounts = paging.group === 'subsidiary';
         const rows = await ledgerAccountViews(scope, {
           includeClosed: q.include_closed === 'true',
-          includeGroup: !forCompanyOpt,
+          includeGroup: !forCompanyOpt && !excludeGroupAccounts,
+          excludeGroupAccounts,
           forCompany: forCompanyOpt,
         });
         // `totals` = Σ trên tập ĐÃ LỌC theo `kind` (không cắt trang — KPI đổi theo bộ lọc loại TK);

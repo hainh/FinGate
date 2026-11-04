@@ -68,13 +68,25 @@ export const bankAccountUpsertBody = z.object({
 export const bankAccountUpdateBody = bankAccountUpsertBody.omit({ company_id: true, is_group: true }).partial();
 
 /**
+ * Phạm vi chủ sở hữu của danh sách tài khoản tiền (BANK-01):
+ * - `subsidiary` — CHỈ tài khoản của các công ty con (`is_group = false`, tức là mọi công ty có `company_id`);
+ *   màn "Tài khoản tiền" gửi giá trị này khi phạm vi đang chọn là MỘT công ty con → không hiện tài khoản /
+ *   quỹ của Tập đoàn. Phạm vi "Tất cả công ty" giữ nguyên (`all`, vẫn thấy TK Tập đoàn).
+ * - `all` (mặc định) / bỏ trống — như trước: theo phạm vi người dùng, công ty con vẫn thấy tài khoản Tập đoàn.
+ */
+export const BANK_ACCOUNT_GROUP_SCOPES = ['all', 'subsidiary'] as const;
+export type BankAccountGroupScope = (typeof BANK_ACCOUNT_GROUP_SCOPES)[number];
+
+/**
  * GET /bank-accounts (BANK-01). `page`/`limit` bật phân trang phía máy chủ; bỏ trống cả hai ⇒ trả toàn bộ
- * (bộ chọn tài khoản ở phiếu, duyệt và đối tác dùng kiểu này). `kind` lọc danh sách theo loại tài khoản.
+ * (bộ chọn tài khoản ở phiếu, duyệt và đối tác dùng kiểu này). `kind` lọc danh sách theo loại tài khoản;
+ * `group` lọc theo chủ sở hữu (xem `BANK_ACCOUNT_GROUP_SCOPES`).
  */
 export const bankAccountListQuery = z.object({
   page: z.coerce.number().int().min(1).max(10_000).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   kind: accountKind.optional(),
+  group: z.enum(BANK_ACCOUNT_GROUP_SCOPES).optional(),
   /** `<cột>` tăng dần, `-<cột>` giảm dần (tk, kind, num, cur, bal, proj, min, st); trống ⇒ thứ tự mặc định. */
   sort: z.string().max(32).optional(),
 });
