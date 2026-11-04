@@ -700,6 +700,7 @@ Item row: `[type badge][tên file 1 dòng ellipsis][size][ngày upload][người
 - Sort: mặc định `Ngày thanh toán desc`; ưu tiên `Chờ tôi duyệt` lên đầu khi `scope=mine`.
 - Sticky header + sticky cột đầu; `⋯` row menu (Xem · Sao chép liên kết · In · Nhân bản · Lịch sử).
 - Bulk bar xuất hiện khi chọn ≥ 1: `Đã chọn 12 · Tổng 18,40 tỷ · [Duyệt hàng loạt] [Xuất] [Bỏ chọn]` — **duyệt hàng loạt bắt buộc hiện tổng tiền + vẫn mở review từng hồ sơ**.
+- **Chọn hàng loạt trên màn cảm ứng:** ô tick dùng `FgCheckbox` — `<label>` có cạnh tối thiểu `--fg-touch-min` (44px) bọc ô vuông 20px, nên ngón tay bấm lệch vài px vẫn trúng; hàng tiêu đề cột chọn có ô tick **chọn/bỏ chọn cả trang** (`indeterminate` khi chọn một phần, chỉ đụng trang đang hiện); bấm ô tick không kích hoạt click-mở-hồ-sơ của dòng; nút trong bulk bar cao ≥44px, ở ≤767px bulk bar xuống dòng và bám đáy. Ô tick mặc định antd (14px) **không** dùng cho chọn hàng loạt.
 - Infinite scroll không dùng cho bảng tài chính → pagination `20/50/100`, giữ trang khi reload.
 - Column chooser và density ghi nhớ theo người dùng.
 **St:** loading (skeleton 8 dòng, không spinner che nội dung) · empty (`FgEmptyState` + CTA tạo đề nghị, phân biệt "không có dữ liệu" và "không có kết quả lọc") · error (retry) · partial (dữ liệu công ty X chưa đồng bộ → `FgAlert` trên bảng).

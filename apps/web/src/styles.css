@@ -646,6 +646,55 @@ body {
   overflow-wrap: break-word;
 }
 
+/* ---------------- ô tick vùng chạm lớn (FgCheckbox, DS §5.4) ---------------- */
+
+/*
+ * Ô tick gốc 18px quá nhỏ cho ngón tay. `<label>` là vùng chạm ≥ `--fg-touch-min` (44px),
+ * ô vuông vẫn 20px bên trong: mắt thấy gọn, tay bấm rộng — bấm lệch vài px quanh ô vẫn trúng.
+ */
+.fg-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--fg-touch-min);
+  min-height: var(--fg-touch-min);
+  cursor: pointer;
+  /* vùng chạm rộng hơn ô vuông: bấm lệch vài px vẫn trúng */
+  padding-inline: var(--fg-space-1);
+  border-radius: var(--fg-radius-md);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.fg-check:hover {
+  background: var(--fg-bg-hover);
+}
+
+.fg-check.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.fg-check.is-disabled:hover {
+  background: transparent;
+}
+
+.fg-check-input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--fg-action-primary);
+  cursor: inherit;
+  flex: 0 0 auto;
+}
+
+/* vòng focus rõ khi điều hướng bàn phím (DS §10) */
+.fg-check-input:focus-visible {
+  outline: var(--fg-border-w-2) solid var(--fg-action-primary);
+  outline-offset: 2px;
+  border-radius: var(--fg-radius-xs);
+}
+
 /* ---------------- bulk bar ---------------- */
 
 .fg-bulkbar {
@@ -671,6 +720,49 @@ body {
   background: var(--fg-bg-elevated);
   color: var(--fg-text-primary);
   border: var(--fg-border-w-1) solid var(--fg-border-strong);
+}
+
+/* nút trong bulk bar: cao ≥ 44px để chạm được bằng ngón tay (DS §5.4) */
+.fg-bulkbar-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--fg-touch-min);
+  min-width: var(--fg-touch-min);
+  padding-inline: var(--fg-space-2);
+  border-radius: var(--fg-radius-md);
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+/* bulk bar nền tối (light theme) / nền sáng (dark theme) → hover dùng lớp phủ theo màu chữ */
+.fg-bulkbar-btn:hover,
+.fg-bulkbar-btn:focus-visible {
+  opacity: 1;
+  background: rgba(127, 127, 127, 0.22);
+}
+
+.fg-bulkbar-btn--primary {
+  opacity: 1;
+  font-weight: 600;
+}
+
+.fg-bulkbar-btn:focus-visible {
+  outline: var(--fg-border-w-2) solid currentColor;
+  outline-offset: 2px;
+}
+
+/* hàng loạt dùng ngón tay: bulk bar bám đáy, các mục xếp dọc chứ không bóp chữ */
+@media (max-width: 767px) {
+  .fg-bulkbar {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--fg-space-2) var(--fg-space-3);
+    width: calc(100% - var(--fg-space-4) * 2);
+    padding: var(--fg-space-2) var(--fg-space-3);
+    bottom: var(--fg-space-2);
+  }
 }
 
 /* ---------------- filter bar ---------------- */

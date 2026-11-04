@@ -25,7 +25,7 @@ import {
 import { useAwaitingTurnCount, useDocuments, useProcessed, useQueue, type DocListFilters, type QueueFilters } from '../app/queries.ts';
 import { onSortChange, withServerSort } from '../app/table-sort.ts';
 import type { QueueRow } from '../app/types.ts';
-import { FgButton, FgDateTime, FgMoneyStack, FgSelect, FgStatusChip, FgText } from '../components/primitives.tsx';
+import { FgButton, FgCheckbox, FgDateTime, FgMoneyStack, FgSelect, FgStatusChip, FgText } from '../components/primitives.tsx';
 import { FgEmptyState, FgPagination, FgSkeletonTable, FgTable, FgTabs, useIsCardView } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useDebounced } from '../components/pagekit.tsx';
@@ -585,21 +585,42 @@ export function DocListScreen({
                 />
               </div>
             );
+          const allSelected = rows.length > 0 && rows.every((r) => !!selected[r._id]);
+          const someSelected = !allSelected && rows.some((r) => !!selected[r._id]);
+          /** chọn/bỏ chọn CẢ TRANG đang hiện — không đụng lựa chọn của trang khác. */
+          const togglePage = (on: boolean) =>
+            setSelected((s) => {
+              if (!on) {
+                const n = { ...s };
+                for (const r of rows) delete n[r._id];
+                return n;
+              }
+              const n = { ...s };
+              for (const r of rows) n[r._id] = r;
+              return n;
+            });
           const tableColumns = selectable
             ? ([
                 {
                   key: 'sel',
-                  width: 44,
+                  width: 56,
+                  // ô tick ở tiêu đề cho màn hình cảm ứng: chọn cả trang bằng một chạm
+                  title: (
+                    <FgCheckbox
+                      ariaLabel={allSelected ? 'Bỏ chọn cả trang' : 'Chọn cả trang'}
+                      checked={allSelected}
+                      indeterminate={someSelected}
+                      onChange={togglePage}
+                    />
+                  ),
                   render: (_v: unknown, r: QueueRow) => (
-                    <input
-                      type="checkbox"
-                      aria-label={`Chọn ${r.code}`}
-                      style={{ width: 18, height: 18, accentColor: 'var(--fg-action-primary)', cursor: 'pointer' }}
+                    <FgCheckbox
+                      ariaLabel={`Chọn ${r.code}`}
                       checked={!!selected[r._id]}
-                      onChange={(e) =>
+                      onChange={(on) =>
                         setSelected((s) => {
                           const n = { ...s };
-                          if (e.target.checked) n[r._id] = r;
+                          if (on) n[r._id] = r;
                           else delete n[r._id];
                           return n;
                         })
@@ -620,7 +641,8 @@ export function DocListScreen({
                 onChange={onSortChange((v) => setFilter('sort', v))}
                 onRow={(r) => ({
                   onClick: (e) => {
-                    if ((e.target as HTMLElement).closest('a,input,button')) return;
+                    // ô tick vùng chạm lớn là <label>: bấm ô ≠ mở hồ sơ
+                    if ((e.target as HTMLElement).closest('a,input,button,label')) return;
                     navigate(deepLink(r));
                   },
                   style: { cursor: 'pointer' },
@@ -683,10 +705,10 @@ export function DocListScreen({
                 <div className="fg-bulkbar" role="region" aria-label="Thao tác hàng loạt">
                   <span>Đã chọn {selectedList.length}</span>
                   <strong>Tổng {formatMoney(selectedTotal, { mode: 'compact' })}</strong>
-                  <button type="button" style={{ all: 'unset', cursor: 'pointer', fontWeight: 600 }} onClick={() => setBulkOpen(true)}>
+                  <button type="button" className="fg-bulkbar-btn fg-bulkbar-btn--primary" onClick={() => setBulkOpen(true)}>
                     Duyệt hàng loạt →
                   </button>
-                  <button type="button" style={{ all: 'unset', cursor: 'pointer', opacity: 0.7 }} onClick={() => setSelected({})}>
+                  <button type="button" className="fg-bulkbar-btn" onClick={() => setSelected({})}>
                     Bỏ chọn
                   </button>
                 </div>

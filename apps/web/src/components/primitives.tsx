@@ -148,6 +148,55 @@ export function FgButton({
   );
 }
 
+/* ================= FgCheckbox — ô tick có vùng chạm lớn (DS §5.4) ================= */
+
+/**
+ * Ô tick dùng cho chọn hàng loạt ở màn hình cảm ứng.
+ *
+ * Ô tick gốc 18px chỉ chạm được bằng chuột; ở đây `<label>` bọc ngoài có cạnh tối thiểu
+ * `--fg-touch-min` (44px, DS §5.4) nên ngón tay bấm trúng cả vùng quanh ô vuông, không phải
+ * nhắm đúng vào ô. Ô vuông bên trong vẫn 20px để hàng bảng không cao thêm.
+ *
+ * Nhãn luôn có: `ariaLabel` gán cho `<input>` (đọc lên vẫn là "Chọn PC-…"), còn nhãn ẩn chỉ
+ * để bấm được vào cả vùng chạm.
+ */
+export function FgCheckbox({
+  checked,
+  onChange,
+  ariaLabel,
+  indeterminate = false,
+  disabled = false,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  ariaLabel: string;
+  indeterminate?: boolean;
+  disabled?: boolean;
+}): ReactNode {
+  const ref = useRef<HTMLInputElement>(null);
+  // `indeterminate` chỉ là thuộc tính của DOM, không có trong JSX → phải gán tay
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+  return (
+    <label
+      className={`fg-check${disabled ? ' is-disabled' : ''}`}
+      // click vào dòng/card mở hồ sơ: ô tick không được làm điều hướng luôn
+      onClick={(e) => e.stopPropagation()}
+    >
+      <input
+        ref={ref}
+        type="checkbox"
+        className="fg-check-input"
+        aria-label={ariaLabel}
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+    </label>
+  );
+}
+
 /* ================= FgField / FgInput (DS §7.5) ================= */
 
 export function FgField({
