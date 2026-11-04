@@ -81,7 +81,14 @@ describe('defaultStepsFor — chuỗi mặc định theo khoảng tiền (v2 §7
   });
 
   it('loại hồ sơ khác giữ chuỗi cố định, không phụ thuộc số tiền', () => {
-    expect(roles('income', 1n)).toEqual(['chief_accountant', 'director', 'deputy_chairman']);
-    expect(roles('income', 9_000_000_000n)).toEqual(['chief_accountant', 'director', 'deputy_chairman']);
+    // phiếu thu có bước PGĐ như phiếu chi (yêu cầu nghiệp vụ), nhưng không chia khoảng tiền
+    expect(roles('income', 1n)).toEqual(['chief_accountant', 'deputy_director', 'director', 'deputy_chairman']);
+    expect(roles('income', 9_000_000_000n)).toEqual(['chief_accountant', 'deputy_director', 'director', 'deputy_chairman']);
+  });
+
+  it('phiếu thu đi qua PGĐ giống phiếu chi, ở ngay sau KTT', () => {
+    // chuỗi cố định (không chia khoảng tiền) nên luôn có PGĐ; phiếu chi chỉ có PGĐ trong khoảng tiền riêng
+    expect(roles('income', 20_000_000n)).toEqual(['chief_accountant', 'deputy_director', 'director', 'deputy_chairman']);
+    expect(roles('income', 20_000_000n).slice(0, 2), 'KTT → PGĐ giống phiếu chi').toEqual(roles('spend', 20_000_000n).slice(0, 2));
   });
 });

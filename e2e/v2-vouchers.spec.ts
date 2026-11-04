@@ -911,12 +911,13 @@ test.describe('Phiếu thu/chi, phê duyệt và thực thi (CTA)', () => {
     await H.uiApprove(chief);
     await H.expectStatus(chief, co, income.id, 'pending.gd');
 
-    // phiếu thu 20 triệu: chuỗi KTT → GĐ (PGĐ/P.TGĐ khuyết nên bỏ qua; dưới ngưỡng Chủ tịch) → GĐ là cấp cuối
+    // phiếu thu có bước PGĐ giống phiếu chi, nhưng CTA khuyết chức danh PGĐ ⇒ bước đó bị bỏ,
+    // chuỗi còn KTT → GĐ (dưới ngưỡng Chủ tịch) → GĐ là cấp cuối
     await H.openDoc(director, 'income', income.id);
     await H.uiApprove(director);
     await H.expectStatus(director, co, income.id, 'paid');
     const incomeDoc = await H.getDoc(director, co, income.id);
-    expect(((incomeDoc.approval?.steps ?? []) as { role: string }[]).map((s) => s.role), 'chuỗi phiếu thu 20 triệu: KTT → GĐ').toEqual([
+    expect(((incomeDoc.approval?.steps ?? []) as { role: string }[]).map((s) => s.role), 'chuỗi phiếu thu 20 triệu: KTT → GĐ (PGĐ khuyết bị bỏ)').toEqual([
       'chief_accountant',
       'director',
     ]);

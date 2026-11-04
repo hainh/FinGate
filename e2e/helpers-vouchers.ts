@@ -290,8 +290,11 @@ export async function approveToFinal(
   id: string,
   first?: { page: Page; body?: Record<string, unknown> },
 ): Promise<string> {
+  // Phiếu thu có bước PGĐ như phiếu chi; e2e dùng GĐ cho cả hai vì CTA khuyết chức danh PGĐ
+  // (bước khuyết bị server bỏ, còn cấp PGĐ thì GĐ vẫn là người có `approval:act` xử lý được bước đó).
   const byRole: Record<string, Page | undefined> = {
     chief_accountant: pages.chief,
+    deputy_director: pages.director,
     director: pages.director,
     chairman: pages.chairman,
   };

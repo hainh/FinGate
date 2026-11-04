@@ -87,11 +87,21 @@ export function defaultSpendSteps(amountMinor: bigint): { label: string; steps: 
   };
 }
 
-/** Quy trình mặc định cố định của các loại còn lại (blueprint §XX). Phiếu chi xem `defaultSpendSteps`. */
+/**
+ * Quy trình mặc định cố định của các loại còn lại (blueprint §XX). Phiếu chi xem `defaultSpendSteps`.
+ * Phiếu thu (`income`) CÓ bước PGĐ giống phiếu chi — không phụ thuộc số tiền; khác phiếu chi ở chỗ
+ * không có khoảng tiền riêng và GĐ luôn nằm trong chuỗi.
+ */
 const DEFAULT_STEPS: Record<Exclude<DocKind, 'spend'>, { label: string; steps: MatrixStep[] }> = {
+  // Phiếu thu đi qua PGĐ giống phiếu chi (không phụ thuộc số tiền): KTT → PGĐ → GĐ → P.TGĐ.
   income: {
-    label: 'Mặc định: KTT → GĐ → P.TGĐ',
-    steps: [defaultStep(1, 'chief_accountant', 24), defaultStep(2, 'director', 48), defaultStep(3, 'deputy_chairman', 48)],
+    label: 'Mặc định: KTT → PGĐ → GĐ → P.TGĐ',
+    steps: [
+      defaultStep(1, 'chief_accountant', 24),
+      defaultStep(2, 'deputy_director', 24),
+      defaultStep(3, 'director', 48),
+      defaultStep(4, 'deputy_chairman', 48),
+    ],
   },
   rollover: {
     label: 'Đảo hạn: KTT → PGĐ → GĐ → P.TGĐ',

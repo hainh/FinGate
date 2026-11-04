@@ -282,12 +282,13 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
       amount_min_minor: 0n,
       steps: [
         { order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true },
-        { order: 2, role: 'director', sla_hours: 48, mandatory: true },
-        { order: 3, role: 'deputy_chairman', sla_hours: 48, mandatory: true },
+        { order: 2, role: 'deputy_director', sla_hours: 24, mandatory: true },
+        { order: 3, role: 'director', sla_hours: 48, mandatory: true },
+        { order: 4, role: 'deputy_chairman', sla_hours: 48, mandatory: true },
       ],
       version: 1,
       effective_from: new Date('2026-01-01T00:00:00Z'),
-      label: 'Khoản thu — KTT → GĐ → P.TGĐ',
+      label: 'Khoản thu — KTT → PGĐ → GĐ → P.TGĐ',
       active: true,
     } as never);
     await Models.ApprovalMatrix.create({
