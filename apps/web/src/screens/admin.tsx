@@ -30,7 +30,7 @@ import {
   type Role,
   type Money,
 } from '@fingate/shared';
-import { useApprovalThreshold, useApprovalThresholdUpsert, useAuditLog, useBankAccounts, useCompanies, useDepartments, useMatrix, useMatrixUpsert, usePersonnel, type DepartmentRow } from '../app/queries.ts';
+import { useApprovalThreshold, useApprovalThresholdUpsert, useAuditLog, useBankAccounts, useCompanies, useDepartments, useMatrix, useMatrixToggle, useMatrixUpsert, usePersonnel, type DepartmentRow } from '../app/queries.ts';
 import { useAuth, useUi, useCurrentCompanyId } from '../app/store.tsx';
 import { FgAlert, FgButton, FgField, FgInput, FgMoneyStack, FgMoneyInput, FgMultiSelect, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -1260,6 +1260,9 @@ export function MatrixScreen(): ReactNode {
   const [preview, setPreview] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<MatrixEntry | null>(null);
+  // Quy trình đang chờ xác nhận ngừng dùng / dùng lại (không xoá vật lý — chỉ đổi hiệu lực).
+  const [toggleTarget, setToggleTarget] = useState<MatrixEntry | null>(null);
+  const [showInactive, setShowInactive] = useState(true);
   const canEdit = can('admin:matrix');
   const openNew = (): void => {
     setEditing(null);
@@ -1274,8 +1277,10 @@ export function MatrixScreen(): ReactNode {
         actions={canEdit ? <FgButton variant="primary" onClick={openNew}>+ Thêm quy trình</FgButton> : null}
       />
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={5} />}>
-        {(data) =>
-          !data.items.length ? (
+        {(data) => {
+          const items = showInactive ? data.items : data.items.filter((r) => r.active);
+          const inactiveCount = data.items.filter((r) => !r.active).length;
+          return !data.items.length ? (
             <div className="fg-card">
               <FgEmptyState
                 glyph="◇"
@@ -1289,11 +1294,28 @@ export function MatrixScreen(): ReactNode {
             </div>
           ) : (
             <div className="fg-card" style={{ padding: 0 }}>
+              {inactiveCount ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: '1px solid var(--fg-border)' }}>
+                  <Checkbox checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)}>
+                    Hiện quy trình đã ngừng dùng ({inactiveCount})
+                  </Checkbox>
+                </div>
+              ) : null}
               <FgTable
                 rowKey="_id"
-                dataSource={data.items}
+                dataSource={items}
                 columns={[
-                  { title: 'Quy trình', dataIndex: 'label', key: 'l', render: (v: string) => <FgText strong>{v}</FgText> },
+                  {
+                    title: 'Quy trình',
+                    dataIndex: 'label',
+                    key: 'l',
+                    render: (v: string, r) => (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                        <FgText strong>{v}</FgText>
+                        {r.active ? null : <FgTag tone="neutral">Ngừng dùng</FgTag>}
+                      </span>
+                    ),
+                  },
                   {
                     title: 'Công ty',
                     key: 'c',
@@ -1340,12 +1362,22 @@ export function MatrixScreen(): ReactNode {
                           <FgButton
                             size="small"
                             variant="primary"
+                            disabled={!r.active}
                             onClick={() => {
                               setEditing(r);
                               setModalOpen(true);
                             }}
                           >
                             Sửa
+                          </FgButton>
+                        ) : null}
+                        {canEdit ? (
+                          <FgButton
+                            size="small"
+                            variant={r.active ? 'danger' : 'secondary'}
+                            onClick={() => setToggleTarget(r)}
+                          >
+                            {r.active ? 'Ngừng dùng' : 'Dùng lại'}
                           </FgButton>
                         ) : null}
                       </div>
@@ -1370,6 +1402,15 @@ export function MatrixScreen(): ReactNode {
                           }))}
                         />
                       </div>
+                      {r.active ? null : (
+                        <div style={{ marginTop: 12 }}>
+                          <FgAlert
+                            tone="neutral"
+                            title="Quy trình đã ngừng dùng"
+                            description="Hồ sơ mới rơi vào dải tiền này dùng dòng khớp kế tiếp (hoặc chuỗi mặc định). Hồ sơ đang chờ đã được gán lại theo quy trình còn hiệu lực."
+                          />
+                        </div>
+                      )}
                     </div>
                   ),
                   rowExpandable: () => true,
@@ -1378,11 +1419,140 @@ export function MatrixScreen(): ReactNode {
                 }}
               />
             </div>
-          )
-        }
+          );
+        }}
       </FgQuery>
       <MatrixModal open={modalOpen} editing={editing} companies={companies.data?.items ?? []} onClose={() => setModalOpen(false)} />
+      <MatrixToggleModal
+        entry={toggleTarget}
+        others={query.data?.items ?? []}
+        onClose={() => setToggleTarget(null)}
+      />
     </>
+  );
+}
+
+/**
+ * ADM-04 — xác nhận NGỪNG DÙNG / DÙNG LẠI một quy trình. Không xoá vật lý: dòng được đặt
+ * `active = false`, resolver bỏ qua và rơi xuống dòng kế tiếp. Bắt buộc lý do (vào audit).
+ */
+function MatrixToggleModal({
+  entry,
+  others,
+  onClose,
+}: {
+  entry: MatrixEntry | null;
+  others: MatrixEntry[];
+  onClose: () => void;
+}): ReactNode {
+  const toggle = useMatrixToggle();
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!entry) return;
+    setReason('');
+    setError(null);
+  }, [entry]);
+
+  if (!entry) return null;
+  const willDisable = entry.active;
+  // Dòng khớp kế tiếp (theo cùng cách resolver chọn): cùng công ty + loại + danh mục, còn hiệu lực,
+  // dải tiền chứa cận dưới của dòng đang xét; ưu tiên dòng công ty cụ thể rồi tới toàn tập đoàn.
+  const covers = (o: MatrixEntry): boolean => {
+    const probe = BigInt(entry.amount_min_minor);
+    return probe >= BigInt(o.amount_min_minor) && (o.amount_max_minor == null || probe < BigInt(o.amount_max_minor));
+  };
+  const candidates = others.filter(
+    (o) =>
+      o._id !== entry._id &&
+      o.active &&
+      o.doc_kind === entry.doc_kind &&
+      (o.category_id ?? null) === (entry.category_id ?? null) &&
+      (o.company_id ?? null) !== (entry.company_id ?? null) &&
+      covers(o),
+  );
+  // rơi về công ty khác hoặc cấp tập đoàn; ưu tiên cấp tập đoàn (dòng phủ rộng nhất)
+  const next = candidates.find((o) => o.company_id === null) ?? candidates[0];
+  const canSubmit = reason.trim().length >= 5;
+
+  const submit = async (): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await toggle.mutateAsync({ id: entry._id, active: !entry.active, reason: reason.trim() });
+      toastOk(willDisable ? 'Đã ngừng dùng quy trình' : 'Đã dùng lại quy trình');
+      if (res?.rerun_changed) toastOk(`Đã gán lại ${res.rerun_changed} hồ sơ đang chờ theo quy trình còn hiệu lực`);
+      onClose();
+    } catch (e) {
+      if (e instanceof ApiRequestError) setError(e.problem.detail ?? e.problem.title);
+      else setError(willDisable ? 'Không ngừng dùng được quy trình' : 'Không dùng lại được quy trình');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <FgModal
+      open
+      title={willDisable ? 'Ngừng dùng quy trình duyệt' : 'Dùng lại quy trình duyệt'}
+      onCancel={onClose}
+      onOk={() => void submit()}
+      okText={willDisable ? 'Ngừng dùng' : 'Dùng lại'}
+      danger={willDisable}
+      confirmLoading={busy}
+      width={560}
+      footer={
+        <>
+          <FgButton onClick={onClose}>Hủy</FgButton>
+          <FgButton
+            variant={willDisable ? 'danger' : 'primary'}
+            loading={busy}
+            disabled={!canSubmit}
+            onClick={() => void submit()}
+          >
+            {willDisable ? 'Ngừng dùng' : 'Dùng lại'}
+          </FgButton>
+        </>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)', paddingTop: 8 }}>
+        <FgText strong>{entry.label}</FgText>
+        <FgText style="caption" color="muted">
+          {DOC_KIND_LABEL[entry.doc_kind as DocKind] ?? entry.doc_kind} · {entry.company_id ? entry.company_name : 'Toàn tập đoàn'} · từ{' '}
+          {formatMoney(money(entry.amount_min_minor), { mode: 'compact' })}
+          {entry.amount_max_minor ? ` đến ${formatMoney(money(entry.amount_max_minor), { mode: 'compact' })}` : ''} · chuỗi{' '}
+          {entry.steps.map((s) => ROLES_LABEL[s.role] ?? s.role_label).join(' → ')}
+        </FgText>
+        {willDisable ? (
+          <FgAlert
+            tone="warning"
+            title="Quy trình vẫn được giữ lại, chỉ ngừng hiệu lực"
+            description={
+              next
+                ? `Hồ sơ mới rơi vào dải tiền này sẽ dùng quy trình kế tiếp: ${next.label}. Hồ sơ đang chờ được gán lại theo quy trình còn hiệu lực.`
+                : 'Không còn quy trình nào khác khớp dải tiền này — hồ sơ sẽ rơi về chuỗi duyệt mặc định. Hồ sơ đang chờ được gán lại theo chuỗi đó.'
+            }
+          />
+        ) : (
+          <FgAlert tone="info" title="Quy trình sẽ có hiệu lực trở lại" description="Dùng lại không đảo ngược lịch sử: hồ sơ đã snapshot quy trình cũ vẫn giữ nguyên." />
+        )}
+        <FgField
+          label="Lý do (bắt buộc, vào audit)"
+          required
+          error={reason.length > 0 && reason.trim().length < 5 ? 'Tối thiểu 5 ký tự' : null}
+        >
+          <FgInput
+            autoFocus
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder={willDisable ? 'VD: Thay bằng quy trình mới từ 01/11' : 'VD: Khôi phục quy trình cũ'}
+          />
+        </FgField>
+        {error ? <FgAlert tone="danger" title={error} /> : null}
+      </div>
+    </FgModal>
   );
 }
 

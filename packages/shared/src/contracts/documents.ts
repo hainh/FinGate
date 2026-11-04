@@ -658,6 +658,14 @@ export const matrixUpsertBody = matrixFields.superRefine((v, ctx) => {
 
 export type MatrixUpsertBody = z.infer<typeof matrixUpsertBody>;
 
+/** ADM-04 — ngừng hiệu lực / dùng lại một dòng quy trình trong ma trận duyệt. */
+export const matrixDisableBody = z.object({
+  reason: z.string().min(5, 'Nhập lý do tối thiểu 5 ký tự').max(500),
+  request_id: uuid,
+});
+
+export type MatrixDisableBody = z.infer<typeof matrixDisableBody>;
+
 export const matrixEntry = matrixFields.extend({
   _id: objectId,
   version: z.number().int(),

@@ -1578,3 +1578,14 @@ Các điểm agent phát hiện khi triển khai, spec chưa nêu:
 Bảng phân trang (hoặc bị giới hạn số dòng) chỉ giữ một phần dữ liệu trong trình duyệt, nên sắp xếp phải do máy chủ làm. Quy ước: `sort=<cột>` tăng dần, `sort=-<cột>` giảm dần; khoá cột ở web trùng tên trường `sort` của API. Tiêu đề cột chỉ hiển thị mũi tên (`withServerSort`/`onSortChange` trong `apps/web/src/app/table-sort.ts`); API dùng `apps/api/src/lib/sort.ts` (chỉ nhận trường trong danh sách cho phép, trường lạ → thứ tự mặc định, giá trị trống xuống cuối).
 
 Áp dụng: Chờ tôi duyệt / Tôi đã duyệt / Thu / Chi (`/queue`, `/queue/processed`, `/documents`), Công nợ (`/debts`), Khoản vay (`/loans`), Tài khoản tiền (`/bank-accounts`), Đối tác (`/partners`, `/partners/options`, tab phiếu thu/chi), Lịch sử giao dịch tài khoản. Bảng luôn tải đủ toàn bộ dòng trong một phản hồi (tab công nợ/khoản vay của đối tác, ma trận tuổi nợ…) giữ nguyên.
+
+## Ma trận duyệt (ADM-04) — ngừng dùng / dùng lại một quy trình
+
+**Xoá quy trình = NGỪNG HIỆU LỰC, không xoá vật lý.** Dòng `approval_matrix` được đặt `active = false` (giữ `steps`, `label`, `version` để tra cứu/audit); `resolveMatrix` chỉ đọc dòng `active: true` nên dòng đã ngừng bị bỏ qua, hồ sơ mới rơi xuống **dòng khớp kế tiếp** (cùng công ty/loại/danh mục, còn hiệu lực, dải tiền chứa số tiền) hoặc **chuỗi mặc định §7.2** khi không còn dòng nào. Nhờ snapshot `matrix_version` + `steps` trong hồ sơ, hồ sơ đã đi qua không bị lệch.
+
+- `POST /admin/matrix/:id/disable` · `POST /admin/matrix/:id/enable` (quyền `admin:matrix`, body `{ reason ≥ 5 ký tự, request_id }`): đổi `active`, `version++`, ghi audit `matrix.disable` / `matrix.enable` (lý do + chuỗi + dòng kế tiếp), rồi chạy `rerunPendingApprovals` (theo công ty + loại) để gán lại hồ sơ đang chờ. Cùng trạng thái ⇒ idempotent (không tăng version, không audit thừa).
+- Phạm vi: ma trận của công ty phải trong phạm vi người dùng (§7.5); ma trận cấp tập đoàn (`company_id = null`) chỉ cấp tập đoàn được đổi — như route upsert.
+- Chia sẻ logic chọn dòng giữa nơi xem trước và resolver: `matchSpecificity` + `amountInRange` + `nextMatrixInLine` (`apps/api/src/domain/workflow/matrix.ts`) — `nextMatrixInLine` trả đúng dòng mà `resolveMatrix` sẽ chọn nếu bỏ các dòng đang xét, `null` = chuỗi mặc định.
+- Web (`apps/web/src/screens/admin.tsx`): cột thao tác có **Ngừng dùng** / **Dùng lại**, hộp thoại bắt buộc lý do và nói rõ quy trình kế tiếp sẽ áp dụng; dòng đã ngừng hiện thẻ "Ngừng dùng", nút Sửa bị khoá, có bộ lọc "Hiện quy trình đã ngừng dùng". Ngừng dùng KHÔNG cần step-up (giống route tạo/sửa ma trận) nhưng bắt buộc lý do vào audit.
+- Kiểm thử: `apps/api/src/domain/workflow/matrix.test.ts` (thứ tự ưu tiên dòng, dải tiền nửa mở `[min, max)`), `apps/web/src/components/labels.test.ts` (nhãn audit `matrix.disable` / `matrix.enable`).
+

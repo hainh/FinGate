@@ -163,6 +163,8 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'matrix.create': 'Tạo ma trận duyệt',
   'matrix.update': 'Đổi ma trận duyệt',
   'matrix.upsert': 'Đổi ma trận duyệt',
+  'matrix.disable': 'Ngừng dùng quy trình duyệt',
+  'matrix.enable': 'Dùng lại quy trình duyệt',
   'settings.update': 'Đổi cấu hình',
   'setting.update': 'Đổi cấu hình',
   'automation.update': 'Đổi cấu hình tự động',

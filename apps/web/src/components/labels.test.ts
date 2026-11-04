@@ -20,7 +20,7 @@ const API_AUDIT_CODES = [
   'hr.invite', 'hr.invite_resend', 'hr.invite_regenerate', 'hr.invite_revoke', 'hr.password_link_regenerate',
   'hr.password_link_revoke', 'hr.activate', 'hr.deactivate', 'hr.reactivate', 'hr.update', 'hr.transfer',
   'department.activate', 'department.deactivate', 'department.delete', 'delegation.create',
-  'matrix.create', 'matrix.update', 'settings.update', 'setting.update', 'automation.update', 'alert_rule.upsert',
+  'matrix.create', 'matrix.update', 'matrix.disable', 'matrix.enable', 'settings.update', 'setting.update', 'automation.update', 'alert_rule.upsert',
   'company.create', 'company.update', 'report.export', 'db.backup', 'db.archive', 'auto_sync',
   // mã lịch sử hồ sơ được rebuildAudit sao nguyên sang audit_log
   'create', 'update', 'submit', 'approve', 'approve_with_reason', 'reject', 'request_changes', 'cancel', 'pay', 'queue_payment',

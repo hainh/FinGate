@@ -366,6 +366,24 @@ export function useMatrixUpsert() {
   });
 }
 
+/**
+ * Ngừng dùng / dùng lại một quy trình duyệt (ADM-04) — xoá = ngừng hiệu lực, không xoá vật lý.
+ * Server chạy lại hồ sơ đang chờ để gán đúng bàn theo chuỗi mới.
+ */
+export function useMatrixToggle() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, active, reason }: { id: string; active: boolean; reason: string }) =>
+      apiData<{ _id: string; active: boolean; version: number; rerun_scanned: number; rerun_changed: number }>(
+        `/admin/matrix/${id}/${active ? 'enable' : 'disable'}`,
+        { method: 'POST', body: { reason, request_id: uuid() } },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['matrix'] });
+    },
+  });
+}
+
 /** Ngưỡng Chairman (ADM-04) — mặc định toàn tập đoàn + override theo công ty, tách theo loại hồ sơ. */
 export function useApprovalThreshold() {
   const { scope } = useAuth();

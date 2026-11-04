@@ -37,6 +37,7 @@ import {
   internalTransferBody,
   loginBody,
   matrixUpsertBody,
+  matrixDisableBody,
   notificationListQuery,
   opinionBody,
   personnelDeactivateBody,
@@ -93,6 +94,7 @@ export const ownerAttachmentRemoveBodySchema = j(ownerAttachmentRemoveBody);
 
 // matrix & admin
 export const matrixUpsertBodySchema = j(matrixUpsertBody);
+export const matrixDisableBodySchema = j(matrixDisableBody);
 export const companyUpsertBodySchema = j(companyUpsertBody);
 export const departmentUpsertBodySchema = j(departmentUpsertBody);
 export const categoryUpsertBodySchema = j(categoryUpsertBody);

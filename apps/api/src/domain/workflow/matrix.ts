@@ -139,6 +139,63 @@ function sortUnique(steps: MatrixStep[]): MatrixStep[] {
   return ordered.map((s, i) => ({ ...s, order: i + 1 }));
 }
 
+/** Một dòng ma trận khớp `(company_id, kind, amount, category?)` — đủ để chọn "dòng khớp nhất". */
+export interface MatrixCandidate {
+  company_id: string | null;
+  category_id: string | null;
+  amount_min_minor: bigint | string | number;
+  amount_max_minor: bigint | string | number | null | undefined;
+}
+
+/** Dòng có điểm cụ thể cao nhất — dùng CHUNG với `resolveMatrix` để xem trước đúng dòng resolver sẽ chọn. */
+export function matchSpecificity(r: MatrixCandidate, input: { company_id: string; category_id?: string | null }): number {
+  let score = 0;
+  if (r.company_id && String(r.company_id) === input.company_id) score += 2;
+  if (r.category_id && String(r.category_id) === String(input.category_id ?? '')) score += 4;
+  else if (!r.category_id) score += 1;
+  return score;
+}
+
+/** Dải tiền `[min, max)` có chứa `amount_minor` không (`max` null = không chặn trên). */
+export function amountInRange(r: MatrixCandidate, amountMinor: bigint): boolean {
+  const min = big(r.amount_min_minor);
+  const max = r.amount_max_minor === null || r.amount_max_minor === undefined ? null : big(r.amount_max_minor);
+  return amountMinor >= min && (max === null || amountMinor < max);
+}
+
+/**
+ * Xem trước dòng ma trận SẼ được áp dụng nếu các dòng trong `excludeIds` ngừng hiệu lực — chính là
+ * dòng resolver chọn, chỉ bỏ qua các dòng đang xét. `null` = rơi về chuỗi mặc định (§7.2).
+ */
+export async function nextMatrixInLine(input: {
+  company_id: string | null;
+  kind: DocKind;
+  amount_minor: bigint;
+  category_id?: string | null;
+  excludeIds: string[];
+}): Promise<{ _id: string; label: string | null; company_id: string | null; version: number; roles: Role[] } | null> {
+  const rows = (await Models.ApprovalMatrix.find({
+    company_id: input.company_id,
+    doc_kind: input.kind,
+    category_id: input.category_id ?? null,
+    active: true,
+    _id: { $nin: input.excludeIds },
+  })
+    .sort({ effective_from: -1 })
+    .lean()) as unknown as MatrixRow[];
+  const inRange = rows.filter((r) => amountInRange(r, input.amount_minor));
+  if (!inRange.length) return null;
+  const where = { company_id: input.company_id ?? '', category_id: input.category_id ?? null };
+  const best = inRange.sort((a, b) => matchSpecificity(b, where) - matchSpecificity(a, where))[0]!;
+  return {
+    _id: String(best._id),
+    label: best.label ?? null,
+    company_id: best.company_id ? String(best.company_id) : null,
+    version: Number(best.version ?? 1),
+    roles: best.steps.map((s) => s.role as Role),
+  };
+}
+
 /**
  * Chọn ma trận khớp nhất: category cụ thể > doc_kind cụ thể > công ty > toàn tập đoàn,
  * rồi theo ngưỡng tiền và `effective_from` mới nhất.
@@ -159,24 +216,12 @@ export async function resolveMatrix(input: {
     .sort({ effective_from: -1 })
     .lean()) as unknown as MatrixRow[];
 
-  const matchSpecificity = (r: MatrixRow): number => {
-    let score = 0;
-    if (r.company_id && String(r.company_id) === input.company_id) score += 2;
-    if (r.category_id && String(r.category_id) === String(input.category_id ?? '')) score += 4;
-    else if (!r.category_id) score += 1;
-    return score;
-  };
-
-  const inRange = rows.filter((r) => {
-    const min = big(r.amount_min_minor);
-    const max = r.amount_max_minor === null || r.amount_max_minor === undefined ? null : big(r.amount_max_minor);
-    return input.amount_minor >= min && (max === null || input.amount_minor < max);
-  });
+  const inRange = rows.filter((r) => amountInRange(r, input.amount_minor));
 
   const chairmanThreshold = await chairmanThresholdFor(input.company_id, input.kind);
 
   if (inRange.length) {
-    const best = inRange.sort((a, b) => matchSpecificity(b) - matchSpecificity(a))[0]!;
+    const best = inRange.sort((a, b) => matchSpecificity(b, input) - matchSpecificity(a, input))[0]!;
     const steps = sortUnique(
       best.steps
         .map((s) => ({ order: s.order, role: s.role as Role, sla_hours: s.sla_hours ?? 24, mandatory: s.mandatory !== false })),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultStepsFor, resolveChairmanThreshold, type ChairmanThresholdConfig } from './matrix.ts';
+import { amountInRange, defaultStepsFor, matchSpecificity, resolveChairmanThreshold, type ChairmanThresholdConfig } from './matrix.ts';
 
 const COMPANY_A = 'a'.repeat(24);
 const COMPANY_B = 'b'.repeat(24);
@@ -90,5 +90,34 @@ describe('defaultStepsFor — chuỗi mặc định theo khoảng tiền (v2 §7
     // chuỗi cố định (không chia khoảng tiền) nên luôn có PGĐ; phiếu chi chỉ có PGĐ trong khoảng tiền riêng
     expect(roles('income', 20_000_000n)).toEqual(['chief_accountant', 'deputy_director', 'director', 'deputy_chairman']);
     expect(roles('income', 20_000_000n).slice(0, 2), 'KTT → PGĐ giống phiếu chi').toEqual(roles('spend', 20_000_000n).slice(0, 2));
+  });
+});
+
+/**
+ * ADM-04 "Ngừng dùng quy trình": dòng ngừng hiệu lực bị resolver bỏ qua ⇒ dòng kế tiếp phải được
+ * chọn theo ĐÚNG thứ tự ưu tiên của resolveMatrix (dải tiền + công ty cụ thể > dòng công ty,
+ * dòng công ty > toàn tập đoàn). `nextMatrixInLine` chia sẻ nguyên các hàm chọn dòng với resolver.
+ */
+describe('matchSpecificity / amountInRange — tiêu chí chọn dòng của resolver', () => {
+  const CTY = 'a'.repeat(24);
+
+  it('dòng của công ty + có danh mục riêng > dòng của công ty > dòng toàn tập đoàn', () => {
+    const base = { amount_min_minor: 0n, amount_max_minor: null };
+    const company = { ...base, company_id: CTY, category_id: null };
+    const group = { ...base, company_id: null, category_id: null };
+    const cat = { ...base, company_id: CTY, category_id: 'c'.repeat(24) };
+    expect(matchSpecificity(company, { company_id: CTY })).toBeGreaterThan(matchSpecificity(group, { company_id: CTY }));
+    expect(matchSpecificity(cat, { company_id: CTY, category_id: 'c'.repeat(24) })).toBeGreaterThan(matchSpecificity(company, { company_id: CTY }));
+    // danh mục của công ty khác không cộng điểm
+    expect(matchSpecificity(cat, { company_id: CTY, category_id: 'd'.repeat(24) })).toBeLessThan(
+      matchSpecificity(company, { company_id: CTY }),
+    );
+  });
+
+  it('dải tiền nửa mở [min, max): cận dưới tính, cận trên KHÔNG tính, max null = không chặn', () => {
+    expect(amountInRange({ company_id: null, category_id: null, amount_min_minor: '0', amount_max_minor: '50000000' }, 0n)).toBe(true);
+    expect(amountInRange({ company_id: null, category_id: null, amount_min_minor: '0', amount_max_minor: '50000000' }, 49_999_999n)).toBe(true);
+    expect(amountInRange({ company_id: null, category_id: null, amount_min_minor: '0', amount_max_minor: '50000000' }, 50_000_000n)).toBe(false);
+    expect(amountInRange({ company_id: null, category_id: null, amount_min_minor: '50000000', amount_max_minor: null }, 9_000_000_000n)).toBe(true);
   });
 });

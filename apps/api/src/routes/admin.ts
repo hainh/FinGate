@@ -31,6 +31,7 @@ import {
   departmentUpsertBody,
   categoryUpsertBody,
   matrixUpsertBody,
+  matrixDisableBody,
   personnelDeactivateBody,
   personnelInviteBody,
   personnelUpdateBody,
@@ -50,6 +51,7 @@ import {
   departmentUpsertBodySchema,
   inviteRegenerateBodySchema,
   matrixUpsertBodySchema,
+  matrixDisableBodySchema,
   personnelDeactivateBodySchema,
   personnelInviteBodySchema,
   personnelUpdateBodySchema,
@@ -68,7 +70,7 @@ import {
 } from '../lib/invite.ts';
 import { mirrorAudit } from '../domain/audit/index.ts';
 import { scopedAggregate } from '../lib/mongo.ts';
-import { assertMatrixSteps, CHAIRMAN_THRESHOLD_KEY, resolveChairmanThreshold, type ChairmanThresholdConfig } from '../domain/workflow/matrix.ts';
+import { assertMatrixSteps, CHAIRMAN_THRESHOLD_KEY, nextMatrixInLine, resolveChairmanThreshold, type ChairmanThresholdConfig } from '../domain/workflow/matrix.ts';
 import { rerunPendingApprovals } from '../domain/workflow/rerun.ts';
 import { DECISION_STATUSES, asBigInt, wire } from '../domain/queries/index.ts';
 import { mailTemplates, sendMail } from '../mail/sender.ts';
@@ -1188,6 +1190,120 @@ export function adminRoutes(app: FastifyInstance): void {
           { status: 201 },
         );
       },
+    }),
+  );
+
+  /**
+   * NGỪNG DÙNG / DÙNG LẠI một dòng quy trình (ADM-04) — xoá = ngừng hiệu lực, KHÔNG xoá vật lý:
+   * hồ sơ đã snapshot `matrix_version` + `steps` nên không bị lệch; ngừng hiệu lực chỉ làm resolver
+   * bỏ qua dòng này và rơi xuống dòng khớp kế tiếp (hoặc chuỗi mặc định §7.2).
+   * Validate đủ trước khi đổi, rồi chạy lại hồ sơ đang chờ để gán đúng bàn theo quy trình mới.
+   */
+  const setMatrixActive = async (
+    req: FastifyRequest,
+    id: string,
+    active: boolean,
+  ): Promise<{ data: { _id: string; active: boolean; version: number; rerun_scanned: number; rerun_changed: number } }> => {
+    const actor = requireActor(req);
+    const body = validate(matrixDisableBody, req.body ?? {});
+    const row = (await Models.ApprovalMatrix.findById(id).lean()) as
+      | {
+          _id: unknown;
+          company_id?: unknown;
+          doc_kind?: string;
+          category_id?: unknown;
+          amount_min_minor?: unknown;
+          amount_max_minor?: unknown;
+          steps?: { order: number; role: string; sla_hours?: number; mandatory?: boolean }[];
+          version?: number;
+          label?: string | null;
+          active?: boolean;
+        }
+      | null;
+    if (!row) throw new ApiError({ code: 'FG-WF-006', status: 404, detail: 'Không tìm thấy quy trình này' });
+    // ma trận cấp tập đoàn (company_id null) chỉ cấp tập đoàn được sửa (§7.5) — như route upsert
+    if (row.company_id) await assertCompanyAccess(req, String(row.company_id));
+    else if (requireScope(req).companyIds !== null) {
+      throw new ApiError({ code: 'FG-RBAC-002', detail: 'Chỉ cấp tập đoàn cấu hình ma trận cấp tập đoàn' });
+    }
+
+    const companyId = row.company_id ? String(row.company_id) : null;
+    const kind = String(row.doc_kind) as DocKind;
+    const roles = (row.steps ?? []).map((s) => s.role);
+
+    // Xem trước dòng SẼ áp dụng sau thao tác — cùng logic resolver, chỉ bỏ chính dòng đang xét.
+    const next = active
+      ? null
+      : await nextMatrixInLine({
+          company_id: companyId,
+          kind,
+          amount_minor: asBigInt((row as { amount_min_minor?: unknown }).amount_min_minor),
+          category_id: row.category_id ? String(row.category_id) : null,
+          excludeIds: [id],
+        });
+
+    // đã đúng trạng thái → không đổi gì (idempotent, không tăng version, không audit thừa)
+    if (Boolean(row.active) === active) {
+      return { data: { _id: id, active, version: Number(row.version ?? 1), rerun_scanned: 0, rerun_changed: 0 } };
+    }
+
+    await Models.ApprovalMatrix.updateOne(
+      { _id: id },
+      { $set: { active, updated_at: new Date() }, $inc: { version: 1 } },
+    ).exec();
+    await mirrorAudit({
+      at: new Date(),
+      actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+      action: active ? 'matrix.enable' : 'matrix.disable',
+      subject: { type: 'approval_matrix', id, code: kind },
+      company_id: companyId,
+      diff_fields: {
+        active: { before: Boolean(row.active), after: active },
+        reason: body.reason,
+        chain: roles.join(' → '),
+        ...(active ? {} : { next: next ? `${next.label ?? next._id} (${next.roles.join(' → ')})` : 'chuỗi mặc định' }),
+      },
+      request_id: body.request_id,
+      ip: requestCtx(req).ip,
+    });
+
+    // Quy trình đổi hiệu lực ⇒ hồ sơ đang chờ phải đúng bàn của chuỗi mới.
+    const rerun = await rerunPendingApprovals({
+      reason: active ? 'Dùng lại quy trình duyệt' : 'Ngừng dùng quy trình duyệt',
+      actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+      companyIds: companyId ? [companyId] : null,
+      kinds: [kind],
+      requestId: body.request_id,
+      ip: requestCtx(req).ip,
+    });
+    return {
+      data: {
+        _id: id,
+        active,
+        version: Number(row.version ?? 1) + 1,
+        rerun_scanned: rerun.scanned,
+        rerun_changed: rerun.changed,
+      },
+    };
+  };
+
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/admin/matrix/:id/disable',
+      config: { perms: ['admin:matrix'] as Permission[], screen: 'ADM-04', summary: 'Ngừng dùng quy trình duyệt' },
+      schema: { tags: ['admin'], body: matrixDisableBodySchema },
+      handler: async (req) => setMatrixActive(req, (req.params as { id: string }).id, false),
+    }),
+  );
+
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/admin/matrix/:id/enable',
+      config: { perms: ['admin:matrix'] as Permission[], screen: 'ADM-04', summary: 'Dùng lại quy trình duyệt' },
+      schema: { tags: ['admin'], body: matrixDisableBodySchema },
+      handler: async (req) => setMatrixActive(req, (req.params as { id: string }).id, true),
     }),
   );
 
