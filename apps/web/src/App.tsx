@@ -5,10 +5,11 @@
 import { useEffect, type ReactNode } from 'react';
 import { BrowserRouter } from 'react-router';
 import { App as AntdApp } from 'antd';
-import { AppProviders } from './app/store.tsx';
+import { AppProviders, useAuth } from './app/store.tsx';
 import { AppRoutes } from './routes.tsx';
 import { FgErrorBoundary } from './screens/errors.tsx';
 import { SkipLink } from './components/a11y.tsx';
+import { useApprovalNotifications } from './app/push-notifications.ts';
 
 function ToastBridge(): ReactNode {
   // toastOk() dispatch event → antd message (một nơi duy nhất, không static API)
@@ -25,6 +26,13 @@ function ToastBridge(): ReactNode {
   return null;
 }
 
+/** Bật thông báo "phiếu mới chờ tôi duyệt" khi đã đăng nhập (poll 30s, chỉ khi người dùng đã cấp quyền). */
+function ApprovalNotificationsBridge(): ReactNode {
+  const { status } = useAuth();
+  useApprovalNotifications(status === 'authed');
+  return null;
+}
+
 export default function App(): ReactNode {
   return (
     <BrowserRouter>
@@ -32,6 +40,7 @@ export default function App(): ReactNode {
       <FgErrorBoundary>
         <AppProviders>
           <ToastBridge />
+          <ApprovalNotificationsBridge />
           <SkipLink />
           <AppRoutes />
         </AppProviders>

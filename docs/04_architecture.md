@@ -72,7 +72,7 @@ Quy mô để thiết kế (không phải cam kết):
 | K-10 | **Không Sentry/OTel/Prometheus.** `pino` → stdout → log của Render; `/healthz` | Render có log UI + alert cơ bản; người vận hành là 1 người |
 | K-11 | **Không WebSocket/SSE.** FE **poll 30s** + refetch khi focus window | badge trễ 30s không sao; hết reconnect, hết fan-out |
 | K-12 | **PDF bằng trình duyệt in** (route `/in/*` + print CSS); Excel bằng `exceljs` **stream trực tiếp response** | hết render service, hết Playwright, hết 300 MB image |
-| K-13 | **Không PWA/web push** kỳ 1: mobile = web responsive + **email** cho khoản danger | blueprint §XXIV yêu cầu responsive + notification; email đạt; web push iOS không tin được. MAY thêm PWA sau |
+| K-13 | **PWA đã làm** (cài lên MH chính Android/iOS, không cần app native) · **chưa có Web Push** — thông báo "chờ tôi duyệt" bằng poll 30s + Notification API | blueprint §XXIV yêu cầu responsive + notification; web push iOS khó tin được. Cài đặt/giới hạn: `docs/07_pwa-mobile.md` |
 | K-14 | **Không search engine / không Atlas Search.** Mongo index + regex/text | M0 không cho Atlas Search; dữ liệu 100k doc thì index thường đủ |
 | K-15 | **Tiền = số nguyên `minor units`** (`Long`) + `currency`; wire format **string**; tính bằng `BigInt` | "không được sai số tiền" — cái này **không** nằm trong phạm vi được đơn giản hoá |
 | K-16 | **Workflow tập trung**: 1 hàm duy nhất đổi `status`, quyền + ngưỡng + step-up verify **server-side**, mọi request | yêu cầu "không chỉ duyệt, phải kiểm soát" (§XXVII) |
@@ -256,7 +256,7 @@ export const useQueue = (f: QueueFilter) => {
 - **Mọi số qua `shared/money`, mọi status qua `status/registry`**; lint `fg/no-raw-number-format`, `fg/no-raw-color` (cấm `toFixed`/`toLocaleString`/hex trong `apps/**`).
 - Server trả `entitlements` (actions + cột bị ẩn) → UI ẩn nút. Ẩn chỉ là mỹ thuật; server vẫn chặn (§7).
 - Bundle: `manualChunks` tách `antd`+`plots`; **budget initial gzip ≤ 350 KB**; font **Inter self-host** subset `vietnamese`; route `report/`, `admin/` lazy.
-- **Mobile**: responsive DS §5.4 (touch 44px, layout dọc cho `MOB-*`/`DASH-08`) — **cùng data contract**, chỉ khác layout. Không PWA kỳ 1 (MAY: thêm manifest + "Thêm vào MH chính").
+- **Mobile**: responsive DS §5.4 (touch 44px, layout dọc cho `MOB-*`/`DASH-08`) — **cùng data contract**, chỉ khác layout. **PWA: manifest + service worker (`apps/web/public/sw.js`) để "Thêm vào MH chính"** — SW **không cache `/api/`**, xem `docs/07_pwa-mobile.md`.
 
 ---
 

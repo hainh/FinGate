@@ -29,6 +29,7 @@ import { scopedFind, scopedOne } from '../lib/mongo.ts';
 import { cashflowHistoryQuery, dashboardQuery, reportQuery, searchQuery, newsletterQuery, notificationListQuery } from '@fingate/shared';
 import { asBigInt, awaitingBadge, cashKttIdsForScope, cashflowHistory, compact, dashboardOverview, docHref, maturityLadder, scopeOf, wire } from '../domain/queries/index.ts';
 import { tagFilterSuffix } from '../domain/queries/dashboard-tags.ts';
+import { collectPushPending } from '../domain/queries/push-pending.ts';
 import { parseIdList } from '../domain/vouchers/rules.ts';
 import { buildNewsletter, cachedNewsletter, storeNewsletter } from '../domain/newsletter/index.ts';
 import { reportPreset } from '../domain/reports/index.ts';
@@ -380,6 +381,70 @@ export function dashboardRoutes(app: FastifyInstance): void {
         const actor = requireActor(req);
         const count = await Models.Notification.countDocuments({ user_id: actor.user_id, read_at: null }).exec();
         return { data: { count } };
+      },
+    }),
+  );
+
+  /**
+   * NOTI-03 (tối giản, không VAPID) — "phiếu mới vào hàng chờ của tôi" cho thông báo trên thiết bị.
+   *
+   * Không phải Web Push: server không đẩy được tới máy khi app đóng (chưa có VAPID + bảng
+   * `push_subscriptions`, ADR-07 chốt poll thay WebSocket). Endpoint này cho app đang chạy (kể cả nền)
+   * biết CÓ BAO NHIÊU phiếu mới vào đúng hàng "Chờ tôi duyệt" / "chờ tôi thanh toán" kể từ lần báo trước,
+   * để bắn 1 thông báo hệ thống. Chỉ ĐỌC: không tạo, không sửa dữ liệu nghiệp vụ.
+   *
+   * `since` = mốc ISO client đã báo lần cuối (thiếu/hỏng ⇒ 24 giờ gần nhất). Đếm trên chính
+   * `Notifications` server đã tạo cho người duyệt (`notifyNextApprover`) ⇒ số đếm khớp đúng màn
+   * "Thông báo", không phải tự suy lại ma trận duyệt.
+   */
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/notifications/push-pending',
+      config: { perms: [] as Permission[], screen: 'NOTI-03', summary: 'Phiếu mới chưa báo trên thiết bị' },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const sinceRaw = String((req.query as { since?: unknown } | undefined)?.since ?? '');
+        const sinceMs = Date.parse(sinceRaw);
+        const since = new Date(Number.isFinite(sinceMs) ? sinceMs : Date.now() - 24 * 3600 * 1000);
+        const { cutoff, rows } = await collectPushPending(actor.user_id, since, 5);
+        return ok(
+          reply,
+          {
+            data: {
+              count: rows.length,
+              /** Mốc mới để client lưu lại — chỉ nhảy khi có thay đổi, nên poll lặp không bắn lại. */
+              cursor: cutoff.toISOString(),
+              items: rows.map((r) => ({
+                title: r.title,
+                body: r.body ?? '',
+                href: r.href ?? '/cho-toi-duyet',
+              })),
+            },
+          },
+          { maxAge: 0 },
+        );
+      },
+    }),
+  );
+
+  /** NOTI-03 — xác nhận ĐÃ bắn thông báo trên thiết bị (đặt `push_seen_at`, không đụng `read_at`). */
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/notifications/push-seen',
+      config: { perms: [] as Permission[], screen: 'NOTI-03', summary: 'Đánh dấu đã báo trên thiết bị' },
+      handler: async (req) => {
+        const actor = requireActor(req);
+        const body = (req.body ?? {}) as { before?: string };
+        const beforeMs = Date.parse(String(body.before ?? ''));
+        // Thiếu mốc ⇒ chỉ đánh dấu những cái ĐÃ tồn tại trước thời điểm gọi (không quét mất cái mới đến sau).
+        const before = new Date(Number.isFinite(beforeMs) ? beforeMs : Date.now());
+        const res = await Models.Notification.updateMany(
+          { user_id: actor.user_id, push_seen_at: null, created_at: { $lte: before } } as never,
+          { $set: { push_seen_at: new Date() } },
+        ).exec();
+        return { data: { marked: res.modifiedCount ?? 0 } };
       },
     }),
   );

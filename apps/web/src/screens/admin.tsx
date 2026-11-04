@@ -41,6 +41,7 @@ import { FgQuery, toastOk, useToast } from '../components/pagekit.tsx';
 import { PartnerPicker } from '../components/partner-picker.tsx';
 import { ROLES_LABEL, auditActionLabel } from '../components/labels.ts';
 import { ApiRequestError, apiCall } from '../app/api.ts';
+import { enableApprovalNotifications, usePushPermission } from '../app/push-notifications.ts';
 import { RECURRING_PARTNER_TYPES, useCreateRecurring, useRecurringRules, type RecurringCadence, type RecurringCreateInput, type RecurringRow } from '../app/v2/exec.ts';
 import { APPROVAL_ORDER, DOC_KIND_LABEL, DOC_KINDS, type DocKind } from '@fingate/shared';
 import type { ApprovalThresholdCompany, ApprovalThresholdResult, CompanyRow, InviteLinkResult, MatrixEntry, PersonnelRow, AuditRow } from '../app/types.ts';
@@ -2223,6 +2224,7 @@ export function SettingsScreen(): ReactNode {
                     }}
                   />
                   {busy ? <FgText style="caption" color="muted">Đang lưu…</FgText> : null}
+                  <ApprovalNotificationToggle />
                 </div>
               </FgCard>
             ),
@@ -2292,6 +2294,74 @@ export function SettingsScreen(): ReactNode {
         ]}
       />
     </>
+  );
+}
+
+/* ================= PREF-01 · Kênh nhận thông báo ================= */
+
+/**
+ * Bật/tắt thông báo hệ thống khi có phiếu mới vào hàng "Chờ tôi duyệt".
+ * iOS chỉ cho xin quyền khi app đã "Thêm vào MH chính" và từ CÚ CHẠM của người dùng — nên là nút,
+ * không tự xin khi mở app.
+ */
+function ApprovalNotificationToggle(): ReactNode {
+  const permission = usePushPermission();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const supported = permission !== 'unsupported';
+
+  return (
+    <div style={{ borderTop: '1px solid var(--fg-border-default)', paddingTop: 'var(--fg-space-4)' }}>
+      <div className="fg-stat-row" style={{ padding: 0 }}>
+        <span className="fg-stat-label">Thông báo phiếu mới chờ tôi duyệt</span>
+        <FgTag tone={permission === 'granted' ? 'success' : 'attention'}>
+          {permission === 'granted' ? '✓ Đã bật' : permission === 'denied' ? 'Bị chặn' : 'Chưa bật'}
+        </FgTag>
+      </div>
+      {!supported ? (
+        <FgText style="caption" color="muted">
+          Thiết bị/trình duyệt này không hỗ trợ thông báo. Trên iPhone: mở Safari → Chia sẻ → “Thêm vào
+          MH chính”, rồi bật tại đây.
+        </FgText>
+      ) : permission === 'granted' ? (
+        <FgText style="caption" color="muted">
+          Đang bật — phiếu mới vào hàng chờ sẽ hiện thông báo trên thiết bị (cập nhật ~30 giây khi app còn
+          mở). Tắt lại bằng cài đặt trình duyệt/hệ thống.
+        </FgText>
+      ) : permission === 'denied' ? (
+        <FgText style="caption" color="muted">
+          Trình duyệt đang chặn thông báo cho trang này. Mở cài đặt trang (biểu tượng ổ khoá cạnh địa chỉ) →
+          cho phép Thông báo, rồi tải lại.
+        </FgText>
+      ) : (
+        <>
+          <FgButton
+            variant="primary"
+            loading={busy}
+            onClick={async () => {
+              setBusy(true);
+              setErr(null);
+              try {
+                const ok = await enableApprovalNotifications();
+                if (!ok) setErr('Bạn chưa cho phép thông báo.');
+              } catch (e) {
+                setErr((e as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Bật thông báo
+          </FgButton>
+          {err ? (
+            <FgText style="caption" color="muted">
+              {' '}
+              {err}
+            </FgText>
+          ) : null}
+        </>
+      )}
+    </div>
   );
 }
 

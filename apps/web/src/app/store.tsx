@@ -16,6 +16,7 @@ import 'dayjs/locale/vi';
 import { fgThemeFor } from './theme.ts';
 import { apiCall, apiData, markSignedOut, setScopeProvider, setUnauthorizedHandler, ApiRequestError } from './api.ts';
 import type { LoginResult, MeProfile } from './types.ts';
+import { resetPushAck } from './push-notifications.ts';
 
 dayjs.locale('vi');
 
@@ -274,6 +275,9 @@ export function AppProviders({ children }: { children: ReactNode }) {
     setMe(null);
     setStatus('anon');
     queryClient.clear();
+    // Mốc "đã báo thông báo" gắn với TÀI KHOẢN, không phải thiết bị: để lại thì người đăng nhập sau
+    // trên cùng máy sẽ bị bỏ qua mọi phiếu đến trong khoảng thời gian trước khi họ đăng nhập.
+    resetPushAck();
   }, []);
 
   const setScope = useCallback((s: string) => {

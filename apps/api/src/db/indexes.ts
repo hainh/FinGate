@@ -98,7 +98,11 @@ export const INDEXES: Record<string, IndexDef[]> = {
     { key: { expires_at: 1 }, options: { expireAfterSeconds: 0 } },
     { key: { token_hash: 1 }, options: { unique: true } },
   ],
-  notifications: [{ key: { user_id: 1, read_at: 1, created_at: -1 } }],
+  notifications: [
+    { key: { user_id: 1, read_at: 1, created_at: -1 } },
+    /** Thông báo PWA còn chưa bắn (poll chuông trên thiết bị) — xem models.ts NotificationSchema. */
+    { key: { user_id: 1, push_seen_at: 1, created_at: -1 } },
+  ],
   assignments: [
     { key: { user_id: 1, status: 1 } },
     { key: { company_id: 1, role: 1 } },

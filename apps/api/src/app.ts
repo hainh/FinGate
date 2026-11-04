@@ -44,11 +44,16 @@ function csp(env: Env): Record<string, unknown> {
     directives: {
       'default-src': ["'self'"],
       'script-src': ["'self'"],
+      // PWA: service worker `/sw.js` cùng origin. Trước đây rơi về default-src 'self' nên vẫn chạy,
+      // nhưng khai báo tường minh để sau này siết default-src không âm thầm làm mất khả năng cài app.
+      'worker-src': ["'self'"],
       // antd dùng <style> runtime (cssVar) → cần unsafe-inline cho style
       'style-src': ["'self'", "'unsafe-inline'"],
       'img-src': ["'self'", 'data:', 'blob:'],
       'font-src': ["'self'", 'data:'],
       'connect-src': env.isDev ? ["'self'", 'ws:', 'http:'] : ["'self'"],
+      // manifest của PWA
+      'manifest-src': ["'self'"],
       'frame-ancestors': ["'none'"],
       'object-src': ["'none'"],
       'base-uri': ["'self'"],

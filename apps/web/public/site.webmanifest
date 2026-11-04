@@ -1,11 +1,25 @@
 {
-  "name": "FinGate",
+  "id": "/",
+  "name": "FinGate — Cổng tài chính VIASG",
   "short_name": "FinGate",
+  "description": "Điều hành dòng tiền & phê duyệt tài chính",
+  "lang": "vi",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
   "icons": [
-    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
+  "categories": ["finance", "business", "productivity"],
   "theme_color": "#4759e0",
   "background_color": "#ffffff",
-  "display": "standalone"
+  "shortcuts": [
+    { "name": "Chờ tôi duyệt", "short_name": "Duyệt", "url": "/cho-toi-duyet", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Tiền hôm nay", "short_name": "Hôm nay", "url": "/hom-nay", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ]
 }

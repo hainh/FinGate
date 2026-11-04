@@ -11,6 +11,13 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
     <meta name="theme-color" content="#4759e0" />
+    <!-- PWA / "Thêm vào MH chính": iOS đọc các thẻ apple-* dưới đây (tên dưới icon, chế độ toàn màn hình).
+         Từ iOS 26 mọi site đã mặc định mở như web app, các thẻ này giữ tương thích iOS cũ. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="FinGate" />
+    <meta name="application-name" content="FinGate" />
     <script src="/theme-init.js"></script>
   </head>
   <body>

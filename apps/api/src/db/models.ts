@@ -1186,11 +1186,19 @@ export const NotificationSchema = new Schema(
     document_id: { type: Schema.Types.ObjectId, default: null },
     channels_sent: { type: [String], default: [] },
     read_at: { type: Date, default: null },
+    /**
+     * Đã bắn thông báo hệ thống (Web Notification / khay thông báo thiết bị) chưa.
+     * PWA xin phép lại từ đầu — nếu KHÔNG có cờ này thì bật thông báo sẽ dội hàng loạt
+     * thông báo cũ trên thiết bị mới. `null` = chưa bắn.
+     */
+    push_seen_at: { type: Date, default: null },
     created_at: { type: Date, default: () => new Date() },
   },
   { collection: 'notifications', versionKey: false },
 );
 NotificationSchema.index({ user_id: 1, read_at: 1, created_at: -1 });
+/** Truy vấn "phiếu mới chưa báo" của một người (poll thông báo PWA) — chỉ đọc, thêm field không đổi behavior. */
+NotificationSchema.index({ user_id: 1, push_seen_at: 1, created_at: -1 });
 
 /** Feed suy diễn từ `history[]` — tìm kiếm跨 hồ sơ; rebuild được bằng db:rebuild-audit (ADR-05). */
 export const AuditLogSchema = new Schema(
