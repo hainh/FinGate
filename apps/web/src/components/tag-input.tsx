@@ -118,6 +118,8 @@ interface TagSelectProps {
   /** Tag đã gắn trên phiếu (vd `documentDetail.tags`): nguồn tên/màu phụ khi danh bạ không trả tag đó. */
   knownTags?: readonly TagRef[];
   style?: CSSProperties;
+  /** Cỡ ô (mặc định `small`). Thanh lọc danh sách truyền `middle` để cao bằng các ô chọn khác. */
+  size?: 'small' | 'middle';
 }
 
 function TagSelect({
@@ -133,6 +135,7 @@ function TagSelect({
   includeHidden,
   knownTags,
   style,
+  size = 'small',
 }: TagSelectProps): ReactNode {
   const { message } = useToast();
   const tagsQ = useCompanyTags(companyId);
@@ -241,7 +244,7 @@ function TagSelect({
       maxTagCount={maxTagCount}
       loading={tagsQ.isFetching && !tags}
       style={{ width: '100%', minWidth: 200, ...style }}
-      size='small'
+      size={size}
     />
   );
 }
@@ -306,9 +309,22 @@ export interface TagFilterProps {
   placeholder?: string;
   ariaLabel?: string;
   style?: CSSProperties;
+  /**
+   * Cỡ ô: `small` (mặc định, dùng trong form) hoặc `middle` — thanh lọc danh sách cần cùng chiều
+   * cao với các ô chọn khác của antd để cả hàng lọc nằm thẳng một dòng (APPR-01/CHI-01/THU-01).
+   */
+  size?: 'small' | 'middle';
 }
 
-export function TagFilter({ value, onChange, companyId, placeholder = 'Lọc theo tag', ariaLabel = 'Lọc theo tag', style }: TagFilterProps): ReactNode {
+export function TagFilter({
+  value,
+  onChange,
+  companyId,
+  placeholder = 'Lọc theo tag',
+  ariaLabel = 'Lọc theo tag',
+  style,
+  size,
+}: TagFilterProps): ReactNode {
   return (
     <TagSelect
       companyId={companyId}
@@ -319,7 +335,9 @@ export function TagFilter({ value, onChange, companyId, placeholder = 'Lọc the
       allowCreate={false}
       includeHidden
       maxTagCount="responsive"
-      style={{ minWidth: 220, maxWidth: '100%', ...style }}
+      // width cố định: để `100%` thì ô tag chiếm trọn một hàng riêng, thanh lọc vỡ thành 3 dòng
+      style={{ width: 240, minWidth: 200, maxWidth: '100%', flex: '0 1 240px', ...style }}
+      size={size}
     />
   );
 }

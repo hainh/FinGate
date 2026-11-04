@@ -496,7 +496,12 @@ export function DocListScreen({
           <PartnerFilter value={partnerParam} onChange={(id) => setFilter('partner_id', id)} />
         ) : null}
         {filterable && !approvalTabs ? (
-          <TagFilter value={tagIds} onChange={(ids) => setFilter('tag_ids', ids.join(','))} companyId={scope === SCOPE_ALL ? null : scope} />
+          <TagFilter
+            value={tagIds}
+            onChange={(ids) => setFilter('tag_ids', ids.join(','))}
+            companyId={scope === SCOPE_ALL ? null : scope}
+            size="middle"
+          />
         ) : null}
         {isCardView ? (
           <FgSelect ariaLabel="Sắp xếp" options={SORTS} value={get('sort') || defaultSort} onChange={(v) => setFilter('sort', v ?? '')} style={{ width: 180 }} />
@@ -713,12 +718,12 @@ function FgSearchInput({ value, onChange }: { value: string; onChange: (v: strin
       onChange={(e) => onChange(e.target.value)}
       placeholder="Tìm mã, nội dung, đối tác, STK, MST, tag…"
       aria-label="Tìm kiếm trong danh sách"
-      // cùng chiều cao với ô chọn (FgSelect mặc định của antd) để cả hàng lọc thẳng trên một dòng
+      // cùng chiều cao với ô chọn (FgSelect mặc định của antd = control-md 40px) để cả hàng lọc thẳng một dòng
       style={{
         flex: '1 1 220px',
         minWidth: 200,
         maxWidth: 360,
-        height: 'var(--fg-control-lg, 48px)',
+        height: 'var(--fg-control-md, 40px)',
         padding: '0 12px',
         borderRadius: 'var(--fg-radius-md)',
         border: '1px solid var(--fg-border-default)',
