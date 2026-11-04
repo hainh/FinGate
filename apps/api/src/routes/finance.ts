@@ -29,7 +29,7 @@ import {
 import { bankAccountUpdateBodySchema, bankAccountUpsertBodySchema, internalTransferBodySchema, statementImportBodySchema } from './schemas.ts';
 import { asBigInt, docHref, filterMaturityRows, maskAccount, maturityLadder, wire} from '../domain/queries/index.ts';
 import { bookedBalance } from '../domain/ledger/index.ts';
-import { ledgerAccountViews, pageAccountViews } from '../domain/accounts.ts';
+import { accountTotals, ledgerAccountViews, pageAccountViews } from '../domain/accounts.ts';
 import { companyReachableByActor } from '../domain/entitlement/index.ts';
 import { loadPartnerRefs } from '../domain/reports/refs.ts';
 import { scopedFind } from '../lib/mongo.ts';
@@ -192,8 +192,10 @@ export function financeRoutes(app: FastifyInstance): void {
           includeGroup: !forCompanyOpt,
           forCompany: forCompanyOpt,
         });
-        // `totals` luôn trên MỌI tài khoản trong phạm vi; `items`/`total` theo loại TK và trang (nếu có).
+        // `totals` = Σ trên tập ĐÃ LỌC theo `kind` (không cắt trang — KPI đổi theo bộ lọc loại TK);
+        // `items`/`total` = một trang của cùng tập đã lọc.
         const listed = pageAccountViews(rows, paging);
+        const totals = accountTotals(listed.filtered);
         return ok(
           reply,
           {
@@ -224,8 +226,8 @@ export function financeRoutes(app: FastifyInstance): void {
             })),
             total: listed.total,
             totals: {
-              balance: wire(rows.reduce((a, r) => a + r.actual, 0n)),
-              projected: wire(rows.reduce((a, r) => a + r.projected, 0n)),
+              balance: wire(totals.balance),
+              projected: wire(totals.projected),
             },
           },
           { maxAge: 15 },

@@ -11,7 +11,7 @@
  * làm trực tiếp trên collection `tags` theo `company_id`.
  */
 
-import { ApiError, AUTOMATION_RULE_LABEL, formatMoney, money, type AutomationRuleCode } from '@fingate/shared';
+import { ApiError, AUTOMATION_RULE_LABEL, BANK_ACCOUNT_KINDS, formatMoney, money, type AutomationRuleCode } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
 import {
   allocationOf,
@@ -330,7 +330,9 @@ export async function resolveLoanPlan(input: {
             .select({ kind: 1, status: 1 })
             .lean<{ kind?: string; status?: string } | null>()
         : null;
-      if (!acct || acct.kind !== 'bank' || acct.status !== 'active') {
+      // Chỉ tài khoản NGÂN HÀNG: quỹ tiền mặt / Quỹ phụ (`fund`) là tiền thật nhưng KHÔNG nhận giải ngân,
+      // nên dùng allow-list thay vì loại trừ `cash` — thêm loại quỹ mới không lọt vào luồng ngân hàng.
+      if (!acct || !(BANK_ACCOUNT_KINDS as readonly string[]).includes(String(acct.kind)) || acct.status !== 'active') {
         throw new ApiError({
           code: 'FG-VAL-001',
           detail: 'Tài khoản nhận giải ngân phải là tài khoản ngân hàng đang hoạt động của công ty',

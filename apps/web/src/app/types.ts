@@ -323,7 +323,8 @@ export interface DocumentDetail {
   amount: MoneyWire;
   fx: { rate: string | null; at: string | null } | null;
   source: {
-    fund: 'bank' | 'cash';
+    /** `fund` = Quỹ phụ (tiền thật, xử lý như `cash`). */
+    fund: 'bank' | 'cash' | 'fund';
     account_id: string | null;
     group_account_id: string | null;
     group_managed: boolean;
@@ -532,6 +533,7 @@ export interface BankAccountRow {
   bank_name: string;
   account_name: string;
   account_number_masked: string;
+  /** `bank` | `cash` | `fund` (quỹ phụ — tiền thật, giống quỹ tiền mặt, không dính ngân hàng). */
   kind: string;
   currency: string;
   status: string;
@@ -551,7 +553,7 @@ export interface BankAccountRow {
   updated_at?: string | null;
 }
 
-/** GET /bank-accounts: `items` theo loại TK và trang (nếu có); `total` = số TK khớp loại; `totals` = trên mọi TK trong phạm vi. */
+/** GET /bank-accounts: `items` theo loại TK và trang (nếu có); `total` = số TK khớp loại; `totals` = trên các TK ĐÃ LỌC theo `kind` (bỏ trống `kind` ⇒ mọi TK trong phạm vi). */
 export interface BankAccountListResult {
   items: BankAccountRow[];
   total: number;

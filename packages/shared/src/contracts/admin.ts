@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { MATURITY_BUCKETS, ROLES, STATUS_KEYS, DOC_KINDS } from '../status/index.js';
 const lit = <T extends string>(arr: readonly T[]) => arr as unknown as [T, ...T[]];
 import { businessDate, moneyWire, objectId, uuid } from './common.js';
+import { fundKind } from './documents.js';
 
 /* ------------------------------------------------------------------ *
  * DASH-01 — một endpoint gộp, `Cache-Control: private, max-age=15` + ETag (§8.3)
@@ -511,7 +512,11 @@ export const recurringUpsertBody = z
      */
     partner_id: objectId,
     amount: z.object({ amount_minor: z.string().regex(/^\d+$/), currency: z.string().length(3).default('VND') }),
-    source: z.object({ fund: z.enum(['bank', 'cash']), account_id: objectId.nullable() }),
+    /**
+     * Nguồn tiền của khoản chi định kỳ. Nhận cả `fund` (Quỹ phụ) — loại tài khoản chứa tiền thật, hoạt động
+     * giống quỹ tiền mặt (`cash`) khi sinh phiếu chi.
+     */
+    source: z.object({ fund: fundKind, account_id: objectId.nullable() }),
     cadence: z.enum(['monthly', 'quarterly', 'semi_annual', 'annual', 'weekly']),
     day_of_period: z.number().int().min(1).max(31).default(1),
     /** nhắc trước 7/3/1 ngày (§XVII). */

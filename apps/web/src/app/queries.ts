@@ -185,12 +185,17 @@ export function useBankAccounts(companyId?: string | null) {
   });
 }
 
-/** BANK-01 — một trang tài khoản tiền: phân trang và lọc loại TK ở máy chủ (`totals` vẫn trên mọi tài khoản). */
-export function useBankAccountsPage(filters: { page: number; limit: number; kind?: 'bank' | 'cash'; sort?: string }) {
+/**
+ * BANK-01 — một trang tài khoản tiền: phân trang và lọc loại TK ở máy chủ. `kind` (`bank` | `cash` | `fund`)
+ * được gửi xuống server và `totals` tính trên ĐÚNG tập đã lọc theo `kind` (không dùng `items` để tự cộng —
+ * `items` chỉ là một trang). Query key chứa toàn bộ `filters` nên đổi bộ lọc là cache tách riêng, refetch đúng.
+ */
+export function useBankAccountsPage(filters: { page: number; limit: number; kind?: 'bank' | 'cash' | 'fund'; sort?: string }) {
   const { scope } = useAuth();
   return useQuery({
     queryKey: ['bank-accounts', 'page', scope, filters],
-    queryFn: () => apiCall<BankAccountListResult>('/bank-accounts', { query: { scope, ...filters, sort: filters.sort || undefined } }),
+    // `kind` là union ('fund'…) nên ép về record tham số query dạng chuỗi của apiCall.
+    queryFn: () => apiCall<BankAccountListResult>('/bank-accounts', { query: { ...filters, scope, sort: filters.sort || undefined } as Record<string, string | number | undefined> }),
   });
 }
 

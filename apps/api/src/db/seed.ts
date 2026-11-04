@@ -56,6 +56,9 @@ const PLAN: SeedPlan = {
     { company: 'MP', bank: 'Quỹ tiền mặt công ty', number: 'CASH-MP', name: 'Quỹ tiền mặt', balance: 350_000_000 },
     { company: null, bank: 'Vietcombank', number: '072100099887700', name: 'Tập đoàn — Tài khoản chính', balance: 30_000_000_000, is_group: true },
     { company: null, bank: 'Quỹ tiền mặt Tập đoàn', number: 'CASH-GROUP', name: 'Quỹ tiền mặt Tập đoàn', balance: 2_000_000_000, is_group: true },
+    // Quỹ phụ (loại `fund`): tiền thật, hoạt động giống quỹ tiền mặt — mã tài khoản tiền tố FUND-
+    { company: 'MP', bank: 'Quỹ phụ công ty', number: 'FUND-MP', name: 'Quỹ phụ', balance: 120_000_000 },
+    { company: null, bank: 'Quỹ phụ Tập đoàn', number: 'FUND-GROUP', name: 'Quỹ phụ Tập đoàn', balance: 500_000_000, is_group: true },
   ],
   users: [
     { email: 'chairman@fingate.local', name: 'Trần Đình Sơn', role: 'chairman', company: 'GROUP', limitTy: 999_999 },
@@ -191,7 +194,8 @@ export async function seedAll(log?: FastifyBaseLogger): Promise<Record<string, u
       bank_name: a.bank,
       account_name: a.name,
       account_number: a.number,
-      kind: a.number.startsWith('CASH-') ? 'cash' : 'bank',
+      // quy ước mã: CASH-* = quỹ tiền mặt, FUND-* = Quỹ phụ (tiền thật, xử lý như tiền mặt), còn lại = ngân hàng
+      kind: a.number.startsWith('CASH-') ? 'cash' : a.number.startsWith('FUND-') ? 'fund' : 'bank',
       currency: 'VND',
       min_balance_minor: a.company ? BigInt(Math.round((PLAN.companies.find((c) => c.code === a.company)?.min_balance ?? 0) / 2)) : 0n,
       status: 'active',

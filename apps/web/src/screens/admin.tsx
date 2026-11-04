@@ -2282,7 +2282,7 @@ function RecurringFormModal({ open, onClose }: { open: boolean; onClose: () => v
   const [dayOfPeriod, setDayOfPeriod] = useState('1');
   const [effectiveFrom, setEffectiveFrom] = useState('');
   const [effectiveTo, setEffectiveTo] = useState('');
-  const [fund, setFund] = useState<'bank' | 'cash'>('bank');
+  const [fund, setFund] = useState<'bank' | 'cash' | 'fund'>('bank');
   const [accountId, setAccountId] = useState('');
   const [autoDraft, setAutoDraft] = useState(true);
   const [status, setStatus] = useState<'active' | 'paused'>('active');
@@ -2426,10 +2426,11 @@ function RecurringFormModal({ open, onClose }: { open: boolean; onClose: () => v
             options={[
               { value: 'bank', label: 'Ngân hàng' },
               { value: 'cash', label: 'Tiền mặt' },
+              { value: 'fund', label: 'Quỹ phụ' },
             ]}
             value={fund}
             onChange={(v) => {
-              setFund(v === 'cash' ? 'cash' : 'bank');
+              setFund(v === 'fund' ? 'fund' : v === 'cash' ? 'cash' : 'bank');
               setAccountId('');
             }}
             style={{ width: '100%' }}

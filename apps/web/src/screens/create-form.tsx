@@ -113,7 +113,8 @@ export interface FormState {
   partnerId: string | null;
   amount: Money | null;
   plannedDate: string;
-  fund: 'bank' | 'cash';
+  /** Hình thức tiền nguồn: `bank` = ngân hàng; `cash` = quỹ tiền mặt; `fund` = quỹ phụ (cũng là quỹ, không dính ngân hàng). */
+  fund: 'bank' | 'cash' | 'fund';
   accountId: string;
   /** Danh mục thu/chi (US-VOU-01): quyết định chứng từ bắt buộc & matrix. */
   categoryId: string | null;
@@ -167,6 +168,17 @@ const emptyLoan = (): LoanState => ({
 });
 
 const emptyOffset = (): OffsetState => ({ on: false, target: 'bank_debt', targetId: '', amount: null, interest: null, fee: null });
+
+/** Hình thức tiền của ô "Nguồn tiền": `fund` = quỹ phụ (giống quỹ tiền mặt, chỉ khác nhãn/quỹ). */
+const FUND_KINDS = ['bank', 'cash', 'fund'] as const;
+/** allowlist hoá hình thức tiền (dữ liệu cũ / giá trị lạ → ngân hàng). */
+const normalizeFundKind = (v: unknown): FormState['fund'] => (FUND_KINDS.includes(v as FormState['fund']) ? (v as FormState['fund']) : 'bank');
+/** Placeholder ô chọn TK theo hình thức tiền đang chọn. */
+const FUND_KIND_PLACEHOLDER: Record<string, string> = {
+  bank: 'Chọn tài khoản ngân hàng',
+  cash: 'Chọn quỹ tiền mặt',
+  fund: 'Chọn quỹ phụ',
+};
 
 /** Hạn mặc định: 17:00 hôm nay; nếu đã qua thì 09:00 hôm sau. */
 function defaultDeadline(): string {
@@ -228,7 +240,7 @@ function formFromDocument(doc: DocumentDetail, kind: PageKind): FormState {
     partnerId: doc.partner_id ?? null,
     amount: moneyFromWire(doc.amount),
     plannedDate: normalizePlannedDate(doc.planned_date),
-    fund: doc.source.fund,
+    fund: normalizeFundKind(doc.source.fund),
     accountId: doc.source.account_id ?? '',
     categoryId: doc.category_id ?? null,
     budgetId: doc.budget?.budget_id ?? null,
@@ -384,7 +396,8 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
       ? [...offsetCandidates, { value: f.offset.targetId, label: `${savedOffset.target_code ?? 'Khoản đã chọn'} · không còn trong danh sách` }]
       : offsetCandidates;
 
-  // Tài khoản: nguồn (theo hình thức tiền của phiếu) — ô này cũng là TK đích của phiếu thu; nhận giải ngân = TK ngân hàng của công ty lập phiếu.
+  // Tài khoản: nguồn (theo hình thức tiền của phiếu) — ô này cũng là TK đích của phiếu thu; nhận giải ngân = TK NGÂN HÀNG của công ty lập phiếu.
+  // `cash` và `fund` (quỹ phụ) đều là quỹ nội bộ nên lọc theo đúng `kind` đang chọn; quỹ phụ KHÔNG xuất hiện ở ô nhận giải ngân (chỉ ngân hàng).
   // Mọi nhãn đều có TÊN TK (phân biệt các TK cùng ngân hàng); ô nguồn gộp cả Tập đoàn nên thêm tên công ty đầu nhãn.
   const sourceAccountOptions = (accounts.data?.items ?? [])
     .filter((a) => a.status === 'active' && a.kind === f.fund)
@@ -733,10 +746,11 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                 options={[
                   { value: 'bank', label: 'Tài khoản ngân hàng' },
                   { value: 'cash', label: 'Quỹ tiền mặt' },
+                  { value: 'fund', label: 'Quỹ phụ' },
                 ]}
                 value={f.fund}
                 onChange={(v) => {
-                  set('fund', v === 'cash' ? 'cash' : 'bank');
+                  set('fund', normalizeFundKind(v));
                   set('accountId', '');
                 }}
                 style={{ width: '100%' }}
@@ -752,7 +766,7 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                 options={isFund ? receiveAccountOptions : sourceAccountOptions}
                 value={f.accountId}
                 onChange={(v) => (isFund ? pickLinkedAccount(v ?? '') : set('accountId', v ?? ''))}
-                placeholder={f.fund === 'cash' ? 'Chọn quỹ tiền mặt' : 'Chọn tài khoản ngân hàng'}
+                placeholder={isFund ? 'Chọn tài khoản ngân hàng' : FUND_KIND_PLACEHOLDER[f.fund] ?? 'Chọn tài khoản ngân hàng'}
                 allowClear
                 style={{ width: '100%' }}
                 disabled={!canEdit}

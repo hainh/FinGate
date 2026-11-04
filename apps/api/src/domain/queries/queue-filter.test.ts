@@ -15,7 +15,8 @@ describe('queueFilter — "chờ tôi duyệt" gồm cả việc thực thi cho 
     expect(and).toHaveLength(1);
     const union = and[0]!.$or as Record<string, unknown>[];
     expect(union).toHaveLength(2);
-    expect(union[1]).toMatchObject({ 'source.fund': 'cash' });
+    // Quỹ phụ (`fund`) đi chung nhóm với quỹ tiền mặt — cùng hưởng cách gộp duyệt này
+    expect(union[1]).toMatchObject({ 'source.fund': { $in: ['cash', 'fund'] } });
     expect(f.status).toEqual({ $in: [...DECISION_STATUSES] });
   });
 

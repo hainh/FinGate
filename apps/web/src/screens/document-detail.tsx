@@ -17,6 +17,7 @@ import dayjs from 'dayjs';
 import {
   EVIDENCE_LABEL,
   ACTION_LABEL,
+  FUND_KIND_LABEL,
   UI,
   dateTimeLabel,
   ddmmyyyy,
@@ -419,7 +420,7 @@ function CashTab({ doc }: { doc: DocumentDetail }): ReactNode {
       <div style={{ marginTop: 12, maxWidth: 480 }}>
         <div className="fg-stat-row">
           <span className="fg-stat-label">{doc.kind === 'income' ? 'Tài khoản đích' : 'Tài khoản nguồn'}</span>
-          <span>{acc?.label ?? (doc.source.fund === 'cash' ? 'Quỹ tiền mặt' : '—')}</span>
+          <span>{acc?.label ?? FUND_KIND_LABEL[doc.source.fund] ?? '—'}</span>
         </div>
         <div className="fg-stat-row">
           <span className="fg-stat-label">Số dư hiện có</span>

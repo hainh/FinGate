@@ -1,5 +1,5 @@
 /**
- * BANK-02 — tạo / sửa tài khoản tiền (tiền mặt / ngân hàng).
+ * BANK-02 — tạo / sửa tài khoản tiền (tiền mặt / quỹ phụ / ngân hàng).
  *
  * Phân quyền (§VIII): Chủ tịch HĐQT tạo/sửa tài khoản Tập đoàn và tài khoản cho
  * mọi công ty con; Giám đốc chỉ tài khoản cho công ty của mình. Server kiểm tra lại
@@ -24,6 +24,15 @@ import { bankAccountTitleName } from './bank-history.tsx';
 
 const GROUP = 'group';
 
+/**
+ * Loại tài khoản tiền trên form. `cash` (tiền mặt) và `fund` (quỹ phụ) đều là quỹ nội bộ — tiền thật,
+ * KHÔNG dính quy trình ngân hàng; `bank` mới là tài khoản ngân hàng.
+ */
+type FormAccountKind = 'bank' | 'cash' | 'fund';
+const ACCOUNT_KINDS: FormAccountKind[] = ['bank', 'cash', 'fund'];
+/** allowlist hoá loại TK từ server: giá trị lạ → 'bank' (dữ liệu cũ chưa có kind). */
+const normalizeKind = (v: unknown): FormAccountKind => (ACCOUNT_KINDS.includes(v as FormAccountKind) ? (v as FormAccountKind) : 'bank');
+
 const HISTORY_FIELD_LABEL: Record<string, string> = {
   bank_name: 'Ngân hàng / tên quỹ',
   account_name: 'Chủ tài khoản',
@@ -41,7 +50,7 @@ const HISTORY_FIELD_LABEL: Record<string, string> = {
 };
 
 const HISTORY_VALUE_LABEL: Record<string, Record<string, string>> = {
-  kind: { bank: 'Ngân hàng', cash: 'Tiền mặt (quỹ)' },
+  kind: { bank: 'Ngân hàng', cash: 'Tiền mặt (quỹ)', fund: 'Quỹ phụ' },
   status: { active: 'Đang hoạt động', frozen: 'Phong tỏa', closed: 'Đã đóng' },
 };
 
@@ -126,7 +135,7 @@ export function BankAccountFormScreen(): ReactNode {
   const ownCompany = useCurrentCompanyId() ?? me?.assignments[0]?.company_id ?? '';
 
   const [target, setTarget] = useState<string>(canGroup ? GROUP : ownCompany);
-  const [kind, setKind] = useState<'bank' | 'cash'>('bank');
+  const [kind, setKind] = useState<FormAccountKind>('bank');
   const [bankName, setBankName] = useState('');
   const [accountName, setAccountName] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
@@ -146,7 +155,7 @@ export function BankAccountFormScreen(): ReactNode {
   useEffect(() => {
     if (!loaded) return;
     setTarget(loaded.is_group ? GROUP : (loaded.company_id ?? ownCompany));
-    setKind(loaded.kind === 'cash' ? 'cash' : 'bank');
+    setKind(normalizeKind(loaded.kind));
     setBankName(loaded.bank_name);
     setAccountName(loaded.account_name);
     setAccountNumber(loaded.account_number);
@@ -161,6 +170,8 @@ export function BankAccountFormScreen(): ReactNode {
   }, [loaded, ownCompany]);
 
   const isGroup = target === GROUP;
+  // Quỹ (tiền mặt + quỹ phụ) đều giống nhau ở nhãn/form: chỉ ngân hàng mới có số TK & tên ngân hàng.
+  const isCashLike = kind !== 'bank';
   const scopeOptions = canGroup
     ? [{ value: GROUP, label: 'Tập đoàn (toàn hệ thống)' }, ...(companies.data?.items ?? []).map((c) => ({ value: c._id, label: `${c.name} (${c.code})` }))]
     : (companies.data?.items ?? [])
@@ -241,20 +252,21 @@ export function BankAccountFormScreen(): ReactNode {
                 options={[
                   { value: 'bank', label: 'Ngân hàng' },
                   { value: 'cash', label: 'Tiền mặt (quỹ)' },
+                  { value: 'fund', label: 'Quỹ phụ' },
                 ]}
                 value={kind}
-                onChange={(v) => setKind(v === 'cash' ? 'cash' : 'bank')}
+                onChange={(v) => setKind(normalizeKind(v))}
                 style={{ width: '100%' }}
               />
             </FgField>
-            <FgField label={kind === 'cash' ? 'Tên quỹ *' : 'Ngân hàng *'} error={fieldErrors.bank_name ?? null}>
-              <FgInput value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder={kind === 'cash' ? 'Quỹ tiền mặt' : 'Vietcombank'} />
+            <FgField label={isCashLike ? 'Tên quỹ *' : 'Ngân hàng *'} error={fieldErrors.bank_name ?? null}>
+              <FgInput value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder={isCashLike ? (kind === 'fund' ? 'Quỹ phụ' : 'Quỹ tiền mặt') : 'Vietcombank'} />
             </FgField>
             <FgField label="Chủ tài khoản *" error={fieldErrors.account_name ?? null}>
               <FgInput value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="Công ty TNHH …" />
             </FgField>
-            <FgField label={kind === 'cash' ? 'Mã quỹ *' : 'Số tài khoản *'} error={fieldErrors.account_number ?? null}>
-              <FgInput value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} placeholder={kind === 'cash' ? 'CASH-…' : '0123456789'} />
+            <FgField label={isCashLike ? 'Mã quỹ *' : 'Số tài khoản *'} error={fieldErrors.account_number ?? null}>
+              <FgInput value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} placeholder={isCashLike ? (kind === 'fund' ? 'FUND-…' : 'CASH-…') : '0123456789'} />
             </FgField>
             <FgField label="Chi nhánh" error={fieldErrors.branch ?? null}>
               <FgInput value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="Chi nhánh TP.HCM" />

@@ -3,6 +3,7 @@
  * Mọi tham chiếu là ID (v2 §14.3 (0)): không tra theo tên / số tài khoản.
  */
 
+import { isCashLikeAccountKind, type FundKind } from '@fingate/shared';
 import { Models } from '../../../db/models.ts';
 import type { HistoryLike } from '../policy.ts';
 
@@ -40,11 +41,33 @@ export async function companyView(id: unknown): Promise<{ id: string; name: stri
   return { id: String(c._id), name: String(c.name ?? ''), code: String(c.code ?? '') };
 }
 
-/** Quỹ của tài khoản đích/nguồn (`bank` | `cash`), theo loại tài khoản. */
-export async function fundOfAccount(accountId: unknown): Promise<'bank' | 'cash'> {
-  if (!accountId) return 'bank';
+/**
+ * Loại tài khoản tiền của tài khoản nguồn/đích — để ghi `source.fund` của phiếu tự động.
+ * Quỹ phụ (`fund`) chứa tiền thật, hoạt động GIỐNG quỹ tiền mặt (`cash`), KHÔNG phải ngân hàng:
+ * `cashLike` dùng cho các luật gộp nhóm quỹ (vd "Chờ tôi duyệt" của phiếu quỹ tiền mặt).
+ * `raw` = loại gốc trong bảng `bank_accounts` (null nếu không đọc được tài khoản).
+ */
+export interface AccountKindView {
+  /** loại ghi lên `source.fund` của phiếu. */
+  fund: FundKind;
+  /** loại gốc của tài khoản (`bank` | `cash` | `fund`). */
+  raw: string | null;
+  /** tài khoản thuộc nhóm tiền mặt / quỹ (`cash` + `fund`). */
+  cashLike: boolean;
+}
+
+/** Quỹ của tài khoản đích/nguồn theo loại tài khoản; thiếu tài khoản ⇒ `bank` (như trước). */
+export async function accountKindOf(accountId: unknown): Promise<AccountKindView> {
+  if (!accountId) return { fund: 'bank', raw: null, cashLike: false };
   const a = await Models.BankAccount.findById(String(accountId)).select({ kind: 1 }).lean<{ kind?: string } | null>();
-  return a?.kind === 'cash' ? 'cash' : 'bank';
+  const raw = a?.kind ?? null;
+  const fund: FundKind = raw === 'cash' || raw === 'fund' ? raw : 'bank';
+  return { fund, raw, cashLike: isCashLikeAccountKind(raw) };
+}
+
+/** Quỹ của tài khoản đích/nguồn (`bank` | `cash` | `fund`), theo loại tài khoản. */
+export async function fundOfAccount(accountId: unknown): Promise<FundKind> {
+  return (await accountKindOf(accountId)).fund;
 }
 
 /** Phiếu (thu / chi / …) ở dạng đọc được cho bước tự động. */

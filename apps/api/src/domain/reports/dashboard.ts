@@ -7,7 +7,7 @@
  * bằng kết quả ở đây (không sửa bản cache của queries).
  */
 
-import { today } from '@fingate/shared';
+import { isCashLikeAccountKind, today } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
 import { docHref, wire, type WireAmount } from '../queries/index.ts';
 import { ledgerAccountViews, type LedgerAccountView } from '../accounts.ts';
@@ -185,7 +185,9 @@ export async function dashboardExtras(scope: ScopeLike, asOf: string = today()):
 
   const cashTotal = accounts.reduce((a, x) => a + x.actual, 0n);
   const projectedTotal = accounts.reduce((a, x) => a + x.projected, 0n);
-  const onHand = accounts.filter((a) => a.kind === 'cash').reduce((a, x) => a + x.actual, 0n);
+  // Tiền mặt tại quỹ gồm cả Quỹ phụ (`fund`) — tiền thật, hoạt động giống quỹ tiền mặt;
+  // "tiền ngân hàng" = tổng − quỹ nên không bị đội lên bởi tiền trong Quỹ phụ.
+  const onHand = accounts.filter((a) => isCashLikeAccountKind(a.kind)).reduce((a, x) => a + x.actual, 0n);
   const receivableTotal = exposures.receivable.reduce((a, r) => a + toBig(r.remaining.minor), 0n);
   const payableTotal = exposures.payable.reduce((a, r) => a + toBig(r.remaining.minor), 0n);
 

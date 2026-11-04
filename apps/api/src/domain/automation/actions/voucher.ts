@@ -8,7 +8,7 @@
  *   (`request_id` = khoá bước, đã xử lý thì `transition` trả về `skipped`).
  */
 
-import { vnDate, type Role } from '@fingate/shared';
+import { vnDate, type FundKind, type Role } from '@fingate/shared';
 import { Models } from '../../../db/models.ts';
 import { nextDocumentCode } from '../../numbering/index.ts';
 import { buildHistoryEntry, mirrorAudit } from '../../audit/index.ts';
@@ -57,7 +57,8 @@ export interface AutoVoucherSpec {
   amountMinor: bigint;
   currency: string;
   decimals: number;
-  fund: 'bank' | 'cash';
+  /** `fund` = Quỹ phụ lấy từ loại tài khoản (tiền thật, xử lý như `cash` — xem `fundOfAccount`). */
+  fund: FundKind;
   accountId: string;
   /** Đối tác (theo ID). Phiếu chuyển nội bộ (R1) không có đối tác ngoài ⇒ null (ngoại lệ có ghi nhận, xem docs). */
   partnerId: string | null;

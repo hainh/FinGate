@@ -184,17 +184,27 @@ const BANK_ACCOUNT_SORT_GETTERS: Record<string, (r: LedgerAccountView) => SortKe
 /**
  * Lọc theo loại tài khoản (`kind`) rồi cắt một trang (`page` đánh số từ 1, `limit`). Không gửi cả `page` lẫn
  * `limit` ⇒ trả toàn bộ. `total` là số tài khoản khớp `kind`, trước khi cắt trang.
+ * `filtered` = TOÀN BỘ dòng đã lọc `kind` (chưa cắt trang, đã sắp xếp) — KPI totals cộng trên tập này,
+ * không phải trên mọi tài khoản (nếu không, bộ lọc loại TK trên màn BANK-01 không làm KPI đổi).
  */
 export function pageAccountViews(
   rows: LedgerAccountView[],
   opts: { kind?: string; page?: number; limit?: number; sort?: string } = {},
-): { items: LedgerAccountView[]; total: number } {
+): { items: LedgerAccountView[]; total: number; filtered: LedgerAccountView[] } {
   const filtered = opts.kind ? rows.filter((r) => r.kind === opts.kind) : rows;
   const listed = sortRows(filtered, parseSort(opts.sort, BANK_ACCOUNT_SORT_FIELDS), BANK_ACCOUNT_SORT_GETTERS);
-  if (opts.page === undefined && opts.limit === undefined) return { items: listed, total: listed.length };
+  if (opts.page === undefined && opts.limit === undefined) return { items: listed, total: listed.length, filtered: listed };
   const page = opts.page ?? 1;
   const limit = opts.limit ?? BANK_ACCOUNT_PAGE_SIZE;
-  return { items: listed.slice((page - 1) * limit, page * limit), total: listed.length };
+  return { items: listed.slice((page - 1) * limit, page * limit), total: listed.length, filtered: listed };
+}
+
+/** Tổng số dư / số dư dự kiến trên MỘT tập tài khoản (KPI màn BANK-01 — cộng trên tập ĐÃ LỌC, không theo trang). */
+export function accountTotals(rows: readonly LedgerAccountView[]): { balance: bigint; projected: bigint } {
+  return {
+    balance: rows.reduce((a, r) => a + r.actual, 0n),
+    projected: rows.reduce((a, r) => a + r.projected, 0n),
+  };
 }
 
 /** Ép kiểu an toàn BigInt từ kết quả Mongo (lean/aggregate). */

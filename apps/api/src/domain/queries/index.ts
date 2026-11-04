@@ -9,6 +9,7 @@
  */
 
 import {
+  CASH_LIKE_ACCOUNT_KINDS,
   DOC_KIND_LABEL,
   ROLE_LABEL,
   addDays,
@@ -16,6 +17,7 @@ import {
   dayStartOf,
   daysUntil,
   formatMoney,
+  isCashLikeAccountKind,
   maturity,
   maturityLabel,
   money,
@@ -24,6 +26,7 @@ import {
   type CashflowGroup,
   type CashflowPeriod,
   type DocKind,
+  type FundKind,
   type Role,
 } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
@@ -235,10 +238,11 @@ function lowestPendingOwnerFilter(userId: string, role?: Role): Record<string, u
 /**
  * Phiếu thu/chi quỹ tiền mặt: việc duyệt vẫn theo thứ tự, nhưng MỌI cấp còn bước chưa duyệt
  * (current/waiting) đều thấy phiếu trong "Chờ tôi duyệt" ngay khi kế toán lập xong.
+ * Quỹ phụ (`fund`) hoạt động như tiền mặt nên đi chung nhóm này — so theo tập `CASH_LIKE_ACCOUNT_KINDS`.
  */
 function cashAnyPendingOwnerFilter(userId: string, role?: Role): Record<string, unknown> {
   return {
-    'source.fund': 'cash',
+    'source.fund': { $in: [...CASH_LIKE_ACCOUNT_KINDS] },
     kind: { $in: ['spend', 'income'] },
     $expr: {
       $anyElementTrue: {
@@ -857,6 +861,15 @@ export async function pendingFundingInflowFor(doc: Record<string, unknown>, sour
 }
 
 /**
+ * "Quỹ" của phiếu để hiển thị ở gói quyết định (q5). Ưu tiên loại tài khoản nguồn: tài khoản Quỹ phụ (`fund`)
+ * luôn hiện đúng nhãn Quỹ phụ kể cả khi `source.fund` lưu `cash`; ngược lại giữ nhãn đã lưu, thiếu ⇒ `bank`.
+ */
+export function fundKindOf(stored: unknown, accountKind: unknown): FundKind {
+  if (accountKind === 'fund') return 'fund';
+  return stored === 'cash' || stored === 'fund' || stored === 'bank' ? stored : 'bank';
+}
+
+/**
  * Gói quyết định (7 câu hỏi, §9.2). `sourceAccountId`: TK đang chọn ở cấp duyệt (đổi TK khi duyệt) — q5/q6 tính theo
  * TK này, không theo TK đã lưu trên phiếu. Phiếu đã thực thi (paid) luôn dùng TK đã ghi sổ.
  * Người gọi phải đã kiểm TK thuộc công ty của phiếu (route decision-pack).
@@ -874,7 +887,7 @@ export async function decisionPack(
 
   const [account, balanceNow, category, department, budget, partner] = await Promise.all([
     accountId
-      ? Models.BankAccount.findById(accountId).select({ bank_name: 1, account_number: 1, account_name: 1, min_balance_minor: 1 }).lean()
+      ? Models.BankAccount.findById(accountId).select({ bank_name: 1, account_number: 1, account_name: 1, min_balance_minor: 1, kind: 1 }).lean()
       : Promise.resolve(null),
     accountId
       ? bookedBalance(accountId, today())
@@ -944,7 +957,7 @@ export async function decisionPack(
       contract_value: wireOf(contract.value),
     },
     q5_source: {
-      fund: (source.fund as 'bank' | 'cash') ?? 'bank',
+      fund: fundKindOf(source.fund, account?.kind),
       account_label: account ? bankAccountLabelOf(account) : 'Tiền mặt',
       group_account_label: source.group_account_id ? 'Tài khoản Tập đoàn' : null,
       group_managed: Boolean(source.group_managed),
@@ -1325,7 +1338,9 @@ async function buildOverview(scope: ScopeLike, userId: string, role?: Role, canP
   ]);
 
   const cashTotal = accounts.reduce((a, x) => a + x.closing, 0n);
-  const cashOnHand = accounts.filter((a) => a.kind === 'cash').reduce((a, x) => a + x.closing, 0n);
+  // "Tiền mặt đang có" gồm cả Quỹ phụ (`fund`): tiền thật, hoạt động giống quỹ tiền mặt.
+  // Nhờ vậy "tiền ngân hàng" = tổng − quỹ không bị đội lên bởi tiền trong Quỹ phụ.
+  const cashOnHand = accounts.filter((a) => isCashLikeAccountKind(a.kind)).reduce((a, x) => a + x.closing, 0n);
   const bankMoney = cashTotal - cashOnHand;
   const debt = await sumOutstanding(scope);
   const matToday = maturities.filter((m) => m.days_to_due <= 0).reduce((a, m) => a + asBigInt(m.outstanding.minor), 0n);

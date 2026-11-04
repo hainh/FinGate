@@ -8,7 +8,39 @@ const lit = <T extends string>(arr: readonly T[]) => arr as unknown as [T, ...T[
 import { businessDate, businessDateTime, moneyField, moneyWire, objectId } from './common.js';
 import { priority, documentOrigin } from './documents.js';
 
-export const accountKind = z.enum(['bank', 'cash']);
+/**
+ * Loại tài khoản tiền (blueprint §VIII). `fund` = **Quỹ phụ**: chứa tiền THẬT và hoạt động y như quỹ tiền mặt
+ * (`cash`) — tạo được phiếu thu/chi từ nó, dùng được làm tài khoản cho mượn (R8). KHÔNG thuộc luồng ngân hàng:
+ * không phải "Ngân hàng cho vay", không dùng làm tài khoản nhận giải ngân, không dùng cho nợ ngân hàng.
+ */
+export const ACCOUNT_KINDS = ['bank', 'cash', 'fund'] as const;
+export type AccountKind = (typeof ACCOUNT_KINDS)[number];
+
+export const accountKind = z.enum(ACCOUNT_KINDS);
+export type AccountKindValue = z.infer<typeof accountKind>;
+
+/** Nhãn tiếng Việt của loại tài khoản tiền (dùng ở bộ lọc / bảng — an toàn khi DB có giá trị lạ). */
+export const ACCOUNT_KIND_LABEL: Record<AccountKind, string> = {
+  bank: 'Ngân hàng',
+  cash: 'Tiền mặt (quỹ)',
+  fund: 'Quỹ phụ',
+};
+
+/**
+ * Loại tài khoản hoạt động GIỐNG quỹ tiền mặt (tiền trong két/quỹ, không qua ngân hàng): `cash` + `fund`.
+ * Nơi nào tính "tiền mặt đang có", gộp nhóm duyệt quỹ, hay quyết định ngân hàng/không-ngân hàng dùng danh sách này.
+ */
+export const CASH_LIKE_ACCOUNT_KINDS = ['cash', 'fund'] as const;
+export type CashLikeAccountKind = (typeof CASH_LIKE_ACCOUNT_KINDS)[number];
+
+/** Loại tài khoản thuộc luồng NGÂN HÀNG (giải ngân, nợ ngân hàng, đáo hạn). */
+export const BANK_ACCOUNT_KINDS = ['bank'] as const satisfies readonly AccountKind[];
+
+/** Tài khoản có phải nhóm tiền mặt / quỹ (tiền thật ngoài ngân hàng) hay không. */
+export function isCashLikeAccountKind(v: unknown): v is CashLikeAccountKind {
+  return v === 'cash' || v === 'fund';
+}
+
 export const accountStatus = z.enum(['active', 'closed', 'frozen']);
 
 /** §VIII — ngân hàng của công ty + tài khoản tập đoàn (chỉ Chủ tịch HĐQT cấu hình). */

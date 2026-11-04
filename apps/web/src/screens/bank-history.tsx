@@ -36,6 +36,12 @@ export function bankAccountTitleName(a: BankAccountDetail | null | undefined): s
   });
 }
 
+/**
+ * Nhãn loại tài khoản tiền trong tiêu đề BANK-05: `bank` → Ngân hàng, `cash` → Tiền mặt, `fund` → Quỹ phụ.
+ * Giá trị lạ (dữ liệu cũ) rơi về "Ngân hàng" như trước.
+ */
+const ACCOUNT_KIND_LABEL: Record<string, string> = { bank: 'Ngân hàng', cash: 'Tiền mặt', fund: 'Quỹ phụ' };
+
 /** Chọn nhanh N tháng gần nhất, tính từ ngày đầu tháng: 1 tháng = từ 01 tháng này; 3 tháng = từ 01 của 2 tháng trước… */
 const QUICK_RANGES: { months: number; label: string }[] = [
   { months: 1, label: '1 tháng' },
@@ -129,7 +135,7 @@ export function BankAccountHistoryScreen(): ReactNode {
         title={`Lịch sử giao dịch · ${name}`}
         meta={
           account.data
-            ? `${account.data.is_group ? 'Tài khoản Tập đoàn' : (account.data.company_name ?? '—')} · ${account.data.kind === 'cash' ? 'Tiền mặt' : 'Ngân hàng'}`
+            ? `${account.data.is_group ? 'Tài khoản Tập đoàn' : (account.data.company_name ?? '—')} · ${ACCOUNT_KIND_LABEL[account.data.kind] ?? 'Ngân hàng'}`
             : 'Sổ cái giao dịch của tài khoản tiền'
         }
         actions={

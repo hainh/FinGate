@@ -3,9 +3,12 @@
  *
  * v2: số dư = sổ cái (thực tế) + dự kiến (phiếu đã duyệt chờ thực thi). Không còn "khả dụng" / "bị phong toả"
  * nhập tay. Trạng thái `Phong toả` vẫn là trạng thái của TÀI KHOẢN (khoá không chọn cho phiếu mới).
+ *
+ * Bộ lọc loại TK (Tất cả / Tiền mặt / Ngân hàng / Quỹ phụ): `kind` gửi xuống server, và server trả
+ * `totals` ĐÃ tính trên tập đã lọc ⇒ KPI đổi theo nút lọc đang chọn (không tự cộng từ `items`).
  */
 
-import { useState, type ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { moneyFromWire } from '@fingate/shared';
 import { useBankAccountsPage } from '../app/queries.ts';
@@ -21,10 +24,26 @@ import { onSortChange, withServerSort } from '../app/table-sort.ts';
 /** Cỡ trang danh sách tài khoản (phân trang phía máy chủ — `items` chỉ gồm một trang). */
 const BANK_ACCOUNT_PAGE_SIZE = 50;
 
+/** Loại TK cho bộ lọc màn danh sách — khớp `kind` của API (`fund` = Quỹ phụ, giống quỹ tiền mặt). */
+type KindFilter = 'all' | 'cash' | 'bank' | 'fund';
+const KIND_FILTER_OPTIONS: { label: string; value: KindFilter }[] = [
+  { label: 'Tất cả', value: 'all' },
+  { label: 'Tiền mặt', value: 'cash' },
+  { label: 'Ngân hàng', value: 'bank' },
+  { label: 'Quỹ phụ', value: 'fund' },
+];
+
+/** Chip cột "Hình thức": mỗi loại TK một màu để quét nhanh (quỹ phụ khác cả tiền mặt lẫn ngân hàng). */
+const KIND_CHIP: Record<string, { label: string; style: CSSProperties }> = {
+  cash: { label: 'Tiền mặt', style: { borderColor: 'var(--fg-status-attention-border)', color: 'var(--fg-status-attention-text)', background: 'var(--fg-status-attention-bg)' } },
+  fund: { label: 'Quỹ phụ', style: { borderColor: 'var(--fg-status-info-border)', color: 'var(--fg-status-info-text)', background: 'var(--fg-status-info-bg)' } },
+  bank: { label: 'Ngân hàng', style: { borderColor: 'var(--fg-status-neutral-border)', color: 'var(--fg-status-neutral-text)' } },
+};
+
 export function BankAccountsScreen(): ReactNode {
   const { can } = useAuth();
   const navigate = useNavigate();
-  const [kindFilter, setKindFilter] = useState<'all' | 'cash' | 'bank'>('all');
+  const [kindFilter, setKindFilter] = useState<KindFilter>('all');
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState('');
   const query = useBankAccountsPage({
@@ -34,25 +53,23 @@ export function BankAccountsScreen(): ReactNode {
     sort,
   });
   const canEdit = (r: BankAccountRow) => can('bank:write') && (!r.is_group || can('admin:group_accounts'));
+  // Nhãn KPI theo bộ lọc đang chọn — totals do server tính trên ĐÚNG tập đã lọc.
+  const filterLabel = KIND_FILTER_OPTIONS.find((o) => o.value === kindFilter)?.label ?? 'Tất cả';
   return (
     <>
       <FgPageHeader
         title="Tài khoản tiền"
-        meta="Số dư lấy từ sổ cái và phiếu chờ thực thi — không nhập tay. Tiền mặt & ngân hàng của công ty và Tập đoàn"
+        meta="Số dư lấy từ sổ cái và phiếu chờ thực thi — không nhập tay. Tiền mặt, quỹ phụ & ngân hàng của công ty và Tập đoàn"
         actions={can('bank:write') ? <FgTooltipNew /> : undefined}
       />
       <div style={{ marginBottom: 'var(--fg-space-3)' }}>
         <FgSegmented
           value={kindFilter}
           onChange={(v) => {
-            setKindFilter(v as 'all' | 'cash' | 'bank');
+            setKindFilter(v as KindFilter);
             setPage(1);
           }}
-          options={[
-            { label: 'Tất cả', value: 'all' },
-            { label: 'Tiền mặt', value: 'cash' },
-            { label: 'Ngân hàng', value: 'bank' },
-          ]}
+          options={KIND_FILTER_OPTIONS}
         />
       </div>
       <FgQuery query={query} skeleton={<FgSkeletonTable rows={6} cols={7} />}>
@@ -62,13 +79,17 @@ export function BankAccountsScreen(): ReactNode {
               {data.totals ? (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 'var(--fg-space-3)', marginBottom: 'var(--fg-space-4)' }}>
                   <FgCard className="fg-kpi">
-                    <FgText style="caption" color="muted">Tổng số dư sổ cái</FgText>
+                    <FgText style="caption" color="muted">
+                      {`Tổng số dư sổ cái${kindFilter === 'all' ? '' : ` · ${filterLabel}`}`}
+                    </FgText>
                     <div className="fg-kpi-value">
                       <FgMoney value={moneyFromWire(data.totals.balance)} mode="full" emphasis />
                     </div>
                   </FgCard>
                   <FgCard className="fg-kpi">
-                    <FgText style="caption" color="muted">Dự kiến sau 30 ngày</FgText>
+                    <FgText style="caption" color="muted">
+                      {`Dự kiến sau 30 ngày${kindFilter === 'all' ? '' : ` · ${filterLabel}`}`}
+                    </FgText>
                     <div className="fg-kpi-value">
                       <FgMoney value={moneyFromWire(data.totals.projected)} mode="full" emphasis />
                     </div>
@@ -110,16 +131,14 @@ export function BankAccountsScreen(): ReactNode {
                       {
                         title: 'Hình thức',
                         key: 'kind',
-                        render: (_v, r) =>
-                          r.kind === 'cash' ? (
-                            <span className="fg-chip" style={{ borderColor: 'var(--fg-status-attention-border)', color: 'var(--fg-status-attention-text)', background: 'var(--fg-status-attention-bg)' }}>
-                              Tiền mặt
+                        render: (_v, r) => {
+                          const chip = KIND_CHIP[r.kind] ?? { label: r.kind, style: KIND_CHIP.bank.style };
+                          return (
+                            <span className="fg-chip" style={chip.style}>
+                              {chip.label}
                             </span>
-                          ) : (
-                            <span className="fg-chip" style={{ borderColor: 'var(--fg-status-neutral-border)', color: 'var(--fg-status-neutral-text)' }}>
-                              Ngân hàng
-                            </span>
-                          ),
+                          );
+                        },
                       },
                       { title: 'Số TK / Mã quỹ', dataIndex: 'account_number_masked', key: 'num', render: (v: string) => <span className="fg-mono">{v}</span> },
                       { title: 'Loại tiền', dataIndex: 'currency', key: 'cur' },

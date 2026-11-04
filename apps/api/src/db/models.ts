@@ -421,7 +421,8 @@ export const DocumentSchema = new Schema(
     fx: { rate: { type: String, default: null }, at: { type: String, default: null } },
 
     source: {
-      fund: { type: String, enum: ['bank', 'cash'], default: 'bank' },
+      /** "Quỹ" của phiếu: `bank` · `cash` (quỹ tiền mặt) · `fund` (Quỹ phụ — xử lý như `cash`). */
+      fund: { type: String, enum: ['bank', 'cash', 'fund'], default: 'bank' },
       account_id: { type: Schema.Types.ObjectId, default: null },
       group_account_id: { type: Schema.Types.ObjectId, default: null },
       group_managed: { type: Boolean, default: false },
@@ -615,7 +616,11 @@ export const BankAccountSchema = new Schema(
     account_name: { type: String, required: true },
     account_number: { type: String, required: true },
     branch: { type: String, default: null },
-    kind: { type: String, enum: ['bank', 'cash'], default: 'bank' },
+    /**
+     * Loại tài khoản tiền: `bank` (ngân hàng) · `cash` (quỹ tiền mặt) · `fund` (Quỹ phụ — tiền thật,
+     * hoạt động giống `cash`, KHÔNG thuộc luồng ngân hàng). Xem `ACCOUNT_KINDS` trong @fingate/shared.
+     */
+    kind: { type: String, enum: ['bank', 'cash', 'fund'], default: 'bank' },
     currency: { type: String, default: 'VND' },
     manager_user_id: { type: Schema.Types.ObjectId, default: null },
     limit_minor: { type: BigInt, default: null },

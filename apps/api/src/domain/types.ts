@@ -1,6 +1,6 @@
 /** Kiểu dùng chung trong domain — tránh import vòng giữa các module. */
 
-import type { DocKind, Role, StatusKey, Tone } from '@fingate/shared';
+import type { DocKind, FundKind, Role, StatusKey, Tone } from '@fingate/shared';
 
 export interface ScopeLike {
   /** null = toàn tập đoàn. */
@@ -57,7 +57,8 @@ export interface DocView {
   category_id: string | null;
   payee: { name: string; tax_code?: string | null; is_internal?: boolean; bank_name?: string | null; bank_account?: string | null };
   amount: DocAmount;
-  source: { fund: 'bank' | 'cash'; account_id?: string | null; group_account_id?: string | null; group_managed?: boolean };
+  /** `fund` = Quỹ phụ (tiền thật, xử lý như `cash`) — xem `FundKind` của @fingate/shared. */
+  source: { fund: FundKind; account_id?: string | null; group_account_id?: string | null; group_managed?: boolean };
   target?: { company_id?: string | null; account_id?: string | null } | null;
   planned_date: string;
   business_date: string;
@@ -92,7 +93,8 @@ export interface DomainDoc {
   category_id?: string | null;
   payee: { name: string; tax_code?: string | null; is_internal?: boolean; bank_name?: string | null; bank_account?: string | null };
   amount: { minor: bigint; currency: string; decimals: number };
-  source: { fund: 'bank' | 'cash'; account_id?: string | null; group_account_id?: string | null; group_managed?: boolean };
+  /** `fund` = Quỹ phụ (tiền thật, xử lý như `cash`) — xem `FundKind` của @fingate/shared. */
+  source: { fund: FundKind; account_id?: string | null; group_account_id?: string | null; group_managed?: boolean };
   planned_date: string;
   business_date: string;
   priority: string;

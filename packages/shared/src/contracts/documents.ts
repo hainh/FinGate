@@ -12,7 +12,22 @@ import { linkObjectType, linkRow, linkSplit } from './links.js';
 export const priority = z.enum(['low', 'normal', 'high', 'urgent']);
 export type Priority = z.infer<typeof priority>;
 
-export const fundKind = z.enum(['bank', 'cash']);
+/**
+ * "Quỹ" của phiếu (`source.fund`): phiếu ghi nhận tiền từ ngân hàng hay từ quỹ tiền mặt/quỹ phụ.
+ * `fund` (Quỹ phụ) chứa tiền thật và hoạt động GIỐNG `cash` (xem `finance.ts` → `ACCOUNT_KINDS`);
+ * luồng ngân hàng (giải ngân, nợ ngân hàng) vẫn chỉ nhận `bank`.
+ */
+export const fundKind = z.enum(['bank', 'cash', 'fund']);
+
+/** `source.fund` dạng đọc: dữ liệu v1 có thể chưa có giá trị ⇒ mặc định `bank`. */
+export type FundKind = z.infer<typeof fundKind>;
+
+/** Nhãn tiếng Việt của "quỹ" trên phiếu (ô chọn nguồn tiền). */
+export const FUND_KIND_LABEL: Record<string, string> = {
+  bank: 'Ngân hàng',
+  cash: 'Quỹ tiền mặt',
+  fund: 'Quỹ phụ',
+};
 
 /** Nhóm trường "Nguồn và đích tiền" (blueprint §XXX.1). */
 export const sourceField = z.object({

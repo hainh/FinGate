@@ -254,7 +254,8 @@ export interface RecurringCreateInput {
   purpose: string;
   partner_id: string;
   amount: { amount_minor: string; currency: string };
-  source: { fund: 'bank' | 'cash'; account_id: string | null };
+  /** `fund` = quỹ phụ (tiền thật, giống quỹ tiền mặt — không dính ngân hàng). */
+  source: { fund: 'bank' | 'cash' | 'fund'; account_id: string | null };
   cadence: RecurringCadence;
   day_of_period: number;
   remind_days?: number[];

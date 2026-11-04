@@ -381,7 +381,7 @@ Gộp chủ đích: **một** `documents` cho mọi loại phiếu (`kind: spend
   payee:{ name, tax_code, counterparty_id, is_internal },
   amount:{ minor: Long("2500000000"), currency:"VND", decimals:0 },
   fx:{ rate:"26310.50", at } | null,
-  source:{ fund:"bank"|"cash", account_id, group_account_id, group_managed },   // §VIII
+  source:{ fund:"bank"|"cash"|"fund", account_id, group_account_id, group_managed },   // §VIII ("fund" = Quỹ phụ, xử lý như "cash")
   planned_date, business_date, priority, contract:{ code, value }, loan_id,
   budget:{ budget_id, line_id, in_plan },
   approval:{ matrix_id, matrix_version,
