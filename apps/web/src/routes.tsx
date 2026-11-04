@@ -31,7 +31,7 @@ import { PartnerDetailScreen, PartnersScreen } from './screens/partners.tsx';
 import { BankDebtListScreen, BankDebtFormScreen, BankDebtDetailScreen, LoanScheduleScreen } from './screens/bank-debt.tsx';
 import { CashflowHistoryScreen } from './screens/cashflow.tsx';
 import { ReportLibraryScreen, ReportRunnerScreen } from './screens/reports.tsx';
-import { PersonnelScreen, MatrixScreen, ApprovalThresholdScreen, AuditLogScreen, SettingsScreen, CompaniesScreen, RecurringScreen } from './screens/admin.tsx';
+import { PersonnelScreen, MatrixScreen, CashApprovalScreen, ApprovalThresholdScreen, AuditLogScreen, SettingsScreen, CompaniesScreen, RecurringScreen } from './screens/admin.tsx';
 import { AutomationScreen } from './screens/automation.tsx';
 import { BackupScreen } from './screens/backup.tsx';
 import { TagsScreen } from './screens/tags.tsx';
@@ -77,7 +77,7 @@ function SessionErrorScreen(): ReactNode {
  * cũng bị đưa về trang phù hợp, thay vì 403 lửng hoặc skeleton treo.
  * (Khu `/quantri` không khóa ở đây — từng màn tự ẩn nút và server vẫn kiểm quyền.)
  */
-const PATH_PERMS: { prefix: string; perm: string | string[] }[] = [
+export const PATH_PERMS: { prefix: string; perm: string | string[] }[] = [
   { prefix: '/dashboard', perm: 'doc:read' },
   { prefix: '/cho-toi-duyet', perm: ['approval:act', 'payment:mark'] },
   { prefix: '/toi-da-duyet', perm: 'approval:act' },
@@ -96,6 +96,9 @@ const PATH_PERMS: { prefix: string; perm: string | string[] }[] = [
   { prefix: '/baocao', perm: 'report:view' },
   { prefix: '/ban-tin', perm: 'report:view' },
   { prefix: '/quantri/tags', perm: 'tag:manage' },
+  // Ma trận duyệt + Duyệt tiền mặt cùng quyền `admin:matrix` (khớp ADMIN_TABS trong admin.tsx).
+  { prefix: '/quantri/quy-trinh-duyet', perm: 'admin:matrix' },
+  { prefix: '/quantri/duyet-tien-mat', perm: 'admin:matrix' },
   { prefix: '/quantri/tu-dong', perm: ['automation:config', 'audit:read'] },
   { prefix: '/quantri/dinh-ky', perm: 'doc:create' }, // khớp tab "Chi định kỳ" (admin.tsx · ADMIN_TABS)
   { prefix: '/canh-bao', perm: 'doc:read' },
@@ -149,7 +152,7 @@ function AdminHomeRedirect(): ReactNode {
  * Tiêu đề tab trình duyệt theo route (khớp lần lượt, pattern cụ thể đứng trước).
  * Màn có tên cụ thể hơn ghi đè bằng usePageTitle (lib/page-title.ts).
  */
-const ROUTE_TITLES: [pattern: string, title: string][] = [
+export const ROUTE_TITLES: [pattern: string, title: string][] = [
   ['/dang-nhap', 'Đăng nhập'],
   ['/kich-hoat', 'Kích hoạt tài khoản'],
   ['/mat-khau/quen', 'Quên mật khẩu'],
@@ -206,6 +209,7 @@ const ROUTE_TITLES: [pattern: string, title: string][] = [
   ['/quantri/nguoidung', 'Quản trị · Người dùng'],
   ['/quantri/cong-ty', 'Quản trị · Công ty'],
   ['/quantri/quy-trinh-duyet', 'Quản trị · Quy trình duyệt'],
+  ['/quantri/duyet-tien-mat', 'Quản trị · Duyệt tiền mặt'],
   ['/quantri/nguong-duyet', 'Quản trị · Ngưỡng duyệt'],
   ['/quantri/audit', 'Quản trị · Nhật ký hệ thống'],
   ['/quantri/sao-luu', 'Quản trị · Sao lưu'],
@@ -287,6 +291,7 @@ export function AppRoutes(): ReactNode {
       <Route path="/quantri/nguoidung" element={<Shell><PersonnelScreen /></Shell>} /> {/* ADM-01 */}
       <Route path="/quantri/cong-ty" element={<Shell><CompaniesScreen /></Shell>} /> {/* ADM-06/07 */}
       <Route path="/quantri/quy-trinh-duyet" element={<Shell><MatrixScreen /></Shell>} /> {/* ADM-04 */}
+      <Route path="/quantri/duyet-tien-mat" element={<Shell><CashApprovalScreen /></Shell>} /> {/* ADM-04b · khoản tiền mặt có phải qua KTT duyệt */}
       <Route path="/quantri/nguong-duyet" element={<Shell><ApprovalThresholdScreen /></Shell>} /> {/* ADM-04 · ngưỡng Chairman */}
       <Route path="/quantri/audit" element={<Shell><AuditLogScreen /></Shell>} /> {/* ADM-12 */}
       <Route path="/quantri/sao-luu" element={<Shell><BackupScreen /></Shell>} /> {/* ADM-14 */}

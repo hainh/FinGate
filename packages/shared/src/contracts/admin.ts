@@ -445,6 +445,49 @@ export const approvalThresholdUpsertBody = z.object({
   request_id: uuid,
 });
 
+/* ------------------------------------------------------------------ *
+ * ADM "Duyệt tiền mặt" — setting riêng: khoản tiền mặt có phải qua KTT duyệt
+ * ------------------------------------------------------------------ */
+
+/**
+ * Key Setting cho cài đặt "Duyệt tiền mặt" (MỘT document, giá trị đa chiều:
+ * `{ companies: { <company_id>: true } }`). Phiếu thu/chi quỹ tiền mặt của công ty
+ * KHÔNG có trong đó (hoặc `false`) đi thẳng tới cấp duyệt kế tiếp, bỏ bước Kế toán trưởng.
+ */
+export const CASH_APPROVAL_SETTING_KEY = 'approval.cash_require_ktt';
+
+/** Bật/tắt "qua KTT duyệt" cho phiếu thu/chi quỹ tiền mặt của MỘT công ty (mặc định tắt). */
+export const cashApprovalUpsertBody = z.object({
+  company_id: objectId,
+  require_ktt: z.boolean(),
+  request_id: uuid,
+});
+
+/** Một dòng màn ADM "Duyệt tiền mặt" — mỗi công ty trong phạm vi một dòng. */
+export const cashApprovalCompanyRow = z.object({
+  company_id: objectId,
+  company_name: z.string(),
+  company_code: z.string().nullable(),
+  /** chưa tick (mặc định) = khoản tiền mặt bỏ qua bước KTT. */
+  require_ktt: z.boolean(),
+});
+
+/** `GET /admin/cash-approval` — các công ty trong phạm vi, mọi công ty mặc định `require_ktt: false`. */
+export const cashApprovalResult = z.object({
+  items: z.array(cashApprovalCompanyRow),
+});
+
+export type CashApprovalResult = z.infer<typeof cashApprovalResult>;
+
+/** `POST /admin/cash-approval` — số hồ sơ đang chờ được quét / gán lại theo cài đặt mới. */
+export const cashApprovalUpsertResult = z.object({
+  ok: z.boolean(),
+  rerun_scanned: z.number().int(),
+  rerun_changed: z.number().int(),
+});
+
+export type CashApprovalUpsertResult = z.infer<typeof cashApprovalUpsertResult>;
+
 export const searchQuery = z.object({
   q: z.string().min(1).max(200),
   limit: z.coerce.number().int().min(1).max(50).default(20),

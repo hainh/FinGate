@@ -68,7 +68,7 @@ import {
   PARTNER_REASSIGN_ROLES,
   UNRESTRICTED_DELETE_ROLES,
 } from '../domain/entitlement/index.ts';
-import { awaitingBadge, decisionPack, docHref, queryQueue } from '../domain/queries/index.ts';
+import { awaitingBadge, cashKttIdsForScope, decisionPack, docHref, queryQueue } from '../domain/queries/index.ts';
 import { mirrorAudit, buildHistoryEntry } from '../domain/audit/index.ts';
 import { assertAccountAllowedForCompany, assertGroupAccountForCompany } from '../domain/accounts.ts';
 import { invalidateFor, rebuildEvidence } from '../domain/side-effects.ts';
@@ -190,6 +190,8 @@ export function documentRoutes(app: FastifyInstance): void {
         const scope = requireScope(req);
         const q = validate(documentListQuery, req.query);
         const canPay = actor.permissions.includes('payment:mark');
+        // cài đặt "Duyệt tiền mặt" (ADM-04) đọc MỘT lần cho cả danh sách lẫn badge của tab
+        const cashKttCompanyIds = await cashKttIdsForScope(scope);
         const [{ items, total }, badge] = await Promise.all([
           queryQueue({
             scope,
@@ -208,8 +210,9 @@ export function documentRoutes(app: FastifyInstance): void {
             sort: q.sort ?? '-waiting',
             limit: q.limit,
             page: q.page,
+            cashKttCompanyIds,
           }),
-          awaitingBadge(scope, actor.user_id, actor.role, canPay, undefined, q.awaiting),
+          awaitingBadge(scope, actor.user_id, actor.role, canPay, undefined, q.awaiting, cashKttCompanyIds),
         ]);
         return ok(
           reply,

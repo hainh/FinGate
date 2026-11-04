@@ -717,6 +717,29 @@ export interface ApprovalThresholdResult {
   companies: ApprovalThresholdCompany[];
 }
 
+/**
+ * Một dòng màn "Duyệt tiền mặt" (ADM-04) — mỗi công ty trong phạm vi một dòng.
+ * `require_ktt` = phiếu thu/chi quỹ tiền mặt của công ty phải qua Kế toán trưởng duyệt; mặc định `false`.
+ */
+export interface CashApprovalCompany {
+  company_id: string;
+  company_name: string;
+  company_code: string | null;
+  require_ktt: boolean;
+}
+
+/** `GET /admin/cash-approval` — công ty trong phạm vi, chưa tick (mặc định) = không qua KTT. */
+export interface CashApprovalResult {
+  items: CashApprovalCompany[];
+}
+
+/** `POST /admin/cash-approval` — số hồ sơ đang chờ đã quét / gán lại theo cài đặt mới. */
+export interface CashApprovalUpsertResult {
+  ok: boolean;
+  rerun_scanned: number;
+  rerun_changed: number;
+}
+
 export interface PersonnelCompany {
   company_id: string;
   company_name: string;

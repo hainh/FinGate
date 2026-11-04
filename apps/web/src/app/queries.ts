@@ -13,6 +13,8 @@ import type {
   ApprovalThresholdResult,
   BankAccountDetail,
   BankAccountListResult,
+  CashApprovalResult,
+  CashApprovalUpsertResult,
   CashflowHistoryResult,
   DashboardOverview,
   DecisionPack,
@@ -429,6 +431,45 @@ export function useApprovalThresholdUpsert() {
   return useMutation({
     mutationFn: (body: ApprovalThresholdUpsertInput) => apiData('/admin/approval-threshold', { method: 'POST', body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['approval-threshold'] }),
+  });
+}
+
+/**
+ * Cài đặt "Duyệt tiền mặt" (ADM-04) — mỗi công ty trong phạm vi một dòng, `require_ktt` mặc định `false`.
+ * Endpoint bọc trong `ok()` nên dùng `apiCall` (giống `useMatrix`).
+ */
+export function useCashApproval() {
+  const { scope } = useAuth();
+  return useQuery({
+    queryKey: ['cash-approval', scope],
+    queryFn: () => apiCall<CashApprovalResult>('/admin/cash-approval'),
+  });
+}
+
+/** Bật/tắt "qua KTT duyệt" cho khoản tiền mặt của MỘT công ty — mặc định tắt (không tick). */
+export interface CashApprovalUpsertInput {
+  company_id: string;
+  require_ktt: boolean;
+}
+
+/**
+ * Lưu cài đặt "Duyệt tiền mặt" của một công ty (ADM-04) — admin không có nút Lưu riêng, tick là gọi luôn.
+ * Server chạy lại hồ sơ thu/chi tiền mặt đang chờ của công ty đó, nên làm tươi cả hàng chờ lẫn badge
+ * (badge nằm dưới `['overview', …]`, số "chờ tôi duyệt" nằm dưới `['queue', …]`).
+ */
+export function useCashApprovalUpsert() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CashApprovalUpsertInput) =>
+      apiData<CashApprovalUpsertResult>('/admin/cash-approval', { method: 'POST', body: { ...body, request_id: uuid() } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['cash-approval'] });
+      qc.invalidateQueries({ queryKey: ['queue'] });
+      qc.invalidateQueries({ queryKey: ['documents'] });
+      qc.invalidateQueries({ queryKey: ['overview'] });
+      // ma trận/ngưỡng không đổi, nhưng màn Ma trận duyệt hiển thị chuỗi bước của quy trình — làm tươi cho chắc.
+      qc.invalidateQueries({ queryKey: ['matrix'] });
+    },
   });
 }
 

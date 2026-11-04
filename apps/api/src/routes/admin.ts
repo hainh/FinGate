@@ -15,6 +15,7 @@ import {
   DEFAULT_CHAIRMAN_THRESHOLD_MINOR,
   DOC_KINDS,
   isGroupOnlyRole,
+  CASH_APPROVAL_SETTING_KEY,
   MFA_REQUIRED_ROLES,
   ROLE_LABEL,
   today,
@@ -39,6 +40,7 @@ import {
   recurringUpsertBody,
   settingUpsertBody,
   approvalThresholdUpsertBody,
+  cashApprovalUpsertBody,
   auditLogQuery,
   budgetUpsertBody,
   alertRuleUpsertBody,
@@ -59,6 +61,7 @@ import {
   recurringUpsertBodySchema,
   settingUpsertBodySchema,
   approvalThresholdUpsertBodySchema,
+  cashApprovalUpsertBodySchema,
 } from './schemas.ts';
 import {
   DEFAULT_INVITE_DAYS,
@@ -72,6 +75,7 @@ import { mirrorAudit } from '../domain/audit/index.ts';
 import { scopedAggregate } from '../lib/mongo.ts';
 import { assertMatrixSteps, CHAIRMAN_THRESHOLD_KEY, nextMatrixInLine, resolveChairmanThreshold, type ChairmanThresholdConfig } from '../domain/workflow/matrix.ts';
 import { rerunPendingApprovals } from '../domain/workflow/rerun.ts';
+import { resolveCashRequiresKtt, type CashApprovalConfig } from '../domain/workflow/cash-approval.ts';
 import { DECISION_STATUSES, asBigInt, wire } from '../domain/queries/index.ts';
 import { mailTemplates, sendMail } from '../mail/sender.ts';
 import { reportPreset } from '../domain/reports/index.ts';
@@ -2122,6 +2126,113 @@ export function adminRoutes(app: FastifyInstance): void {
           ip: requestCtx(req).ip,
         });
         return { data: { ok: true } };
+      },
+    }),
+  );
+
+  /* =============== ADM-04: DUYỆT TIỀN MẶT (theo công ty, mặc định tắt) =============== */
+
+  /**
+   * Cài đặt "Duyệt tiền mặt": phiếu thu/chi quỹ tiền mặt (`cash`) và Quỹ phụ (`fund`) của công ty
+   * ĐÃ TICK phải qua Kế toán trưởng duyệt như ma trận; chưa tick (MẶC ĐỊNH) → bỏ bước KTT, phiếu đi
+   * thẳng tới cấp duyệt kế tiếp. Chỉ liệt kê công ty trong phạm vi người gọi.
+   */
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/admin/cash-approval',
+      config: { perms: ['admin:matrix'] as Permission[], screen: 'ADM-04', summary: 'Duyệt tiền mặt theo công ty' },
+      handler: async (req, reply) => {
+        const scope = requireScope(req);
+        const setting = await Models.Setting.findOne({ key: CASH_APPROVAL_SETTING_KEY }).lean<{ value?: CashApprovalConfig } | null>();
+        const config = setting?.value ?? null;
+        const rows =
+          scope.companyIds === null
+            ? await Models.Company.find({}).sort({ code: 1 }).select({ name: 1, code: 1 }).lean()
+            : await Models.Company.find({ _id: { $in: scope.companyIds as never } }).sort({ code: 1 }).select({ name: 1, code: 1 }).lean();
+        return ok(
+          reply,
+          {
+            items: rows.map((c) => {
+              const id = String(c._id);
+              return {
+                company_id: id,
+                company_name: String(c.name ?? ''),
+                company_code: (c as { code?: string | null }).code ?? null,
+                // chưa tick = KHÔNG qua KTT (mặc định của cài đặt)
+                require_ktt: resolveCashRequiresKtt(config, id),
+              };
+            }),
+          },
+          { maxAge: 30 },
+        );
+      },
+    }),
+  );
+
+  /** Lưu cài đặt "Duyệt tiền mặt" của MỘT công ty; merge vào `value` để giữ lựa chọn của công ty khác. */
+  app.route(
+    defineRoute({
+      method: 'POST',
+      url: '/admin/cash-approval',
+      config: { perms: ['admin:matrix'] as Permission[], screen: 'ADM-04', stepUp: true, summary: 'Đổi cài đặt duyệt tiền mặt (audit)' },
+      schema: { tags: ['admin'], body: cashApprovalUpsertBodySchema },
+      handler: async (req) => {
+        const actor = requireActor(req);
+        const body = validate(cashApprovalUpsertBody, req.body);
+        await assertCompanyAccess(req, body.company_id);
+
+        const before = await Models.Setting.findOne({ key: CASH_APPROVAL_SETTING_KEY }).lean<{ value?: CashApprovalConfig } | null>();
+        const current = before?.value ?? {};
+        const previous = resolveCashRequiresKtt(current, body.company_id);
+        // ghi cả value (merge JS) để không phụ thuộc dot-path vào Mixed; giữ lựa chọn của công ty khác.
+        const companies = { ...(current.companies ?? {}) };
+        if (body.require_ktt) companies[body.company_id] = true;
+        else delete companies[body.company_id]; // bỏ tick = gỡ khoá (mặc định tắt)
+        const value: CashApprovalConfig = { ...current, companies };
+
+        await Models.Setting.updateOne(
+          { key: CASH_APPROVAL_SETTING_KEY },
+          {
+            $set: {
+              value,
+              key: CASH_APPROVAL_SETTING_KEY,
+              description: 'Phiếu thu/chi quỹ tiền mặt của công ty phải qua Kế toán trưởng duyệt (mặc định: không)',
+              updated_at: new Date(),
+              updated_by: actor.user_id,
+            },
+          },
+          { upsert: true },
+        ).exec();
+        await mirrorAudit({
+          at: new Date(),
+          actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+          action: 'setting.update',
+          subject: { type: 'setting', id: CASH_APPROVAL_SETTING_KEY, code: String(body.company_id) },
+          company_id: body.company_id,
+          diff_fields: { require_ktt: { before: previous, after: body.require_ktt } },
+          request_id: body.request_id,
+          ip: requestCtx(req).ip,
+        });
+
+        // Đổi cài đặt → gán lại chuỗi duyệt cho hồ sơ thu/chi quỹ tiền mặt đang chờ của công ty này,
+        // để người đang nằm ở bước KTT không còn giữ hồ sơ (hoặc được thêm lại bước KTT).
+        let rerun = { scanned: 0, changed: 0 };
+        try {
+          const r = await rerunPendingApprovals({
+            reason: body.require_ktt ? 'Bật "khoản tiền mặt phải qua KTT duyệt"' : 'Tắt "khoản tiền mặt phải qua KTT duyệt"',
+            actor: { user_id: actor.user_id, name: actor.name, role: actor.role },
+            companyIds: [body.company_id],
+            kinds: ['spend', 'income'],
+            requestId: body.request_id,
+            ip: requestCtx(req).ip,
+          });
+          rerun = { scanned: r.scanned, changed: r.changed };
+        } catch (err) {
+          // cài đặt đã lưu — chạy lại chỉ là tiện lợi, không làm hỏng thao tác của admin
+          console.warn('[cash-approval] chạy lại hồ sơ đang chờ thất bại:', (err as Error).message);
+        }
+        return { data: { ok: true, rerun_scanned: rerun.scanned, rerun_changed: rerun.changed } };
       },
     }),
   );

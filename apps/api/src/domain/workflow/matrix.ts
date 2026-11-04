@@ -16,6 +16,7 @@ import {
 } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
 import { ApiError } from '@fingate/shared';
+import { cashRequiresKttFor, isCashVoucher } from './cash-approval.ts';
 
 export interface MatrixStep {
   order: number;
@@ -29,6 +30,12 @@ export interface ResolvedMatrix {
   matrix_version: number;
   label: string;
   steps: MatrixStep[];
+  /**
+   * `true` = chuỗi đã bị cài đặt "Duyệt tiền mặt" sửa cho phiếu QUỸ TIỀN MẶT của công ty chưa
+   * tick: bỏ bước Kế toán trưởng. `false`/không có = chuỗi theo ma trận (phiếu ngân hàng, hoặc
+   * công ty đang bật "qua KTT duyệt").
+   */
+  cash_overridden?: boolean;
 }
 
 interface MatrixRow {
@@ -197,14 +204,34 @@ export async function nextMatrixInLine(input: {
 }
 
 /**
+ * Áp cài đặt "Duyệt tiền mặt" (ADM-04, tab "Duyệt tiền mặt") lên chuỗi bước — hàm THUẦN.
+ *
+ * `requiresKtt = true` (công ty đang bật) → giữ NGUYÊN chuỗi ma trận.
+ * `requiresKtt = false` (mặc định) → bỏ bước Kế toán trưởng và đánh số lại `order` từ 1, phiếu đi
+ * thẳng tới cấp duyệt kế tiếp. Chuỗi CHỈ có bước KTT thì giữ nguyên để không tạo chuỗi rỗng
+ * (tránh `FG-WF-006` — hồ sơ không còn ai duyệt).
+ */
+export function applyCashPolicy(steps: MatrixStep[], requiresKtt: boolean): { steps: MatrixStep[]; cash_overridden: boolean } {
+  if (requiresKtt) return { steps, cash_overridden: false };
+  const rest = steps.filter((s) => s.role !== 'chief_accountant');
+  if (!rest.length || rest.length === steps.length) return { steps, cash_overridden: false };
+  return { steps: rest.map((s, i) => ({ ...s, order: i + 1 })), cash_overridden: true };
+}
+
+/**
  * Chọn ma trận khớp nhất: category cụ thể > doc_kind cụ thể > công ty > toàn tập đoàn,
  * rồi theo ngưỡng tiền và `effective_from` mới nhất.
+ *
+ * `fund` (loại tài khoản nguồn của phiếu: `bank` | `cash` | `fund`) để áp cài đặt "Duyệt tiền mặt":
+ * phiếu THU/CHI quỹ tiền mặt của công ty CHƯA tick đi tiếp không qua bước KTT. Bỏ trống → coi như
+ * phiếu thường (chuỗi ma trận nguyên vẹn), giữ tương thích với nơi gọi cũ.
  */
 export async function resolveMatrix(input: {
   company_id: string;
   kind: DocKind;
   amount_minor: bigint;
   category_id?: string | null;
+  fund?: string | null;
 }): Promise<ResolvedMatrix> {
   const now = new Date();
   const rows = (await Models.ApprovalMatrix.find({
@@ -219,6 +246,10 @@ export async function resolveMatrix(input: {
   const inRange = rows.filter((r) => amountInRange(r, input.amount_minor));
 
   const chairmanThreshold = await chairmanThresholdFor(input.company_id, input.kind);
+  // Cài đặt "Duyệt tiền mặt" đọc MỘT lần cho cả hai nhánh (ma trận khớp / chuỗi mặc định);
+  // chỉ phiếu quỹ tiền mặt mới cần đọc, phiếu ngân hàng giữ nguyên chuỗi.
+  const cashVoucher = isCashVoucher({ kind: input.kind, fund: input.fund });
+  const requiresKtt = cashVoucher ? await cashRequiresKttFor(input.company_id) : true;
 
   if (inRange.length) {
     const best = inRange.sort((a, b) => matchSpecificity(b, input) - matchSpecificity(a, input))[0]!;
@@ -226,21 +257,25 @@ export async function resolveMatrix(input: {
       best.steps
         .map((s) => ({ order: s.order, role: s.role as Role, sla_hours: s.sla_hours ?? 24, mandatory: s.mandatory !== false })),
     );
+    const cash = applyCashPolicy(withChairman(steps, input.amount_minor, chairmanThreshold), requiresKtt);
     return {
       matrix_id: best._id,
       matrix_version: best.version ?? 1,
       label: best.label ?? `Khoản ${formatRange(big(best.amount_min_minor), best.amount_max_minor === null ? null : big(best.amount_max_minor))}`,
-      steps: withChairman(steps, input.amount_minor, chairmanThreshold),
+      steps: cash.steps,
+      cash_overridden: cash.cash_overridden,
     };
   }
 
   // chưa có matrix nào khớp → mặc định theo khoảng tiền (§7.2) + ngưỡng chairman (vẫn báo được label để UI giải thích)
   const fallback = defaultStepsFor(input.kind, input.amount_minor);
+  const cash = applyCashPolicy(withChairman(fallback.steps, input.amount_minor, chairmanThreshold), requiresKtt);
   return {
     matrix_id: null,
     matrix_version: 0,
     label: fallback.label,
-    steps: withChairman(fallback.steps, input.amount_minor, chairmanThreshold),
+    steps: cash.steps,
+    cash_overridden: cash.cash_overridden,
   };
 }
 

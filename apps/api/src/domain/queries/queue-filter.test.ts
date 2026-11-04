@@ -2,21 +2,30 @@ import { describe, expect, it } from 'vitest';
 import { DECISION_STATUSES, EXECUTION_STATUSES, queueFilter, type QueueQuery } from './index.ts';
 
 const scope = { companyIds: null };
+const CTA = 'a'.repeat(24);
+const CTB = 'b'.repeat(24);
 
 function base(over: Partial<QueueQuery>): QueueQuery {
   return { scope, userId: 'u1', limit: 50, ...over };
 }
 
+/** `$nor` lưới an toàn: loại phiếu quỹ tiền mặt của công ty CHƯA bật "qua KTT duyệt". */
+function cashNorCond(f: Record<string, unknown>): Record<string, unknown> | undefined {
+  const guard = (f.$and as Record<string, unknown>[] | undefined)?.findLast((c) => '$nor' in c);
+  const nor = guard?.$nor as Record<string, unknown>[] | undefined;
+  return nor?.[0];
+}
+
 describe('queueFilter — "chờ tôi duyệt" gồm cả việc thực thi cho kế toán', () => {
   it('không có payment:mark → chỉ hồ sơ tới lượt tôi duyệt', () => {
     const f = queueFilter(base({ mine: 'to_approve', role: 'chief_accountant', canPay: false }));
-    // gộp trong $and: [lượt tôi duyệt, phiếu quỹ tiền mặt có bước tôi chưa duyệt]
+    // gộp trong $and: [lượt tôi duyệt, lưới an toàn "Duyệt tiền mặt"]
     const and = f.$and as Record<string, unknown>[];
-    expect(and).toHaveLength(1);
-    const union = and[0]!.$or as Record<string, unknown>[];
-    expect(union).toHaveLength(2);
-    // Quỹ phụ (`fund`) đi chung nhóm với quỹ tiền mặt — cùng hưởng cách gộp duyệt này
-    expect(union[1]).toMatchObject({ 'source.fund': { $in: ['cash', 'fund'] } });
+    expect(and).toHaveLength(2);
+    // KHÔNG còn nhánh đặc cách "phiếu quỹ tiền mặt hiện ở mọi cấp": chỉ còn đúng lượt tôi duyệt
+    expect(and[0]!.$or).toBeUndefined();
+    expect(and[0]).toHaveProperty('$expr');
+    expect(cashNorCond(f)).toBeDefined();
     expect(f.status).toEqual({ $in: [...DECISION_STATUSES] });
   });
 
@@ -24,10 +33,11 @@ describe('queueFilter — "chờ tôi duyệt" gồm cả việc thực thi cho 
     const f = queueFilter(base({ mine: 'to_approve', role: 'staff', canPay: true }));
     // gộp trong $and để không đè $or của ô tìm kiếm
     const and = f.$and as Record<string, unknown>[];
-    expect(and).toHaveLength(1);
+    expect(and).toHaveLength(2);
     const union = and[0]!.$or as Record<string, unknown>[];
-    expect(union).toHaveLength(3);
-    expect(union[2]).toEqual({ kind: 'spend', status: { $in: [...EXECUTION_STATUSES] } });
+    expect(union).toHaveLength(2);
+    expect(union[0]).toHaveProperty('$expr');
+    expect(union[1]).toEqual({ kind: 'spend', status: { $in: [...EXECUTION_STATUSES] } });
     expect(f.status).toEqual({ $in: [...DECISION_STATUSES, ...EXECUTION_STATUSES] });
   });
 
@@ -48,9 +58,8 @@ describe('queueFilter — "chờ tôi duyệt" gồm cả việc thực thi cho 
   it('awaiting=turn → đúng "đến lượt tôi": vẫn gồm việc chi chờ tôi thực thi', () => {
     const f = queueFilter(base({ mine: 'to_approve', role: 'staff', canPay: true, awaiting: 'turn' }));
     const union = (f.$and as Record<string, unknown>[])[0]!.$or as Record<string, unknown>[];
-    expect(union).toHaveLength(3);
-    expect(union[1]).toMatchObject({ 'source.fund': { $in: ['cash', 'fund'] } });
-    expect(union[2]).toEqual({ kind: 'spend', status: { $in: [...EXECUTION_STATUSES] } });
+    expect(union).toHaveLength(2);
+    expect(union[1]).toEqual({ kind: 'spend', status: { $in: [...EXECUTION_STATUSES] } });
     expect(f.status).toEqual({ $in: [...DECISION_STATUSES, ...EXECUTION_STATUSES] });
   });
 
@@ -62,13 +71,51 @@ describe('queueFilter — "chờ tôi duyệt" gồm cả việc thực thi cho 
     expect(cond.$nor).toBeDefined();
     const [anyPending] = cond.$and as Record<string, unknown>[];
     expect(anyPending).toHaveProperty('$expr');
-    // trừ đúng hai nhánh của "đến lượt tôi": cấp thấp nhất, và phiếu quỹ tiền mặt mọi cấp thấy
+    // chỉ trừ đúng nhánh "đến lượt tôi" (cấp thấp nhất) — không còn nhánh đặc cách quỹ tiền mặt
     const nor = cond.$nor as Record<string, unknown>[];
-    expect(nor).toHaveLength(2);
+    expect(nor).toHaveLength(1);
     expect(nor[0]).toHaveProperty('$expr');
-    expect(nor[1]).toMatchObject({ kind: { $in: ['spend', 'income'] } });
     // chưa tới lượt ai làm được ⇒ không có trạng thái chờ thực thi
     expect(f.status).toEqual({ $in: [...DECISION_STATUSES] });
+  });
+});
+
+/**
+ * Cài đặt "Duyệt tiền mặt" (ADM-04): phiếu thu/chi quỹ tiền mặt vào "Chờ tôi duyệt" đúng như phiếu
+ * thường; phiếu của công ty CHƯA tick bị loại hẳn (lưới an toàn — chuỗi đã không còn bước KTT).
+ */
+describe('queueFilter — cài đặt "Duyệt tiền mặt" lọc phiếu quỹ tiền mặt', () => {
+  it('không truyền danh sách công ty đang bật → loại MỌI phiếu thu/chi quỹ tiền mặt (cash + quỹ phụ)', () => {
+    const f = queueFilter(base({ mine: 'to_approve', role: 'staff', canPay: false }));
+    expect(cashNorCond(f)).toEqual({
+      kind: { $in: ['spend', 'income'] },
+      'source.fund': { $in: ['cash', 'fund'] },
+      company_id: { $nin: [] },
+    });
+  });
+
+  it('công ty đang bật "qua KTT duyệt" vẫn giữ phiếu quỹ tiền mặt của công ty đó', () => {
+    const cond = cashNorCond(queueFilter(base({ mine: 'to_approve', role: 'staff', cashKttCompanyIds: [CTA] })));
+    expect(cond?.company_id).toEqual({ $nin: [CTA] });
+    // phiếu ngân hàng/loại khác và phiếu của công ty đang bật không bị loại
+    expect(cond?.kind).toEqual({ $in: ['spend', 'income'] });
+  });
+
+  it('awaiting=later cũng không trả phiếu quỹ tiền mặt của công ty chưa bật (tab không lẫn)', () => {
+    const f = queueFilter(base({ mine: 'to_approve', role: 'staff', awaiting: 'later', cashKttCompanyIds: [CTA, CTB] }));
+    const guard = cashNorCond(f);
+    expect(guard?.company_id).toEqual({ $nin: [CTA, CTB] });
+    expect(guard?.['source.fund']).toEqual({ $in: ['cash', 'fund'] });
+  });
+
+  it('null rỗng = không công ty nào bật (mặc định)', () => {
+    expect(cashNorCond(queueFilter(base({ mine: 'to_approve', cashKttCompanyIds: null })))?.company_id).toEqual({ $nin: [] });
+    expect(cashNorCond(queueFilter(base({ mine: 'to_approve', cashKttCompanyIds: [] })))?.company_id).toEqual({ $nin: [] });
+  });
+
+  it('mine khác to_approve → không áp điều kiện "Duyệt tiền mặt"', () => {
+    expect(cashNorCond(queueFilter(base({ mine: 'created' })))).toBeUndefined();
+    expect(cashNorCond(queueFilter(base({ mine: 'approved_by_me' })))).toBeUndefined();
   });
 });
 

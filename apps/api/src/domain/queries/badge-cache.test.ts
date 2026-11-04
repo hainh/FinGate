@@ -46,6 +46,18 @@ describe('badgeCacheKey — badge "chờ tôi duyệt" phải khoá theo phạm 
     expect(k.startsWith(`${BADGE_CACHE_PREFIX}${U}:`)).toBe(true);
     expect(k.startsWith(BADGE_CACHE_PREFIX)).toBe(true);
   });
+
+  it('cài đặt "Duyệt tiền mặt" khác nhau → khác khoá (badge không trả số cũ sau khi admin đổi cài đặt)', () => {
+    const base = { userId: U, companyIds: null, canPay: false };
+    const none = badgeCacheKey({ ...base, cashKttCompanyIds: [] });
+    const onlyA = badgeCacheKey({ ...base, cashKttCompanyIds: [CTA] });
+    const both = badgeCacheKey({ ...base, cashKttCompanyIds: [CTA, CTB] });
+    expect(new Set([none, onlyA, both]).size).toBe(3);
+    // bỏ trống = không công ty nào bật → cùng khoá với mảng rỗng
+    expect(badgeCacheKey(base)).toBe(none);
+    // thứ tự / trùng lặp trong danh sách công ty đang bật không đổi khoá
+    expect(badgeCacheKey({ ...base, cashKttCompanyIds: [CTB, CTA, CTA] })).toBe(both);
+  });
 });
 
 describe('scopeCacheKey', () => {

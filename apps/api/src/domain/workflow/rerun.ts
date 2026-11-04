@@ -26,7 +26,7 @@ import { slaDeadline } from '../calendar/index.ts';
 import { notifyNextApprover } from '../side-effects.ts';
 import { DECISION_STATUSES } from '../queries/index.ts';
 import { resolveMatrix } from './matrix.ts';
-import { calendarFor, assignUsers, newStep } from './index.ts';
+import { calendarFor, assignUsers, fundOfDoc, newStep } from './index.ts';
 import { dropVacantSteps, FINAL_APPROVAL_STATUS, pendingRolesForRerun, statusForStep } from './state-machine.ts';
 import type { DomainDoc, StepRow } from '../types.ts';
 
@@ -114,6 +114,8 @@ async function rerunOne(doc: DomainDoc, input: RerunInput): Promise<RerunChange 
     kind: doc.kind,
     amount_minor: doc.amount.minor,
     category_id: doc.category_id ? String(doc.category_id) : null,
+    // đổi cài đặt "Duyệt tiền mặt" → hồ sơ quỹ tiền mặt đang chờ phải được gán lại chuỗi đúng cài đặt mới
+    fund: await fundOfDoc(doc),
   });
 
   const roles = pendingRolesForRerun(
@@ -173,6 +175,8 @@ async function rerunOne(doc: DomainDoc, input: RerunInput): Promise<RerunChange 
       matrix_version: { before: doc.approval?.matrix_version ?? 0, after: matrix.matrix_version },
       steps: merged.map((s) => `${s.order}:${s.role}:${normId(s.user_id) ?? '-'}`),
       ...(dropped.length ? { vacant_steps: dropped.map((d) => `${d.order}:${d.role}`) } : {}),
+      // cài đặt "Duyệt tiền mặt" có hiệu lực cho hồ sơ này (chuỗi đã bỏ bước KTT)
+      ...(matrix.cash_overridden ? { cash_require_ktt: false } : {}),
     },
   });
 

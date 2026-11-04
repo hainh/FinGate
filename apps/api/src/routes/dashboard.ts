@@ -27,7 +27,7 @@ import { defineRoute, requireActor, requireScope, validate } from '../lib/http.t
 import { ok } from '../lib/serialize.ts';
 import { scopedFind, scopedOne } from '../lib/mongo.ts';
 import { cashflowHistoryQuery, dashboardQuery, reportQuery, searchQuery, newsletterQuery, notificationListQuery } from '@fingate/shared';
-import { asBigInt, awaitingBadge, cashflowHistory, compact, dashboardOverview, docHref, maturityLadder, scopeOf, wire } from '../domain/queries/index.ts';
+import { asBigInt, awaitingBadge, cashKttIdsForScope, cashflowHistory, compact, dashboardOverview, docHref, maturityLadder, scopeOf, wire } from '../domain/queries/index.ts';
 import { tagFilterSuffix } from '../domain/queries/dashboard-tags.ts';
 import { parseIdList } from '../domain/vouchers/rules.ts';
 import { buildNewsletter, cachedNewsletter, storeNewsletter } from '../domain/newsletter/index.ts';
@@ -170,7 +170,9 @@ export function dashboardRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const actor = requireActor(req);
         const scope = requireScope(req);
-        const awaiting = await awaitingBadge(scope, actor.user_id, actor.role, actor.permissions.includes('payment:mark'));
+        // cài đặt "Duyệt tiền mặt" (ADM-04) đọc MỘT lần cho badge
+        const cashKttCompanyIds = await cashKttIdsForScope(scope);
+        const awaiting = await awaitingBadge(scope, actor.user_id, actor.role, actor.permissions.includes('payment:mark'), [], undefined, cashKttCompanyIds);
         return ok(reply, { data: { business_date: today(), counts: { awaiting_me: awaiting.count } } }, { maxAge: 15 });
       },
     }),
@@ -185,9 +187,10 @@ export function dashboardRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const actor = requireActor(req);
         const scope = requireScope(req);
+        const cashKttCompanyIds = await cashKttIdsForScope(scope);
         const [accounts, awaiting, mat] = await Promise.all([
           ledgerAccountViews(scope),
-          awaitingBadge(scope, actor.user_id, actor.role, actor.permissions.includes('payment:mark')),
+          awaitingBadge(scope, actor.user_id, actor.role, actor.permissions.includes('payment:mark'), [], undefined, cashKttCompanyIds),
           maturityLadder(scope, { horizonDays: 30 }),
         ]);
         // số dư = sổ cái (thực tế); không còn "khả dụng" (v2 BỎ phong toả)

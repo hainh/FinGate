@@ -29,7 +29,14 @@ export function badgeCacheKey(input: {
   tagIds?: readonly string[] | null;
   /** APPR-01: số đếm của một tab (`turn` / `later`) khác số của cả hàng chờ ⇒ phải khác khoá. */
   awaiting?: 'turn' | 'later';
+  /**
+   * Cài đặt "Duyệt tiền mặt" (ADM-04): tập công ty đang bật "qua KTT duyệt" quyết định phiếu quỹ
+   * tiền mặt nào nằm trong "Chờ tôi duyệt" ⇒ khác tập thì phải khác khoá, nếu không badge trả số cũ
+   * ngay sau khi admin đổi cài đặt (khi cache chưa bị xoá).
+   */
+  cashKttCompanyIds?: readonly string[] | null;
 }): string {
   const pay = input.canPay ? 'pay' : '';
-  return `${BADGE_CACHE_PREFIX}${input.userId}:${scopeCacheKey(input.companyIds)}:${input.role ?? ''}:${pay}${tagFilterSuffix(input.tagIds)}${input.awaiting ? `:${input.awaiting}` : ''}`;
+  const cash = input.cashKttCompanyIds?.length ? `:cash=${scopeCacheKey(input.cashKttCompanyIds)}` : '';
+  return `${BADGE_CACHE_PREFIX}${input.userId}:${scopeCacheKey(input.companyIds)}:${input.role ?? ''}:${pay}${tagFilterSuffix(input.tagIds)}${input.awaiting ? `:${input.awaiting}` : ''}${cash}`;
 }

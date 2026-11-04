@@ -10,6 +10,7 @@ import {
   activateBody,
   alertRuleUpsertBody,
   approvalThresholdUpsertBody,
+  cashApprovalUpsertBody,
   attachmentConfirmBody,
   attachmentPrepareBody,
   attachmentRemoveBody,
@@ -100,6 +101,8 @@ export const departmentUpsertBodySchema = j(departmentUpsertBody);
 export const categoryUpsertBodySchema = j(categoryUpsertBody);
 export const settingUpsertBodySchema = j(settingUpsertBody);
 export const approvalThresholdUpsertBodySchema = j(approvalThresholdUpsertBody);
+/** ADM-04 tab "Duyệt tiền mặt": bật/tắt qua KTT duyệt cho phiếu quỹ tiền mặt của một công ty. */
+export const cashApprovalUpsertBodySchema = j(cashApprovalUpsertBody);
 export const alertRuleUpsertBodySchema = j(alertRuleUpsertBody);
 export const auditLogQuerySchema = j(auditLogQuery);
 

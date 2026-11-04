@@ -44,6 +44,7 @@ import { executedSum } from '../reports/aggregate.ts';
 import { groupSettlements, loadDebtSettlements, loadLoanSettlements } from '../reports/refs.ts';
 import { tagFilterSuffix } from './dashboard-tags.ts';
 import { badgeCacheKey } from './badge-cache.ts';
+import { cashRequiresKttForMany } from '../workflow/cash-approval.ts';
 
 /** Tiền trên wire: minor là STRING (arch §6). */
 export interface WireAmount {
@@ -174,6 +175,13 @@ export interface QueueQuery {
   /** Nội bộ: đối tác / tag khớp ô tìm kiếm `q` (do `queryQueue` nạp trước). */
   qPartnerIds?: string[];
   qTagIds?: string[];
+  /**
+   * Cài đặt "Duyệt tiền mặt" (ADM-04): các công ty ĐANG BẬT "khoản tiền mặt phải qua KTT duyệt".
+   * Phiếu thu/chi quỹ tiền mặt của công ty KHÔNG có trong danh sách bị loại khỏi "Chờ tôi duyệt"
+   * của MỌI người (chuỗi của chúng không còn bước KTT). null/undefined = không công ty nào bật —
+   * xem `cashRequiresKttForMany`; tầng route nạp MỘT lần rồi truyền vào.
+   */
+  cashKttCompanyIds?: string[] | null;
   overdueOnly?: boolean;
   missingEvidenceOnly?: boolean;
   sort?: string;
@@ -265,27 +273,31 @@ function pendingStepsOf(input: unknown, alias: string): Record<string, unknown> 
 }
 
 /**
- * Phiếu thu/chi quỹ tiền mặt: việc duyệt vẫn theo thứ tự, nhưng MỌI cấp còn bước chưa duyệt
- * (current/waiting) đều thấy phiếu trong "Chờ tôi duyệt" ngay khi kế toán lập xong.
- * Quỹ phụ (`fund`) hoạt động như tiền mặt nên đi chung nhóm này — so theo tập `CASH_LIKE_ACCOUNT_KINDS`.
+ * Phiếu thu/chi quỹ tiền mặt của công ty CHƯA bật "Duyệt tiền mặt" (ADM-04): công ty đó cho phiếu
+ * đi thẳng tới cấp duyệt kế tiếp (không qua KTT) — nên phiếu còn bước KTT chờ sẵn KHÔNG thuộc
+ * "Chờ tôi duyệt" của ai (bước KTT chỉ nằm trong chuỗi của hồ sơ gửi TRƯỚC khi tắt cài đặt, và
+ * `rerunPendingApprovals` gán lại chuỗi ngay khi admin đổi cài đặt).
+ *
+ * `cashKttCompanyIds` = các công ty ĐANG BẬT (đọc MỘT lần ở tầng route bằng `cashRequiresKttForMany`);
+ * null/rỗng = không công ty nào bật ⇒ mọi phiếu quỹ tiền mặt bị loại khỏi nhóm này.
  */
-function cashAnyPendingOwnerFilter(userId: string, role?: Role): Record<string, unknown> {
-  return cashAnyPendingCond(userId, role);
-}
-
-function cashAnyPendingCond(userId: string, role?: Role): Record<string, unknown> {
+function cashNotRequiringKttFilter(cashKttCompanyIds: readonly string[] | null | undefined): Record<string, unknown> {
+  const enabled = (cashKttCompanyIds ?? []).map(String).filter(Boolean);
   return {
-    'source.fund': { $in: [...CASH_LIKE_ACCOUNT_KINDS] },
     kind: { $in: ['spend', 'income'] },
-    ...anyPendingOwnerFilter(userId, role),
+    'source.fund': { $in: [...CASH_LIKE_ACCOUNT_KINDS] },
+    company_id: { $nin: enabled },
   };
 }
 
 /**
  * "Chờ ĐẾN lượt tôi duyệt": phiếu mà bước của người gọi còn chờ nhưng CHƯA phải cấp thấp nhất —
  * tức phải qua cấp dưới duyệt xong mới đến lượt. Đây là phần bù của `lowestPendingOwnerFilter`
- * (và của nhóm quỹ tiền mặt "thấy ngay khi lập xong") trong cùng tập `anyPendingOwnerFilter`,
- * nên `turn` ∪ `later` đúng bằng tổng "chờ tôi duyệt": mỗi phiếu chỉ nằm ở MỘT trong hai loại.
+ * trong cùng tập `anyPendingOwnerFilter`, nên `turn` ∪ `later` đúng bằng tổng "chờ tôi duyệt":
+ * mỗi phiếu chỉ nằm ở MỘT trong hai loại.
+ *
+ * Phiếu quỹ tiền mặt vào "Chờ tôi duyệt" ĐÚNG NHƯ PHIẾU THƯỜNG (không còn đặc cách "mọi cấp thấy
+ * ngay khi lập xong") — cài đặt "Duyệt tiền mặt" chỉ quyết định có bước KTT trong chuỗi hay không.
  *
  * `$nor` phải ở cấp TRUY VẤN (không phải trong `$expr`) — nó là toán tử so khớp, không phải biểu thức.
  *
@@ -295,7 +307,7 @@ function cashAnyPendingCond(userId: string, role?: Role): Record<string, unknown
 function laterPendingOwnerFilter(userId: string, role?: Role): Record<string, unknown> {
   return {
     $and: [anyPendingOwnerFilter(userId, role)],
-    $nor: [lowestPendingOwnerFilter(userId, role), cashAnyPendingCond(userId, role)],
+    $nor: [lowestPendingOwnerFilter(userId, role)],
   };
 }
 
@@ -321,17 +333,23 @@ function executionQueueFilter(): Record<string, unknown> {
  * `awaiting` (APPR-01 chia 2 tab): `turn` = đúng như trên; `later` = phiếu còn phải qua cấp dưới tôi
  * duyệt xong mới đến lượt tôi (chưa làm được gì — nên KHÔNG kèm phiếu chờ chi); bỏ trống = hợp hai loại
  * (giữ nguyên hành vi cũ của hàng chờ và badge).
+ *
+ * Cài đặt "Duyệt tiền mặt": (1) phiếu quỹ tiền mặt vào nhóm này đúng như phiếu thường (chỉ cấp thấp
+ * nhất còn chờ); (2) phiếu quỹ tiền mặt của công ty CHƯA bật bị loại hẳn (lưới an toàn — chuỗi của
+ * chúng đã không còn bước KTT nhờ `resolveMatrix`).
  */
 function toApproveFilter(
-  input: Pick<QueueQuery, 'userId' | 'role' | 'canPay' | 'awaiting'>,
+  input: Pick<QueueQuery, 'userId' | 'role' | 'canPay' | 'awaiting' | 'cashKttCompanyIds'>,
 ): Record<string, unknown> {
-  if (input.awaiting === 'later') return laterPendingOwnerFilter(input.userId, input.role);
-  const parts: Record<string, unknown>[] = [
-    lowestPendingOwnerFilter(input.userId, input.role),
-    cashAnyPendingOwnerFilter(input.userId, input.role),
-  ];
+  // lưới an toàn: loại phiếu quỹ tiền mặt của công ty chưa bật "qua KTT duyệt" khỏi MỌI nhóm việc-duyệt
+  const cash = { $nor: [cashNotRequiringKttFilter(input.cashKttCompanyIds)] };
+  if (input.awaiting === 'later') {
+    return { $and: [laterPendingOwnerFilter(input.userId, input.role), cash] };
+  }
+  const parts: Record<string, unknown>[] = [lowestPendingOwnerFilter(input.userId, input.role)];
   if (input.canPay) parts.push(executionQueueFilter());
-  return parts.length > 1 ? { $or: parts } : parts[0]!;
+  const union = parts.length > 1 ? { $or: parts } : parts[0]!;
+  return { $and: [union, cash] };
 }
 
 function toApproveStatuses(input: Pick<QueueQuery, 'canPay' | 'awaiting'>): readonly string[] {
@@ -354,7 +372,11 @@ export function queueFilter(input: QueueQuery): Record<string, unknown> {
     const cond = toApproveFilter(input);
     if ('$or' in cond || '$and' in cond || '$nor' in cond) {
       const and = (filter.$and as Record<string, unknown>[] | undefined) ?? [];
-      and.push(cond);
+      // điều kiện hàng chờ tự nó là `$and` (lượt tôi duyệt + lưới an toàn "Duyệt tiền mặt") → trải phẳng,
+      // tránh `$and` lồng `$and` không cần thiết.
+      const nested = cond.$and as Record<string, unknown>[] | undefined;
+      if (Object.keys(cond).length === 1 && Array.isArray(nested)) and.push(...nested);
+      else and.push(cond);
       filter.$and = and;
     } else {
       Object.assign(filter, cond);
@@ -580,12 +602,18 @@ export async function awaitingBadge(
   tagIds: string[] = [],
   /** APPR-01: `turn` = đếm đúng phiếu đến lượt tôi duyệt (badge tab); bỏ trống = cả hàng chờ. */
   awaiting?: 'turn' | 'later',
+  /**
+   * Cài đặt "Duyệt tiền mặt": danh sách công ty đang bật "qua KTT duyệt" (xem `cashRequiresKttForMany`).
+   * Bỏ trống = không công ty nào bật. Tầng route nạp sẵn để khỏi đọc Setting ở mỗi lần đếm.
+   */
+  cashKttCompanyIds: string[] = [],
 ): Promise<{ count: number; total_minor: bigint }> {
-  // Khoá gồm PHẠM VI công ty: số đếm phụ thuộc công ty đang chọn (withScope), không được dùng chung giữa các công ty.
-  const key = badgeCacheKey({ userId, companyIds: scope.companyIds, role, canPay, tagIds, awaiting });
+  // Khoá gồm PHẠM VI công ty + danh sách công ty đang bật "Duyệt tiền mặt": số đếm phụ thuộc cả hai,
+  // không được dùng chung giữa các phạm vi / giữa hai trạng thái cài đặt.
+  const key = badgeCacheKey({ userId, companyIds: scope.companyIds, role, canPay, tagIds, awaiting, cashKttCompanyIds });
   return cacheThrough(key, async () => {
     const f = withScope(scopeOf(scope), {
-      ...toApproveFilter({ userId, role, canPay, awaiting }),
+      ...toApproveFilter({ userId, role, canPay, awaiting, cashKttCompanyIds }),
       status: { $in: toApproveStatuses({ canPay, awaiting }) },
       ...(tagIds.length ? { tag_ids: { $in: tagIds } } : {}),
     });
@@ -1371,19 +1399,45 @@ export async function cashflowHistory(
  */
 export async function dashboardOverview(scope: ScopeLike, userId: string, role?: Role, canPay = false, tagIds: string[] = []): Promise<Record<string, unknown>> {
   const scopeKey = scope.companyIds === null ? 'all' : scope.companyIds.join(',');
+  // Cài đặt "Duyệt tiền mặt" đọc MỘT lần ở đây, dùng chung cho badge + hàng chờ trong overview.
+  const cashKttCompanyIds = await cashKttIdsForScope(scope);
   return cacheThrough(
-    `overview:${userId}:${role ?? ''}:${scopeKey}:${today()}:${canPay ? 'pay' : ''}${tagFilterSuffix(tagIds)}`,
-    () => buildOverview(scope, userId, role, canPay, tagIds),
+    `overview:${userId}:${role ?? ''}:${scopeKey}:${today()}:${canPay ? 'pay' : ''}${tagFilterSuffix(tagIds)}${cashKttCacheSuffix(cashKttCompanyIds)}`,
+    () => buildOverview(scope, userId, role, canPay, tagIds, cashKttCompanyIds),
     20_000,
   );
 }
 
-async function buildOverview(scope: ScopeLike, userId: string, role?: Role, canPay = false, tagIds: string[] = []): Promise<Record<string, unknown>> {
+/**
+ * Danh sách công ty ĐANG bật "khoản tiền mặt phải qua KTT duyệt" trong phạm vi (ADM-04).
+ * Dùng CHUNG cho `queryQueue` / `awaitingBadge` để mỗi request chỉ đọc Setting một lần.
+ */
+export async function cashKttIdsForScope(scope: ScopeLike): Promise<string[]> {
+  const companyIds =
+    scope.companyIds ??
+    (await Models.Company.find({}).select({ _id: 1 }).lean()).map((c) => String(c._id));
+  const map = await cashRequiresKttForMany(companyIds);
+  return [...map.entries()].filter(([, on]) => on).map(([id]) => id);
+}
+
+/** Mảnh khoá cache cho cài đặt "Duyệt tiền mặt" — cùng tập công ty luôn cho cùng chuỗi. */
+function cashKttCacheSuffix(ids: readonly string[]): string {
+  return ids.length ? `:cash=${[...new Set(ids)].sort().join(',')}` : '';
+}
+
+async function buildOverview(
+  scope: ScopeLike,
+  userId: string,
+  role?: Role,
+  canPay = false,
+  tagIds: string[] = [],
+  cashKttCompanyIds: string[] = [],
+): Promise<Record<string, unknown>> {
   const day = today();
   const [accounts, awaiting, queue, income, spend, overdue, maturities, missing, unread] = await Promise.all([
     accountSnapshots(scope),
-    awaitingBadge(scope, userId, role, canPay, tagIds),
-    queryQueue({ scope, userId, role, canPay, mine: 'to_approve', limit: 8, sort: '-waiting', tagIds }),
+    awaitingBadge(scope, userId, role, canPay, tagIds, undefined, cashKttCompanyIds),
+    queryQueue({ scope, userId, role, canPay, mine: 'to_approve', limit: 8, sort: '-waiting', tagIds, cashKttCompanyIds }),
     sumByDateAndKind(scope, 'income', day, tagIds),
     sumByDateAndKind(scope, 'spend', day, tagIds),
     overdueReceivable(scope),

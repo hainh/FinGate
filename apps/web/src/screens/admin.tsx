@@ -30,7 +30,7 @@ import {
   type Role,
   type Money,
 } from '@fingate/shared';
-import { useApprovalThreshold, useApprovalThresholdUpsert, useAuditLog, useBankAccounts, useCompanies, useDepartments, useMatrix, useMatrixToggle, useMatrixUpsert, usePersonnel, type DepartmentRow } from '../app/queries.ts';
+import { useApprovalThreshold, useApprovalThresholdUpsert, useAuditLog, useBankAccounts, useCashApproval, useCashApprovalUpsert, useCompanies, useDepartments, useMatrix, useMatrixToggle, useMatrixUpsert, usePersonnel, type DepartmentRow } from '../app/queries.ts';
 import { useAuth, useUi, useCurrentCompanyId } from '../app/store.tsx';
 import { FgAlert, FgButton, FgField, FgInput, FgMoneyStack, FgMoneyInput, FgMultiSelect, FgSelect, FgText, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -59,10 +59,12 @@ const GROUP_ROLE_OPTIONS = ROLE_OPTIONS.filter((o) => isGroupOnlyRole(o.value));
 /* ================= Khu Quản trị — điều hướng chung ================= */
 
 /** Các tab trong khu Quản trị; chỉ tab người dùng có quyền mới hiện (một trong các quyền liệt kê). */
-const ADMIN_TABS: { to: string; label: string; perm: string | string[] }[] = [
+export const ADMIN_TABS: { to: string; label: string; perm: string | string[] }[] = [
   { to: '/quantri/nguoidung', label: 'Nhân sự', perm: 'hr:invite' },
   { to: '/quantri/cong-ty', label: 'Công ty & bộ phận', perm: 'admin:settings' },
   { to: '/quantri/quy-trinh-duyet', label: 'Ma trận duyệt', perm: 'admin:matrix' },
+  // ADM-04b: khoản thu/chi quỹ tiền mặt có phải qua Kế toán trưởng duyệt — tick từng công ty, mặc định TẮT.
+  { to: '/quantri/duyet-tien-mat', label: 'Duyệt tiền mặt', perm: 'admin:matrix' },
   { to: '/quantri/nguong-duyet', label: 'Ngưỡng duyệt', perm: 'admin:settings' },
   // v2 §13: khoản chi định kỳ (tạo: doc:create) và quy trình tự động (cấu hình / xem lượt chạy).
   { to: '/quantri/dinh-ky', label: 'Chi định kỳ', perm: 'doc:create' },
@@ -1902,6 +1904,123 @@ function ThresholdEditor({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/* ================= ADM-04 · Duyệt tiền mặt (per company) ================= */
+
+/**
+ * ADM-04b — "Duyệt tiền mặt": mỗi công ty một dòng, tick = khoản thu/chi quỹ tiền mặt (`cash`) và
+ * Quỹ phụ (`fund`) của công ty đó phải qua Kế toán trưởng duyệt như ma trận. MẶC ĐỊNH KHÔNG TICK:
+ * phiếu bỏ bước KTT, đi thẳng tới cấp duyệt kế tiếp (hàng chờ "Chờ tôi duyệt" không còn đặc cách
+ * hiện phiếu tiền mặt sớm). Không có nút Lưu — tick là gọi server ngay, server chạy lại hồ sơ đang chờ.
+ */
+export function CashApprovalScreen(): ReactNode {
+  const { can } = useAuth();
+  const query = useCashApproval();
+  const save = useCashApprovalUpsert();
+  const canEdit = can('admin:matrix');
+  // Công ty đang lưu (khoá checkbox của đúng dòng đó) + lỗi theo từng công ty.
+  const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<{ companyId: string; message: string } | null>(null);
+
+  const toggle = async (companyId: string, name: string, requireKtt: boolean): Promise<void> => {
+    setError(null);
+    setSaving(companyId);
+    try {
+      const res = await save.mutateAsync({ company_id: companyId, require_ktt: requireKtt });
+      toastOk(requireKtt ? `Đã bật: khoản tiền mặt của ${name} phải qua Kế toán trưởng duyệt` : `Đã tắt: khoản tiền mặt của ${name} bỏ qua bước Kế toán trưởng`);
+      if (res?.rerun_changed) toastOk(`Đã gán lại ${res.rerun_changed} hồ sơ đang chờ theo cài đặt mới`);
+    } catch (e) {
+      setError({
+        companyId,
+        message: e instanceof ApiRequestError ? (e.problem.detail ?? e.problem.title) : 'Không lưu được cài đặt duyệt tiền mặt',
+      });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  return (
+    <>
+      <AdminNav />
+      <FgPageHeader
+        title="Duyệt tiền mặt"
+        meta="Khoản thu/chi bằng quỹ tiền mặt (và quỹ phụ) có phải qua Kế toán trưởng duyệt — tick từng công ty; mọi thay đổi vào audit"
+      />
+      <FgQuery query={query} skeleton={<FgSkeletonTable rows={5} cols={3} />}>
+        {(data) => {
+          const rows = [...data.items].sort((a, b) => (a.company_code ?? '').localeCompare(b.company_code ?? '') || a.company_name.localeCompare(b.company_name));
+          const onCount = rows.filter((r) => r.require_ktt).length;
+          return !rows.length ? (
+            <div className="fg-card">
+              <FgEmptyState
+                glyph="◇"
+                title="Không có công ty nào trong phạm vi"
+                description={canEdit ? 'Phạm vi dữ liệu của bạn chưa gồm công ty nào để cấu hình.' : 'Bạn không có quyền admin:matrix — liên hệ Quản trị.'}
+              />
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--fg-space-4)' }}>
+              <FgAlert
+                tone="info"
+                title="Mặc định KHÔNG tick"
+                description="Không tick (mặc định) = phiếu thu/chi quỹ tiền mặt bỏ qua bước Kế toán trưởng, đi thẳng tới cấp duyệt kế tiếp. Tick = khoản tiền mặt phải qua KTT duyệt như ma trận."
+              />
+              {error ? <FgAlert tone="danger" title={error.message} /> : null}
+              <div className="fg-card" style={{ padding: 0 }}>
+                <FgTable
+                  rowKey="company_id"
+                  dataSource={rows}
+                  columns={[
+                    {
+                      title: 'Mã',
+                      dataIndex: 'company_code',
+                      key: 'code',
+                      width: 120,
+                      render: (v: string | null) => <span className="fg-mono">{v ?? '—'}</span>,
+                    },
+                    {
+                      title: 'Công ty',
+                      dataIndex: 'company_name',
+                      key: 'name',
+                      ellipsis: true,
+                      render: (v: string) => <FgText strong>{v}</FgText>,
+                    },
+                    {
+                      title: 'Qua KTT duyệt',
+                      key: 'ktt',
+                      width: 220,
+                      render: (_v, r) => (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                          <Checkbox
+                            checked={r.require_ktt}
+                            disabled={!canEdit || saving === r.company_id}
+                            onChange={(e) => void toggle(r.company_id, r.company_name, e.target.checked)}
+                          >
+                            Qua KTT duyệt
+                          </Checkbox>
+                          {saving === r.company_id ? (
+                            <FgText style="caption" color="muted">
+                              Đang lưu…
+                            </FgText>
+                          ) : null}
+                        </span>
+                      ),
+                    },
+                  ]}
+                />
+              </div>
+              <FgText style="caption" color="muted">
+                {onCount
+                  ? `${onCount} / ${rows.length} công ty đang yêu cầu KTT duyệt khoản tiền mặt.`
+                  : 'Chưa công ty nào yêu cầu KTT duyệt khoản tiền mặt — phiếu tiền mặt đi theo ma trận nhưng bỏ bước Kế toán trưởng.'}
+              </FgText>
+            </div>
+          );
+        }}
+      </FgQuery>
+    </>
   );
 }
 

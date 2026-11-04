@@ -50,6 +50,7 @@ import { assertAccountAllowedForCompany, assertGroupAccountForCompany } from '..
 import { emitVoucherEvent, type VoucherEventSubject } from '../events/index.ts';
 import { emitLoanSettledAfterPayment } from '../links/index.ts';
 import { assertAccountBorrowLive, effectiveBorrowAmount, storedAccountBorrowToPlan } from '../vouchers/account-borrow.ts';
+import { fundOfAccount } from '../automation/actions/lookup.ts';
 import {
   applyDecision,
   canTransition,
@@ -151,6 +152,18 @@ export async function loadDoc(id: string) {
   return doc as unknown as DomainDoc;
 }
 
+/**
+ * Loại quỹ của phiếu để `resolveMatrix` áp cài đặt "Duyệt tiền mặt": ưu tiên `source.fund` đã lưu
+ * trên phiếu, thiếu thì suy ra từ loại tài khoản nguồn (`BankAccount.kind`). `null` = phiếu không
+ * gắn nguồn tiền (coi như phiếu thường).
+ */
+export async function fundOfDoc(doc: Pick<DomainDoc, 'source'>): Promise<string | null> {
+  const stored = doc.source?.fund ?? null;
+  if (stored) return String(stored);
+  const accountId = doc.source?.account_id ?? doc.source?.group_account_id ?? null;
+  return accountId ? fundOfAccount(accountId) : null;
+}
+
 /* ================================================================== *
  * SUBMIT — resolve matrix + snapshot steps vào phiếu
  * ================================================================== */
@@ -198,6 +211,8 @@ export async function submitDocument(input: {
     kind: doc.kind,
     amount_minor: doc.amount.minor,
     category_id: doc.category_id ? String(doc.category_id) : null,
+    // phiếu THU/CHI quỹ tiền mặt của công ty chưa bật "qua KTT duyệt" → chuỗi bỏ bước KTT
+    fund: await fundOfDoc(doc),
   });
   if (!matrix.steps.length) throw new ApiError({ code: 'FG-WF-006' });
 
@@ -271,6 +286,8 @@ export async function submitDocument(input: {
       steps: steps.map((s) => `${s.order}:${s.role}`),
       ...(selfApprovedSteps.length ? { self_approved_steps: selfApprovedSteps.map((s) => s.order) } : {}),
       ...(vacantSteps.length ? { vacant_steps: vacantSteps.map((s) => `${s.order}:${s.role}`) } : {}),
+      // cài đặt "Duyệt tiền mặt": phiếu quỹ tiền mặt đi tiếp KHÔNG qua bước KTT
+      ...(matrix.cash_overridden ? { cash_require_ktt: false } : {}),
     },
   });
 
@@ -878,6 +895,8 @@ export async function transition(input: {
         kind: doc.kind,
         amount_minor: effectiveAmountMinor,
         category_id: doc.category_id ? String(doc.category_id) : null,
+        // cùng cài đặt "Duyệt tiền mặt" như lúc gửi: SLA của cấp kế tiếp tính trên đúng chuỗi đã snapshot
+        fund: await fundOfDoc(doc),
       })).steps;
       const ms: MatrixStep | undefined = matrixSteps.find((s) => s.role === targetStep.role);
       targetStep.sla_deadline = slaDeadline(now, ms?.sla_hours ?? 24, cal);

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { amountInRange, defaultStepsFor, matchSpecificity, resolveChairmanThreshold, type ChairmanThresholdConfig } from './matrix.ts';
+import {
+  amountInRange,
+  applyCashPolicy,
+  defaultStepsFor,
+  matchSpecificity,
+  resolveChairmanThreshold,
+  type ChairmanThresholdConfig,
+  type MatrixStep,
+} from './matrix.ts';
 
 const COMPANY_A = 'a'.repeat(24);
 const COMPANY_B = 'b'.repeat(24);
@@ -90,6 +98,60 @@ describe('defaultStepsFor — chuỗi mặc định theo khoảng tiền (v2 §7
     // chuỗi cố định (không chia khoảng tiền) nên luôn có PGĐ; phiếu chi chỉ có PGĐ trong khoảng tiền riêng
     expect(roles('income', 20_000_000n)).toEqual(['chief_accountant', 'deputy_director', 'director', 'deputy_chairman']);
     expect(roles('income', 20_000_000n).slice(0, 2), 'KTT → PGĐ giống phiếu chi').toEqual(roles('spend', 20_000_000n).slice(0, 2));
+  });
+});
+
+/**
+ * Cài đặt "Duyệt tiền mặt" (ADM-04, tab "Duyệt tiền mặt"): phiếu thu/chi quỹ tiền mặt của công ty
+ * CHƯA tick bỏ bước Kế toán trưởng; công ty đang tick giữ nguyên chuỗi ma trận.
+ */
+describe('applyCashPolicy — cài đặt "Duyệt tiền mặt" áp lên chuỗi bước', () => {
+  const chain = (kind: Parameters<typeof defaultStepsFor>[0], amount: bigint): MatrixStep[] =>
+    defaultStepsFor(kind, amount).steps;
+
+  it('công ty ĐANG BẬT "qua KTT duyệt" → chuỗi giữ nguyên, không đánh dấu override', () => {
+    const steps = chain('spend', 1_000_000n);
+    const out = applyCashPolicy(steps, true);
+    expect(out.steps).toEqual(steps);
+    expect(out.cash_overridden).toBe(false);
+  });
+
+  it('công ty CHƯA tick → bỏ bước KTT và đánh số lại order từ 1', () => {
+    const out = applyCashPolicy(chain('spend', 1_000_000n), false);
+    expect(out.steps.map((s) => s.role)).toEqual(['deputy_director']);
+    expect(out.steps.map((s) => s.order)).toEqual([1]);
+    expect(out.cash_overridden).toBe(true);
+    // chuỗi dài: PGĐ → GĐ → P.TGĐ vẫn đúng thứ tự và số thứ tự liên tục
+    const long = applyCashPolicy(chain('spend', 100_000_000n), false);
+    expect(long.steps.map((s) => `${s.order}:${s.role}`)).toEqual(['1:deputy_director', '2:director']);
+    expect(long.cash_overridden).toBe(true);
+  });
+
+  it('phiếu thu cũng bỏ KTT, giữ PGĐ → GĐ → P.TGĐ', () => {
+    const out = applyCashPolicy(chain('income', 1_000_000n), false);
+    expect(out.steps.map((s) => s.role)).toEqual(['deputy_director', 'director', 'deputy_chairman']);
+    expect(out.steps.map((s) => s.order)).toEqual([1, 2, 3]);
+    expect(out.cash_overridden).toBe(true);
+  });
+
+  it('chuỗi CHỈ có KTT → giữ nguyên (không tạo chuỗi rỗng gây FG-WF-006)', () => {
+    const onlyKtt: MatrixStep[] = [{ order: 1, role: 'chief_accountant', sla_hours: 24, mandatory: true }];
+    const out = applyCashPolicy(onlyKtt, false);
+    expect(out.steps).toEqual(onlyKtt);
+    expect(out.cash_overridden).toBe(false);
+  });
+
+  it('chuỗi vốn không có KTT → giữ nguyên, không báo override', () => {
+    const noKtt: MatrixStep[] = [{ order: 1, role: 'director', sla_hours: 48, mandatory: true }];
+    const out = applyCashPolicy(noKtt, false);
+    expect(out.steps).toEqual(noKtt);
+    expect(out.cash_overridden).toBe(false);
+  });
+
+  it('giữ nguyên SLA / bắt buộc của các bước còn lại', () => {
+    const out = applyCashPolicy(chain('income', 1_000_000n), false);
+    expect(out.steps.map((s) => s.sla_hours)).toEqual([24, 48, 48]);
+    expect(out.steps.every((s) => s.mandatory)).toBe(true);
   });
 });
 
