@@ -248,6 +248,26 @@ export function hasAutoLoanRun(runs: readonly { rule_code?: string | null }[] | 
   return (runs ?? []).some((r) => r.rule_code === 'R3');
 }
 
+/**
+ * Phiếu chuyển tiền giữa hai tài khoản của CÙNG một công ty: `transfer_target.company_id` trùng công ty lập phiếu.
+ * (Phiếu chi có đối tác nội bộ trỏ tài khoản khác của chính công ty đang lập phiếu — server vẫn ghi `transfer_target`
+ * như chuyển nội bộ, chỉ khác là công ty nhận trùng công ty phiếu.)
+ */
+export function isSameCompanyTransfer(doc: { company_id?: string | null; transfer_target?: DocTransferView | null }): boolean {
+  const company = doc.transfer_target?.company_id;
+  return !!company && !!doc.company_id && company === doc.company_id;
+}
+
+/**
+ * TK nhận của đối tác nội bộ khi đối tác trỏ đúng công ty đang lập phiếu (chuyển tiền giữa hai TK cùng công ty).
+ * Đối tác khác loại / khác công ty (chuyển liên công ty) ⇒ null: đích do server suy, form không tự tính.
+ */
+export function internalPartnerTargetAccountId(partner: PartnerRef | null | undefined, companyId: string | null | undefined): string | null {
+  if (!companyId || !partner?.internal_account_id) return null;
+  if (partner.type !== 'internal' || partner.internal_company_id !== companyId) return null;
+  return partner.internal_account_id;
+}
+
 /** Nhãn một đối tượng sinh ra: "NHD-2026-0007 (chờ giải ngân)". */
 export function generatedObjectText(g: { type: string; code: string | null; status: string | null }): string {
   const code = g.code ?? '—';

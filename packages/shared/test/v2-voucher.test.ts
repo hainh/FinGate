@@ -64,6 +64,12 @@ describe('v2 — chuyển nội bộ theo ID: phải chọn cả công ty và TK
     expect(documentUpdateBody.safeParse({ transfer_target: { company_id: OID2, account_id: OID }, if_match: 3, request_id: UUID }).success).toBe(true);
     expect(documentUpdateBody.safeParse({ transfer_target: null, if_match: 3, request_id: UUID }).success).toBe(true);
   });
+
+  it('chuyển tiền giữa hai tài khoản CÙNG công ty: cho phép khi TK nhận khác TK nguồn; trùng TK nguồn hoặc thiếu TK ⇒ bị chặn', () => {
+    const sameCompany = { ...internal, company_id: OID, source: { fund: 'bank', account_id: OID }, target: undefined };
+    expect(documentCreateBody.safeParse({ ...sameCompany, transfer_target: { company_id: OID, account_id: OID2 } }).success).toBe(true);
+    expect(documentCreateBody.safeParse({ ...sameCompany, transfer_target: { company_id: OID, account_id: OID } }).success).toBe(false);
+  });
 });
 
 describe('v2 — lọc danh sách theo đối tác và tag', () => {

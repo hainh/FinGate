@@ -68,15 +68,23 @@ describe('internalCompanyOptionsFor — công ty trong tập đoàn của đối
     { _id: 'b', name: 'Công ty B' },
   ];
 
-  it('bỏ công ty đang tạo đối tác và giữ thứ tự danh sách', () => {
+  it('giữ đủ mọi công ty, đúng thứ tự; công ty đang tạo có hậu tố "(công ty này)"', () => {
     expect(internalCompanyOptionsFor(companies, 'a')).toEqual([
       { value: 'g', label: 'Tập đoàn' },
+      { value: 'a', label: 'Công ty A (công ty này)' },
       { value: 'b', label: 'Công ty B' },
     ]);
   });
 
-  it('chưa rõ công ty đang tạo ⇒ giữ đủ mọi công ty', () => {
-    expect(internalCompanyOptionsFor(companies, null)).toHaveLength(3);
-    expect(internalCompanyOptionsFor(companies, undefined)).toHaveLength(3);
+  it('chọn tài khoản của chính công ty đang lập phiếu = chuyển tiền giữa hai tài khoản cùng công ty', () => {
+    // công ty hiện tại KHÔNG bị bỏ: người dùng phải chọn được TK khác của chính công ty (TK nhận khác TK nguồn)
+    expect(internalCompanyOptionsFor(companies, 'b').find((o) => o.value === 'b')).toEqual({ value: 'b', label: 'Công ty B (công ty này)' });
+    expect(internalCompanyOptionsFor(companies, 'b').map((o) => o.value)).toEqual(['g', 'a', 'b']);
+  });
+
+  it('chưa rõ công ty đang tạo ⇒ giữ đủ mọi công ty, không hậu tố', () => {
+    for (const home of [null, undefined]) {
+      expect(internalCompanyOptionsFor(companies, home)).toEqual(companies.map((c) => ({ value: c._id, label: c.name })));
+    }
   });
 });

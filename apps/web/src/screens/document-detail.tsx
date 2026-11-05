@@ -31,6 +31,7 @@ import {
 } from '@fingate/shared';
 import { useBankAccounts, useDecisionPack, useDocument, useRolloverResult } from '../app/queries.ts';
 import { interestRateText } from '../app/v2/debts.ts';
+import { isSameCompanyTransfer } from '../app/v2/documents.ts';
 import type { DocumentDetail, AttachmentRef } from '../app/types.ts';
 import { FgAlert, FgButton, FgField, FgInput, FgMoney, FgMoneyInput, FgPassword, FgStatusChip, FgText, FgTextarea, FgTooltip } from '../components/primitives.tsx';
 import { FgCard } from '../components/cards.tsx';
@@ -290,10 +291,18 @@ export function DocumentDetailScreen(): ReactNode {
 
 /* ---------------- tabs ---------------- */
 
-/** Chuyển tiền nội bộ: đích theo ID (`transfer_target`); phiếu cũ còn `target` (v1). Null nếu không có. */
-function transferInfo(doc: DocumentDetail): { name: string } | null {
+/**
+ * Chuyển tiền nội bộ: đích theo ID (`transfer_target`); phiếu cũ còn `target` (v1). Null nếu không có.
+ * `sameCompany` = phiếu chi chuyển tiền giữa hai tài khoản của CÙNG công ty (đối tác nội bộ trỏ TK của chính
+ * công ty đang lập phiếu) — khác với chuyển liên công ty trong tập đoàn.
+ */
+function transferInfo(doc: DocumentDetail): { companyName: string; accountLabel: string | null; sameCompany: boolean } | null {
   if (!doc.transfer_target && !doc.target) return null;
-  return { name: doc.transfer_target?.company_name ?? doc.target?.company_name ?? 'công ty nhận' };
+  return {
+    companyName: doc.transfer_target?.company_name ?? doc.target?.company_name ?? 'công ty nhận',
+    accountLabel: doc.transfer_target?.account_label ?? null,
+    sameCompany: isSameCompanyTransfer(doc),
+  };
 }
 
 function SummaryTab({ doc }: { doc: DocumentDetail }): ReactNode {
@@ -311,16 +320,25 @@ function SummaryTab({ doc }: { doc: DocumentDetail }): ReactNode {
         <FgAlert
           tone="info"
           title="Chuyển tiền nội bộ — KHÔNG tính vào chi phí / doanh thu"
-          description={`Đối ứng: ${doc.company_name} −${formatMoney(amountMoney, { mode: 'compact' })} → ${transfer.name} +${formatMoney(amountMoney, { mode: 'compact' })}`}
+          description={`Đối ứng: ${doc.company_name} −${formatMoney(amountMoney, { mode: 'compact' })} → ${transfer.companyName} +${formatMoney(amountMoney, { mode: 'compact' })}`}
           style={{ marginBottom: 'var(--fg-space-4)' }}
         />
       ) : doc.kind === 'spend' && transfer ? (
-        <FgAlert
-          tone="info"
-          title="Chuyển tiền nội bộ trong tập đoàn"
-          description={`Từ ${doc.company_name} → ${transfer.name}: ${formatMoney(amountMoney, { mode: 'full' })}. Khi phiếu chi được duyệt xong và thực thi, hệ thống tự động tạo phiếu thu tương ứng tại công ty nhận và tự duyệt — KHÔNG tính vào chi phí / doanh thu.`}
-          style={{ marginBottom: 'var(--fg-space-4)' }}
-        />
+        transfer.sameCompany ? (
+          <FgAlert
+            tone="info"
+            title="Chuyển tiền nội bộ trong cùng công ty — KHÔNG tính vào chi phí / doanh thu"
+            description={`Hai tài khoản trong cùng công ty ${doc.company_name}: TK nguồn → TK nhận ${transfer.accountLabel ?? '—'}. Khi phiếu chi được duyệt xong và thực thi, hệ thống tự động tạo phiếu thu tại tài khoản nhận và tự duyệt.`}
+            style={{ marginBottom: 'var(--fg-space-4)' }}
+          />
+        ) : (
+          <FgAlert
+            tone="info"
+            title="Chuyển tiền nội bộ trong tập đoàn"
+            description={`Từ ${doc.company_name} → ${transfer.companyName}: ${formatMoney(amountMoney, { mode: 'full' })}.${transfer.accountLabel ? ` Tài khoản nhận: ${transfer.accountLabel}.` : ''} Khi phiếu chi được duyệt xong và thực thi, hệ thống tự động tạo phiếu thu tương ứng tại công ty nhận và tự duyệt — KHÔNG tính vào chi phí / doanh thu.`}
+            style={{ marginBottom: 'var(--fg-space-4)' }}
+          />
+        )
       ) : null}
       <div style={{ display: 'grid', gap: 'var(--fg-space-4)', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', marginBottom: 'var(--fg-space-4)' }}>
         <PartnerCard doc={doc} />
@@ -436,8 +454,10 @@ function CashTab({ doc }: { doc: DocumentDetail }): ReactNode {
         </div>
         {transfer && (doc.kind === 'internal' || doc.kind === 'spend') ? (
           <div className="fg-stat-row">
-            <span className="fg-stat-label">Công ty đối ứng</span>
-            <span>{transfer.name}: +{formatMoney(amt, { mode: 'compact' })}</span>
+            <span className="fg-stat-label">{transfer.sameCompany ? 'Tài khoản nhận' : 'Công ty đối ứng'}</span>
+            <span>
+              {(transfer.sameCompany ? transfer.accountLabel : transfer.companyName) ?? '—'}: +{formatMoney(amt, { mode: 'compact' })}
+            </span>
           </div>
         ) : null}
       </div>
@@ -518,7 +538,11 @@ function deleteImpactLines(doc: DocumentDetail): string[] {
     out.push('Phiếu đã thực thi: sổ cái KHÔNG bị xoá — hệ thống thêm bút toán đảo cho từng bút toán của phiếu rồi dựng lại số dư tài khoản (sổ cái chỉ thêm, có vết).');
   }
   if (doc.transfer_target) {
-    out.push(`Chuyển nội bộ sang ${doc.transfer_target.company_name ?? 'công ty nhận'}: phiếu thu đối ứng ở công ty nhận (nếu đã sinh) KHÔNG tự xoá — cần xử lý riêng.`);
+    out.push(
+      isSameCompanyTransfer(doc)
+        ? 'Chuyển nội bộ giữa hai tài khoản cùng công ty: phiếu thu đối ứng (nếu đã sinh) KHÔNG tự xoá — cần xử lý riêng.'
+        : `Chuyển nội bộ sang ${doc.transfer_target.company_name ?? 'công ty nhận'}: phiếu thu đối ứng ở công ty nhận (nếu đã sinh) KHÔNG tự xoá — cần xử lý riêng.`,
+    );
   }
   const generated = (doc.automation_runs ?? []).reduce((n, r) => n + (r.generated?.length ?? 0), 0);
   if (generated) {

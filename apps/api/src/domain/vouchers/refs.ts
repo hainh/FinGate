@@ -462,8 +462,10 @@ export interface TransferTargetPlan {
 }
 
 /**
- * Chuyển nội bộ theo ID (§11.6): công ty nhận khác công ty phiếu và tồn tại; TK đích BẮT BUỘC và là TK
- * đang hoạt động của CHÍNH công ty nhận. Trả về null nếu phiếu không có đích nội bộ.
+ * Chuyển nội bộ theo ID (§11.6): đích hợp lệ theo loại phiếu (`assertTransferTargetFits`) và tồn tại; TK đích
+ * BẮT BUỘC và là TK đang hoạt động của CHÍNH công ty nhận. Công ty nhận có thể TRÙNG công ty phiếu — chuyển tiền
+ * giữa hai tài khoản của cùng một công ty — khi đó TK nhận phải khác TK nguồn (`input.sourceAccountId`).
+ * Trả về null nếu phiếu không có đích nội bộ.
  */
 export async function resolveTransferTarget(input: {
   companyId: string;
@@ -472,6 +474,8 @@ export async function resolveTransferTarget(input: {
   partnerId: string | null;
   target: { company_id: string; account_id?: string | null } | null;
   previous: TransferTargetPlan | null;
+  /** TK nguồn của phiếu (bản gộp khi sửa) — chặn TK nhận trùng TK nguồn của chuyển nội bộ cùng công ty. */
+  sourceAccountId?: string | null;
 }): Promise<TransferTargetPlan | null> {
   let input_target = input.target;
   if (input.kind === 'spend') {
@@ -505,7 +509,7 @@ export async function resolveTransferTarget(input: {
     company_id: String(input_target.company_id),
     account_id: strOrNull(input_target.account_id),
   };
-  assertTransferTargetFits(input.kind, t, input.companyId);
+  assertTransferTargetFits(input.kind, t, { companyId: input.companyId, sourceAccountId: input.sourceAccountId ?? null });
   // kiểm trước nhánh "không đổi": phiếu cũ thiếu TK cũng phải chọn TK khi lưu lại
   assertTransferTargetAccount(t);
   const unchanged = Boolean(input.previous && input.previous.company_id === t.company_id && input.previous.account_id === t.account_id);

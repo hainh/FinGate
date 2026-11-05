@@ -33,6 +33,7 @@ import {
   normalizePlannedDate,
   statusLabel,
   type Money,
+  type PartnerRef,
   type PartnerType,
 } from '@fingate/shared';
 import { ApiRequestError, apiCall, apiData } from '../app/api.ts';
@@ -54,6 +55,8 @@ import {
   rolloverLoanOptionLabel,
   useLoanDefaults,
   transferTargetBody,
+  internalPartnerTargetAccountId,
+  isSameCompanyTransfer,
   type LoanTermsValues,
   accountBorrowBody,
 } from '../app/v2/documents.ts';
@@ -329,16 +332,20 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
 
   const partnerQ = usePartner(f.partnerId);
   const partnerName = partnerQ.data?.name ?? '';
-  /** Loại đối tác vừa chọn từ ô (có ngay, không chờ chi tiết tải xong). */
-  const [pickedPartner, setPickedPartner] = useState<{ id: string; type: PartnerType } | null>(null);
-  /** Loại của đối tác đang chọn: từ lựa chọn vừa rồi, hoặc từ chi tiết đã tải (đến sau). */
-  const partnerType: PartnerType | null = !f.partnerId
-    ? null
-    : pickedPartner?.id === f.partnerId
-      ? pickedPartner.type
+  /**
+   * Đối tác vừa chọn / vừa tạo / vừa sửa từ ô (có NGAY cả `internal_company_id` / `internal_account_id`, không chờ
+   * chi tiết tải xong): đủ để biết đối tác nội bộ có trỏ tài khoản của chính công ty đang lập phiếu không.
+   */
+  const [pickedPartner, setPickedPartner] = useState<PartnerRef | null>(null);
+  /** Đối tác đang chọn (đầy đủ): lựa chọn vừa rồi, hoặc chi tiết đã tải (đến sau). */
+  const partner: PartnerRef | null =
+    f.partnerId && pickedPartner?._id === f.partnerId
+      ? pickedPartner
       : partnerQ.data?._id === f.partnerId
-        ? partnerQ.data.type
+        ? (partnerQ.data ?? null)
         : null;
+  /** Loại của đối tác đang chọn: từ lựa chọn vừa rồi, hoặc từ chi tiết đã tải (đến sau). */
+  const partnerType: PartnerType | null = partner?.type ?? null;
   const isBorrow = kind === 'income' && f.loan.on;
   const isFund = kind === 'spend' && f.loan.on;
   const hasPartnerField = kind === 'spend' || kind === 'income' || kind === 'rollover';
@@ -420,6 +427,26 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
   const transferAccountOptions = (targetAccounts.data?.items ?? [])
     .filter((a) => a.status === 'active' && a.company_id === f.transferCompanyId)
     .map((a) => ({ value: a._id, label: bankAccountOptionLabel(a) }));
+
+  // Phiếu chi: đối tác nội bộ trỏ tài khoản khác của CHÍNH công ty đang lập phiếu ⇒ chuyển tiền giữa hai tài khoản
+  // cùng công ty. TK nhận do server suy từ đối tác (không gửi transfer_target); form chỉ hiển thị + chặn trùng TK nguồn.
+  // Sửa phiếu đã lưu: GET /partners/:id chưa trả `internal_*` ⇒ suy TK nhận từ `transfer_target` đã lưu (chỉ khi đối tác
+  // trên form vẫn là đối tác của phiếu, không phải đối tác vừa đổi).
+  const savedSameCompanyAccountId =
+    kind === 'spend' && f.partnerId && existing.data?.partner_id === f.partnerId && isSameCompanyTransfer(existing.data)
+      ? (existing.data.transfer_target?.account_id ?? null)
+      : null;
+  const targetAccountId = kind === 'spend' ? (internalPartnerTargetAccountId(partner, currentCompany) ?? savedSameCompanyAccountId) : null;
+  const sameCompanyTransfer = !!targetAccountId;
+  const sourceAccount = (accounts.data?.items ?? []).find((a) => a._id === f.accountId);
+  const targetAccount = (accounts.data?.items ?? []).find((a) => a._id === targetAccountId);
+  const sourceAccountLabel = sourceAccount ? bankAccountOptionLabel(sourceAccount) : 'Chưa chọn tài khoản nguồn';
+  // không tìm thấy TK trong danh sách (đã đóng / ngoài phạm vi): dựng nhãn từ thông tin đối tác để vẫn thấy TK nhận
+  const targetAccountLabel = targetAccount
+    ? bankAccountOptionLabel(targetAccount)
+    : [partner?.name, partner?.bank_name, partner?.account_number].filter(Boolean).join(' · ') || '—';
+  /** TK nhận trùng TK nguồn — báo NGAY trên form, không chờ bấm Lưu. */
+  const sameAccountTransfer = sameCompanyTransfer && !!f.accountId && f.accountId === targetAccountId;
 
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setF((s) => ({ ...s, [k]: v }));
   const setLoan = (patch: Partial<LoanState>) => setF((s) => ({ ...s, loan: { ...s.loan, ...patch } }));
@@ -592,6 +619,11 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
       else if (f.borrowAccountId === f.accountId) clientErrors['options.account_borrow.account_id'] = 'Tài khoản cho mượn phải khác tài khoản chi';
       if (f.borrowAmount && f.amount && f.borrowAmount.minor > f.amount.minor) clientErrors['options.account_borrow.amount_minor'] = 'Số tiền mượn không được vượt số tiền phiếu chi';
     }
+    // Chuyển tiền giữa hai tài khoản cùng công ty: TK nhận (suy từ đối tác nội bộ) phải khác TK nguồn — cùng lỗi
+    // field với server (`transfer_target.account_id`) nhưng hiển thị ở ô tài khoản nguồn mà người dùng sửa được.
+    if (sameCompanyTransfer && f.accountId && f.accountId === targetAccountId) {
+      clientErrors['source.account_id'] = 'Tài khoản nhận phải khác tài khoản nguồn';
+    }
     if (f.transferOn && !f.transferCompanyId) clientErrors['transfer_target.company_id'] = 'Chọn công ty nhận';
     if (f.transferOn && f.transferCompanyId && !f.transferAccountId) clientErrors['transfer_target.account_id'] = 'Chọn tài khoản nhận';
     // Gửi duyệt cần tài khoản nguồn (server: FG-WF-008) và danh mục (US-VOU-01): chặn ngay ở client, không tạo nháp rồi mới lỗi.
@@ -716,7 +748,8 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                   onChange={(id, p) => {
                     // đổi đối tác ⇒ bỏ khoản vay đã chọn của ngân hàng cũ (withPartner)
                     setF((s) => withPartner(s, id));
-                    setPickedPartner(id && p ? { id, type: p.type } : null);
+                    // giữ CẢ đối tác (không chỉ id/loại): đối tác nội bộ có ngay công ty + TK nhận của chính nó
+                    setPickedPartner(id && p ? p : null);
                   }}
                   allowedTypes={partnerAllowed}
                   defaultType={partnerDefault}
@@ -772,6 +805,26 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
                 disabled={!canEdit}
               />
             </FgField>
+            {/* Phiếu chi với đối tác nội bộ của CHÍNH công ty: chuyển tiền giữa hai TK cùng công ty (R1 sinh phiếu thu) */}
+            {sameCompanyTransfer ? (
+              <div style={{ gridColumn: '1/-1' }}>
+                <FgAlert
+                  tone={sameAccountTransfer ? 'danger' : 'info'}
+                  title="Chuyển tiền nội bộ trong cùng công ty"
+                  description={
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <span>
+                        Tài khoản nguồn: {sourceAccountLabel} → Tài khoản nhận: {targetAccountLabel}
+                      </span>
+                      <span>
+                        Khi phiếu chi được thực thi, hệ thống tự tạo phiếu thu tại tài khoản nhận và tự duyệt — KHÔNG tính vào chi phí / doanh thu.
+                      </span>
+                      {sameAccountTransfer ? <span style={{ color: 'var(--fg-status-danger-text)' }}>Tài khoản nhận phải khác tài khoản nguồn</span> : null}
+                    </div>
+                  }
+                />
+              </div>
+            ) : null}
             <FgField label="Hợp đồng / căn cứ" error={errors['contract.code']}>
               <FgInput value={f.contractCode} onChange={(e) => set('contractCode', e.target.value)} placeholder="HĐ 45/2026" disabled={!canEdit} />
             </FgField>

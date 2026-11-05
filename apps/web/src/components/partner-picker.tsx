@@ -136,7 +136,8 @@ export function PartnerFormModal({
   const [internalAccountId, setInternalAccountId] = useState('');
   const isInternal = type === 'internal';
   const homeCompanyId = companyId ?? currentCompanyId;
-  // Đối tác nội bộ: chọn MỌI công ty trong tập đoàn (không chỉ công ty được phân công) và TK (ngân hàng hoặc tiền mặt) của công ty đó
+  // Đối tác nội bộ: chọn MỌI công ty trong tập đoàn (không chỉ công ty được phân công, kể cả công ty đang lập phiếu
+  // = chuyển tiền giữa hai TK cùng công ty) và TK (ngân hàng hoặc tiền mặt) của công ty đó
   const creatingInternal = isInternal && !isEdit;
   const internalCompanies = useInternalCompanies(creatingInternal);
   const internalCompanyOptions = internalCompanyOptionsFor(internalCompanies.data?.items ?? [], homeCompanyId);
@@ -266,7 +267,7 @@ export function PartnerFormModal({
             <FgAlert
               tone="info"
               title="Chọn công ty và tài khoản trong tập đoàn"
-              description="Mỗi tài khoản là một đối tác riêng. Tên, ngân hàng và số tài khoản lấy từ tài khoản gốc, không sửa tay."
+              description="Mỗi tài khoản là một đối tác riêng. Tên, ngân hàng và số tài khoản lấy từ tài khoản gốc, không sửa tay. Chọn tài khoản khác của CHÍNH công ty đang lập phiếu để chuyển tiền giữa hai tài khoản cùng công ty — tài khoản nhận phải khác tài khoản nguồn."
             />
             <FgField label="Công ty trong tập đoàn" required error={errors.internal_company_id}>
               <FgSelect

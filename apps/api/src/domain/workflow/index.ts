@@ -45,7 +45,7 @@ import { loanExceedsSpend } from '../automation/policy.ts';
 import { AUTOMATION_SESSION_ID } from '../automation/actions/common.ts';
 import { bookedBalance } from '../ledger/index.ts';
 import { actualAmountProblem } from '../vouchers/lifecycle.ts';
-import { assertTransferTargetAccount, assertTransferTargetSubmittable } from '../vouchers/rules.ts';
+import { assertTransferTargetAccount, assertTransferTargetFits, assertTransferTargetSubmittable } from '../vouchers/rules.ts';
 import { assertAccountAllowedForCompany, assertGroupAccountForCompany } from '../accounts.ts';
 import { emitVoucherEvent, type VoucherEventSubject } from '../events/index.ts';
 import { emitLoanSettledAfterPayment } from '../links/index.ts';
@@ -201,9 +201,15 @@ export async function submitDocument(input: {
   // tài khoản Tập đoàn (phiếu công ty con không dùng quỹ Tập đoàn — §VIII).
   await assertAccountAllowedForCompany(String(doc.company_id), doc.source?.account_id);
   await assertGroupAccountForCompany(String(doc.company_id), doc.source?.group_account_id);
-  // v2 §11.6 — chuyển nội bộ: công ty nhận khác công ty phiếu và có TK đích theo ID. Kiểm CẢ khi gửi (không chỉ khi lưu)
+  // v2 §11.6 — chuyển nội bộ: công ty nhận hợp lệ và có TK đích theo ID. Kiểm CẢ khi gửi (không chỉ khi lưu)
   // để nháp lưu trước đây không đi thẳng tới duyệt và thực thi (R1 chỉ chạy sau khi tiền đã ra khỏi công ty nguồn).
-  assertTransferTargetSubmittable(doc.kind, String(doc.company_id), doc.transfer_target);
+  // Chuyển cùng công ty: TK nhận phải khác TK nguồn của phiếu.
+  assertTransferTargetSubmittable(
+    doc.kind,
+    String(doc.company_id),
+    doc.transfer_target,
+    doc.source?.account_id ?? doc.source?.group_account_id ?? null,
+  );
   await assertTransferTargetAccountLive(doc);
 
   const matrix = await resolveMatrix({
@@ -358,9 +364,11 @@ export async function submitDocument(input: {
 /**
  * v2 §11.6 — TK đích của chuyển nội bộ phải có, đang hoạt động và thuộc CHÍNH công ty nhận (cùng luật như khi lưu,
  * `resolveTransferTarget`; R1 cũng kiểm như vậy khi tạo phiếu thu). Gọi khi gửi / duyệt / đưa vào hàng / thực thi —
- * tức TRƯỚC khi tiền ra khỏi công ty nguồn. Không có công ty nhận ⇒ không kiểm.
+ * tức TRƯỚC khi tiền ra khỏi công ty nguồn. Chuyển nội bộ CÙNG công ty: TK nhận phải khác TK nguồn
+ * (`sourceAccountId` = TK nguồn hiệu lực của lượt này — cấp duyệt / người thực thi có thể đổi TK nguồn).
+ * Không có công ty nhận ⇒ không kiểm.
  */
-async function assertTransferTargetAccountLive(doc: DomainDoc): Promise<void> {
+async function assertTransferTargetAccountLive(doc: DomainDoc, sourceAccountId?: string | null): Promise<void> {
   const target = doc.transfer_target;
   if (!target?.company_id) return;
   assertTransferTargetAccount(target);
@@ -375,6 +383,13 @@ async function assertTransferTargetAccountLive(doc: DomainDoc): Promise<void> {
       errors: { 'transfer_target.account_id': 'Tài khoản nhận không thuộc công ty nhận hoặc đã đóng' },
     });
   }
+  // chuyển giữa hai tài khoản CÙNG công ty: không được chọn đúng TK nguồn làm TK nhận (tiền ra/vào một tài khoản)
+  const source = sourceAccountId ?? doc.source?.account_id ?? doc.source?.group_account_id ?? null;
+  assertTransferTargetFits(
+    doc.kind,
+    { company_id: String(target.company_id), account_id: target.account_id ? String(target.account_id) : null },
+    { companyId: String(doc.company_id), sourceAccountId: source ? String(source) : null },
+  );
 }
 
 function requiredFieldsMissing(doc: DomainDoc): string[] {
@@ -389,6 +404,16 @@ function requiredFieldsMissing(doc: DomainDoc): string[] {
   if (doc.source?.group_managed && !doc.source.group_account_id) missing.push('source.group_account_id');
   if (doc.kind === 'rollover' && !doc.rollover) missing.push('rollover');
   if (doc.kind === 'internal' && !doc.transfer_target?.company_id) missing.push('transfer_target');
+  // chuyển nội bộ CÙNG công ty phải có TK nguồn để đối ứng (và để chặn TK nhận trùng TK nguồn)
+  if (
+    doc.kind === 'internal' &&
+    doc.transfer_target?.company_id &&
+    String(doc.transfer_target.company_id) === String(doc.company_id) &&
+    !doc.source?.account_id &&
+    !doc.source?.group_account_id
+  ) {
+    missing.push('source');
+  }
   return missing;
 }
 
@@ -712,7 +737,12 @@ export async function transition(input: {
 
   // 5b. v2 §11.6 — duyệt / đưa vào hàng / thực thi phiếu chuyển nội bộ chỉ khi TK đích còn hiệu lực (xem
   //     assertTransferTargetAccountLive): R1 chỉ chạy SAU thực thi, lỗi lúc đó để tiền đã ra khỏi công ty nguồn.
-  if (isApproval || action === 'queue_payment' || action === 'pay') await assertTransferTargetAccountLive(doc);
+  //     Kiểm cả TK nguồn HIỆU LỰC của lượt này: cấp duyệt / người thực thi có thể đổi TK nguồn thành đúng TK nhận
+  //     (chuyển cùng công ty) — khi đó tiền ra/vào cùng một tài khoản.
+  if (isApproval || action === 'queue_payment' || action === 'pay') {
+    const effectiveSourceAccountId = (action === 'pay' ? body.execution?.account_id : null) ?? nextAccountId ?? oldAccountId;
+    await assertTransferTargetAccountLive(doc, effectiveSourceAccountId ? String(effectiveSourceAccountId) : null);
+  }
   // 5c. Mượn tiền TK khác (R8 chạy SAU thực thi): TK cho mượn còn hiệu lực và khác TK thực chi.
   if (isApproval || action === 'queue_payment' || action === 'pay') {
     const chargedAccountId = (action === 'pay' ? body.execution?.account_id : null) ?? nextAccountId ?? oldAccountId;

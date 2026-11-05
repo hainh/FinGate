@@ -88,6 +88,7 @@ import {
   planToStoredOffset,
   sameOffsetPlan,
   storedOffsetToPlan,
+  assertTransferTargetFits,
   type StoredLoanChoice,
   type VoucherKind,
 } from '../domain/vouchers/rules.ts';
@@ -356,16 +357,18 @@ export function documentRoutes(app: FastifyInstance): void {
           offset: offsetInput,
           previous: null,
         });
-        // Chuyển nội bộ theo ID (§11.6): thay cho nhận diện theo chuỗi "Tên - NH - STK" (đã bỏ).
+        // "Vay để chi" (R3): tài khoản nguồn mặc định = tài khoản nhận giải ngân (vẫn sửa được).
+        const sourceAccountId = body.source.account_id ?? (loan?.kind === 'fund' ? loan.receive_account_id : null) ?? null;
+        // Chuyển nội bộ theo ID (§11.6): thay cho nhận diện theo chuỗi "Tên - NH - STK" (đã bỏ). Công ty nhận có thể
+        // TRÙNG công ty phiếu (chuyển giữa hai tài khoản cùng công ty) — khi đó TK nhận phải khác TK nguồn.
         const transfer = await resolveTransferTarget({
           companyId,
           kind: kind as VoucherKind,
           partnerId: body.partner_id ? String(body.partner_id) : null,
           target: transferInput ? { company_id: String(transferInput.company_id), account_id: transferInput.account_id ?? null } : null,
           previous: null,
+          sourceAccountId,
         });
-        // "Vay để chi" (R3): tài khoản nguồn mặc định = tài khoản nhận giải ngân (vẫn sửa được).
-        const sourceAccountId = body.source.account_id ?? (loan?.kind === 'fund' ? loan.receive_account_id : null) ?? null;
         // Mượn tiền từ TK khác cùng công ty (R8): thực thi xong tự sinh phiếu chi B → A + phiếu thu A ← B.
         const accountBorrow = await resolveAccountBorrow({
           companyId,
@@ -583,6 +586,8 @@ export function documentRoutes(app: FastifyInstance): void {
           });
         }
         const transferIn = body.transfer_target !== undefined ? body.transfer_target : body.target;
+        // TK nguồn của BẢN GỘP (TK chi có thể đổi trong cùng lần lưu) — dùng cho kiểm chuyển nội bộ cùng công ty.
+        const mergedSourceAccountId = body.source && body.source.account_id !== undefined ? body.source.account_id : doc.source?.account_id;
         let transfer: TransferTargetPlan | null | undefined; // undefined = không đổi
         // phiếu chi: đích suy từ đối tác nên đổi đối tác là phải tính lại
         if (transferIn !== undefined || (partnerChanged && kind === 'spend')) {
@@ -595,12 +600,12 @@ export function documentRoutes(app: FastifyInstance): void {
             partnerId: nextPartnerId ? String(nextPartnerId) : null,
             target: transferIn ? { company_id: String(transferIn.company_id), account_id: transferIn.account_id ?? null } : null,
             previous: storedTransferOf(doc as unknown as Record<string, unknown>),
+            sourceAccountId: mergedSourceAccountId ? String(mergedSourceAccountId) : null,
           });
         }
         // Mượn tiền từ TK khác (R8): kiểm trên bản gộp (TK chi có thể đổi trong cùng lần lưu).
         const previousBorrow = storedAccountBorrowToPlan(doc.options?.account_borrow as Record<string, unknown> | null | undefined);
         const borrowInput = body.options !== undefined ? (body.options?.account_borrow ?? null) : previousBorrow ? planToAccountBorrowInput(previousBorrow) : null;
-        const mergedSourceAccountId = body.source && body.source.account_id !== undefined ? body.source.account_id : doc.source?.account_id;
         const accountBorrow = await resolveAccountBorrow({
           companyId,
           voucherKind: kind,
@@ -611,6 +616,13 @@ export function documentRoutes(app: FastifyInstance): void {
         });
         if (body.tag_ids !== undefined) {
           set.tag_ids = await resolveVoucherTagIds({ companyId, requested: body.tag_ids, previous: (doc.tag_ids ?? []).map(String) });
+        }
+        // Đổi TK nguồn mà KHÔNG đổi đích: vẫn phải so lại TK nhận của chuyển nội bộ CÙNG công ty (không được trùng).
+        if (transfer === undefined && body.source && body.source.account_id !== undefined) {
+          const stored = storedTransferOf(doc as unknown as Record<string, unknown>);
+          if (stored) {
+            assertTransferTargetFits(kind, stored, { companyId, sourceAccountId: mergedSourceAccountId ? String(mergedSourceAccountId) : null });
+          }
         }
         if (body.partner_id !== undefined) set.partner_id = nextPartnerId;
         // lãi/gốc của khoản vay dự kiến đi theo đối tác (vay đi thu: NH cho vay = đối tác phiếu) và số tiền phiếu
@@ -874,7 +886,8 @@ export function documentRoutes(app: FastifyInstance): void {
           });
         }
         await assertPartnerChangeKeepsLinks({ documentId: params.id, nextPartnerId: body.partner_id });
-        // phiếu chi: đích chuyển nội bộ suy từ đối tác nên phải tính lại theo đối tác mới
+        // phiếu chi: đích chuyển nội bộ suy từ đối tác nên phải tính lại theo đối tác mới. Đối tác nội bộ của CHÍNH
+        // công ty ⇒ chuyển giữa hai tài khoản cùng công ty, TK nhận phải khác TK nguồn đã lưu.
         const transfer =
           kind === 'spend'
             ? await resolveTransferTarget({
@@ -883,6 +896,7 @@ export function documentRoutes(app: FastifyInstance): void {
                 partnerId: body.partner_id,
                 target: null,
                 previous: storedTransferOf(doc as unknown as Record<string, unknown>),
+                sourceAccountId: doc.source?.account_id ? String(doc.source.account_id) : (doc.source?.group_account_id ? String(doc.source.group_account_id) : null),
               })
             : undefined;
 

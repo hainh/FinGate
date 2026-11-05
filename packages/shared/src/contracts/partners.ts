@@ -69,7 +69,12 @@ export const partnerDuplicateWarning = z.object({
 });
 export type PartnerDuplicateWarning = z.infer<typeof partnerDuplicateWarning>;
 
-/** Tham chiếu gọn để hiển thị chỉ đọc dưới ô chọn đối tác (v2 §5.2). */
+/**
+ * Tham chiếu gọn để hiển thị chỉ đọc dưới ô chọn đối tác (v2 §5.2).
+ *
+ * Với đối tác loại `internal` (Công ty trong tập đoàn) kèm công ty + tài khoản đích: form phiếu chi cần biết
+ * TK nhận để chặn ngay trên form khi TK nhận trùng TK nguồn (chuyển giữa hai tài khoản cùng công ty).
+ */
 export const partnerRef = z.object({
   _id: objectId,
   code: z.string(),
@@ -79,6 +84,10 @@ export const partnerRef = z.object({
   account_number: z.string().nullable(),
   tax_code: z.string().nullable(),
   status: partnerStatus,
+  /** Chỉ loại `internal`: công ty nhận của chuyển nội bộ. */
+  internal_company_id: objectId.nullable().optional(),
+  /** Chỉ loại `internal`: tài khoản tiền nhận của chuyển nội bộ. */
+  internal_account_id: objectId.nullable().optional(),
 });
 export type PartnerRef = z.infer<typeof partnerRef>;
 

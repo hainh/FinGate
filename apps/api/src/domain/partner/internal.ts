@@ -1,6 +1,8 @@
 /**
- * Đối tác loại "Công ty trong tập đoàn" (v2 §5.1, §11.6): mỗi TK (ngân hàng hoặc tiền mặt) của một công ty khác trong tập đoàn
- * là MỘT đối tác riêng. Tên / ngân hàng / STK lấy từ công ty & TK gốc và đồng bộ mỗi khi gốc đổi; không sửa tay.
+ * Đối tác loại "Công ty trong tập đoàn" (v2 §5.1, §11.6): mỗi TK (ngân hàng hoặc tiền mặt) là MỘT đối tác riêng.
+ * Tên / ngân hàng / STK lấy từ công ty & TK gốc và đồng bộ mỗi khi gốc đổi; không sửa tay.
+ * Công ty gốc có thể là công ty KHÁC trong tập đoàn (chuyển tiền giữa các công ty) hoặc CHÍNH công ty đang lập phiếu
+ * (chuyển tiền giữa hai tài khoản của cùng một công ty — TK nhận phải khác TK nguồn, kiểm trên phiếu chi).
  * Đối tác nội bộ là nguồn duy nhất của chuyển nội bộ phiếu chi (xem resolveTransferTarget).
  */
 
@@ -41,7 +43,12 @@ export async function loadInternalSource(accountId: string): Promise<InternalSou
   };
 }
 
-/** Các trường lưu cho đối tác nội bộ khi TẠO (lấy từ TK gốc, bỏ qua giá trị người dùng gửi lên). Ném lỗi nếu không hợp lệ. */
+/**
+ * Các trường lưu cho đối tác nội bộ khi TẠO (lấy từ TK gốc, bỏ qua giá trị người dùng gửi lên). Ném lỗi nếu không hợp lệ.
+ * Công ty gốc được phép TRÙNG công ty đang tạo đối tác: đối tác trỏ tới một TK khác CỦA CHÍNH công ty đó (chuyển tiền
+ * giữa hai tài khoản cùng công ty). TK nhận trùng TK nguồn do phiếu chi chặn (`assertTransferTargetFits`), vì lúc tạo
+ * đối tác chưa biết phiếu nào sẽ dùng.
+ */
 export async function internalPartnerFieldsFor(input: {
   ownerCompanyId: string;
   internalCompanyId: string | null | undefined;
@@ -52,13 +59,6 @@ export async function internalPartnerFieldsFor(input: {
       code: 'FG-VAL-001',
       detail: 'Chọn công ty và tài khoản của công ty trong tập đoàn',
       errors: { internal_account_id: 'Chọn tài khoản của công ty trong tập đoàn' },
-    });
-  }
-  if (input.internalCompanyId === input.ownerCompanyId) {
-    throw new ApiError({
-      code: 'FG-VAL-001',
-      detail: 'Công ty trong tập đoàn phải khác công ty đang tạo đối tác',
-      errors: { internal_company_id: 'Chọn công ty khác công ty đang làm việc' },
     });
   }
   const src = await loadInternalSource(input.internalAccountId);

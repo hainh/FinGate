@@ -23,6 +23,8 @@ const CO2 = 'c'.repeat(24);
 const P_BANK = 'b'.repeat(24);
 const P_CUST = 'd'.repeat(24);
 const ACC = 'e'.repeat(24);
+/** TK khác của cùng công ty (chuyển nội bộ cùng công ty). */
+const ACC_OTHER = '4'.repeat(24);
 const LOAN = 'f'.repeat(24);
 const LOAN_OTHER = '1'.repeat(24);
 
@@ -190,18 +192,32 @@ describe('tuỳ chọn vay — phiếu chi vay để chi (R3, §11.5)', () => {
 });
 
 describe('chuyển tiền nội bộ theo ID (§11.6)', () => {
+  const ctx = (sourceAccountId?: string | null) => ({ companyId: CO, sourceAccountId: sourceAccountId ?? null });
+
   it('không có đích ⇒ không kiểm', () => {
-    expect(codeOf(() => assertTransferTargetFits('spend', null, CO))).toBe('');
+    expect(codeOf(() => assertTransferTargetFits('spend', null, ctx()))).toBe('');
   });
 
   it('chỉ phiếu chi / chuyển nội bộ có đích; phiếu thu có đích ⇒ FG-VAL-001', () => {
-    expect(codeOf(() => assertTransferTargetFits('spend', { company_id: CO2 }, CO))).toBe('');
-    expect(codeOf(() => assertTransferTargetFits('internal', { company_id: CO2 }, CO))).toBe('');
-    expect(codeOf(() => assertTransferTargetFits('income', { company_id: CO2 }, CO))).toBe('FG-VAL-001');
+    expect(codeOf(() => assertTransferTargetFits('spend', { company_id: CO2 }, ctx()))).toBe('');
+    expect(codeOf(() => assertTransferTargetFits('internal', { company_id: CO2 }, ctx()))).toBe('');
+    expect(codeOf(() => assertTransferTargetFits('income', { company_id: CO2 }, ctx()))).toBe('FG-VAL-001');
   });
 
-  it('công ty nhận phải khác công ty lập phiếu', () => {
-    expect(codeOf(() => assertTransferTargetFits('spend', { company_id: CO }, CO))).toBe('FG-VAL-001');
+  it('công ty nhận khác công ty lập phiếu ⇒ hợp lệ (chuyển nội bộ giữa các công ty)', () => {
+    expect(codeOf(() => assertTransferTargetFits('spend', { company_id: CO2 }, ctx(ACC)))).toBe('');
+    expect(codeOf(() => assertTransferTargetFits('spend', { company_id: CO2, account_id: ACC }, ctx()))).toBe('');
+  });
+
+  it('công ty nhận TRÙNG công ty phiếu ⇒ cho phép (chuyển giữa hai tài khoản cùng công ty) khi TK nhận khác TK nguồn', () => {
+    expect(codeOf(() => assertTransferTargetFits('spend', { company_id: CO }, ctx()))).toBe('');
+    expect(codeOf(() => assertTransferTargetFits('spend', { company_id: CO, account_id: ACC }, ctx(ACC_OTHER)))).toBe('');
+    expect(codeOf(() => assertTransferTargetFits('internal', { company_id: CO, account_id: ACC }, ctx(ACC_OTHER)))).toBe('');
+  });
+
+  it('cùng công ty mà TK nhận TRÙNG TK nguồn ⇒ FG-VAL-001 (không chuyển cho chính mình); chưa biết TK nguồn (nháp) ⇒ để lưu, kiểm lại khi gửi/thực thi', () => {
+    expect(codeOf(() => assertTransferTargetFits('spend', { company_id: CO, account_id: ACC }, ctx(ACC)))).toBe('FG-VAL-001');
+    expect(codeOf(() => assertTransferTargetFits('spend', { company_id: CO, account_id: ACC }, ctx()))).toBe('');
   });
 
   it('có công ty nhận thì bắt buộc TK đích theo ID (thiếu / null ⇒ FG-VAL-001); không có đích ⇒ không kiểm', () => {
@@ -217,11 +233,16 @@ describe('chuyển tiền nội bộ theo ID (§11.6)', () => {
     expect(codeOf(() => assertTransferTargetSubmittable('spend', CO, { company_id: CO2, account_id: ACC }))).toBe('');
   });
 
-  it('gửi duyệt: đích không có công ty nhận ⇒ không kiểm; công ty nhận trùng công ty phiếu / phiếu thu có đích ⇒ FG-VAL-001', () => {
+  it('gửi duyệt: đích không có công ty nhận ⇒ không kiểm; phiếu thu có đích ⇒ FG-VAL-001', () => {
     expect(codeOf(() => assertTransferTargetSubmittable('spend', CO, null))).toBe('');
     expect(codeOf(() => assertTransferTargetSubmittable('spend', CO, { company_id: null, account_id: null }))).toBe('');
-    expect(codeOf(() => assertTransferTargetSubmittable('spend', CO, { company_id: CO, account_id: ACC }))).toBe('FG-VAL-001');
     expect(codeOf(() => assertTransferTargetSubmittable('income', CO, { company_id: CO2, account_id: ACC }))).toBe('FG-VAL-001');
+  });
+
+  it('gửi duyệt: chuyển CÙNG công ty hợp lệ khi TK nhận khác TK nguồn; trùng TK nguồn ⇒ FG-VAL-001 (kể cả khi TK nguồn đổi sau khi lưu nháp)', () => {
+    expect(codeOf(() => assertTransferTargetSubmittable('spend', CO, { company_id: CO, account_id: ACC }, ACC_OTHER))).toBe('');
+    expect(codeOf(() => assertTransferTargetSubmittable('spend', CO, { company_id: CO, account_id: ACC }, ACC))).toBe('FG-VAL-001');
+    expect(codeOf(() => assertTransferTargetSubmittable('spend', CO, { company_id: CO, account_id: ACC }))).toBe('');
   });
 
   it('thông báo lỗi nêu đúng việc cần làm: "Chọn tài khoản nhận của công ty đích" (khớp kiểm tra khi lưu)', () => {
@@ -231,6 +252,17 @@ describe('chuyển tiền nội bộ theo ID (§11.6)', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ApiError);
       expect((err as ApiError).detail).toBe('Chọn tài khoản nhận của công ty đích');
+    }
+  });
+
+  it('thông báo lỗi khi TK nhận trùng TK nguồn: "Tài khoản nhận phải khác tài khoản nguồn"', () => {
+    try {
+      assertTransferTargetSubmittable('spend', CO, { company_id: CO, account_id: ACC }, ACC);
+      throw new Error('không ném lỗi');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).detail).toBe('Tài khoản nhận phải khác tài khoản nguồn');
+      expect((err as ApiError).errors).toEqual({ 'transfer_target.account_id': 'Tài khoản nhận phải khác tài khoản nguồn' });
     }
   });
 });

@@ -303,8 +303,16 @@ export const documentCreateBody = documentFields.superRefine((v, ctx) => {
   if (v.kind === 'rollover' && !v.rollover) {
     ctx.addIssue({ code: 'custom', path: ['rollover'], message: 'Phương án đảo hạn thiếu thông tin phương án' });
   }
-  if (v.kind === 'internal' && v.target && v.company_id && v.target.company_id === v.company_id) {
-    ctx.addIssue({ code: 'custom', path: ['target', 'company_id'], message: 'Công ty nguồn và nhận phải khác nhau' });
+  // Chuyển nội bộ CÙNG công ty (chuyển tiền giữa hai tài khoản của chính công ty lập phiếu) được phép: bắt buộc có TK
+  // đích và TK đích phải khác TK nguồn. Server kiểm lại đầy đủ (`assertTransferTargetFits`); ở đây báo sớm khi đã biết
+  // chắc công ty của phiếu (client có thể đặt `company_id`).
+  const transferTargetOf = v.transfer_target ?? v.target ?? null;
+  if (v.kind === 'internal' && transferTargetOf && v.company_id && transferTargetOf.company_id === v.company_id) {
+    if (!transferTargetOf.account_id) {
+      ctx.addIssue({ code: 'custom', path: ['transfer_target', 'account_id'], message: 'Chọn tài khoản nhận khác tài khoản nguồn' });
+    } else if (v.source.account_id && transferTargetOf.account_id === v.source.account_id) {
+      ctx.addIssue({ code: 'custom', path: ['transfer_target', 'account_id'], message: 'Tài khoản nhận phải khác tài khoản nguồn' });
+    }
   }
 });
 

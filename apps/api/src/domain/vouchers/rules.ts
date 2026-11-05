@@ -449,11 +449,32 @@ export function sameOffsetPlan(a: OffsetPlan | null, aVoucherAmountMinor: bigint
  * Chuyển nội bộ theo ID (§11.6)
  * ================================================================== */
 
-/** Tài khoản nội bộ nhận chỉ dùng cho phiếu chi (và phiếu chuyển nội bộ v1); công ty nhận phải khác công ty phiếu. */
+/** Ngữ cảnh kiểm đích chuyển nội bộ: công ty của phiếu + tài khoản nguồn (nếu đã chọn). */
+export interface TransferFitContext {
+  companyId: string;
+  /** TK nguồn của phiếu — lưu nháp có thể chưa chọn (null). Dùng để chặn TK nhận trùng TK nguồn. */
+  sourceAccountId?: string | null;
+}
+
+/** Lỗi khi TK nhận của chuyển nội bộ cùng công ty trùng TK nguồn (tiền ra/vào cùng một tài khoản). */
+export function sameAccountTransferError(): ApiError {
+  return new ApiError({
+    code: 'FG-VAL-001',
+    detail: 'Tài khoản nhận phải khác tài khoản nguồn',
+    errors: { 'transfer_target.account_id': 'Tài khoản nhận phải khác tài khoản nguồn' },
+  });
+}
+
+/**
+ * Tài khoản nội bộ nhận chỉ dùng cho phiếu chi (và phiếu chuyển nội bộ v1). Đích được phép:
+ *  · công ty nhận KHÁC công ty phiếu — chuyển tiền giữa các công ty trong tập đoàn (v2 §11.6);
+ *  · công ty nhận TRÙNG công ty phiếu — chuyển tiền giữa hai tài khoản của CÙNG một công ty; khi đó TK nhận
+ *    bắt buộc khác TK nguồn (nếu đã biết TK nguồn — lưu nháp chưa chọn thì kiểm lại lúc gửi duyệt / thực thi).
+ */
 export function assertTransferTargetFits(
   kind: VoucherKind,
-  target: { company_id: string } | null,
-  companyId: string,
+  target: { company_id: string; account_id?: string | null } | null,
+  ctx: TransferFitContext,
 ): void {
   if (!target) return;
   if (kind !== 'spend' && kind !== 'internal') {
@@ -463,12 +484,10 @@ export function assertTransferTargetFits(
       errors: { transfer_target: 'Chỉ phiếu chi mới có tài khoản nội bộ nhận' },
     });
   }
-  if (String(target.company_id) === companyId) {
-    throw new ApiError({
-      code: 'FG-VAL-001',
-      detail: 'Công ty nhận phải khác công ty lập phiếu',
-      errors: { 'transfer_target.company_id': 'Công ty nhận phải khác công ty lập phiếu' },
-    });
+  if (String(target.company_id) !== ctx.companyId) return;
+  const sourceAccountId = ctx.sourceAccountId ? String(ctx.sourceAccountId) : null;
+  if (sourceAccountId && target.account_id && String(target.account_id) === sourceAccountId) {
+    throw sameAccountTransferError();
   }
 }
 
@@ -487,17 +506,19 @@ export function assertTransferTargetAccount(target: { account_id?: string | null
 }
 
 /**
- * Đích chuyển nội bộ khi GỬI DUYỆT (§11.6): đúng loại phiếu, công ty nhận khác công ty phiếu và có TK đích theo ID.
- * Chỉ kiểm lại điều đã kiểm khi lưu (`resolveTransferTarget`) — để nháp lưu trước đó không lọt vào duyệt/thực thi.
+ * Đích chuyển nội bộ khi GỬI DUYỆT (§11.6): đúng loại phiếu, công ty nhận hợp lệ (khác công ty phiếu, hoặc trùng
+ * công ty với TK nhận khác TK nguồn) và có TK đích theo ID. Chỉ kiểm lại điều đã kiểm khi lưu
+ * (`resolveTransferTarget`) — để nháp lưu trước đó không lọt vào duyệt/thực thi.
  * Không có công ty nhận ⇒ không phải chuyển nội bộ ⇒ không kiểm.
  */
 export function assertTransferTargetSubmittable(
   kind: VoucherKind,
   companyId: string,
   target: { company_id?: string | null; account_id?: string | null } | null | undefined,
+  sourceAccountId?: string | null,
 ): void {
   if (!target?.company_id) return;
-  assertTransferTargetFits(kind, { company_id: String(target.company_id) }, companyId);
+  assertTransferTargetFits(kind, { company_id: String(target.company_id), account_id: target.account_id ?? null }, { companyId, sourceAccountId });
   assertTransferTargetAccount(target);
 }
 

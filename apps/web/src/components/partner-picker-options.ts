@@ -31,12 +31,16 @@ export function detailForValue<T extends { _id: string }>(value: string | null |
 }
 
 /**
- * Lựa chọn "Công ty trong tập đoàn" của đối tác nội bộ: mọi công ty trong danh sách, trừ công ty đang tạo đối tác
- * (máy chủ cũng không ghép công ty với chính nó). Giữ nguyên thứ tự danh sách.
+ * Lựa chọn "Công ty trong tập đoàn" của đối tác nội bộ: giữ đủ MỌI công ty trong danh sách, đúng thứ tự.
+ * Chọn tài khoản của CHÍNH công ty đang lập phiếu = chuyển tiền giữa hai tài khoản cùng công ty (TK nhận phải khác
+ * TK nguồn) ⇒ công ty hiện tại vẫn phải chọn được, chỉ thêm hậu tố "(công ty này)" để người dùng phân biệt.
  */
 export function internalCompanyOptionsFor(
   companies: readonly { _id: string; name: string }[],
   homeCompanyId: string | null | undefined,
 ): { value: string; label: string }[] {
-  return companies.filter((c) => c._id !== homeCompanyId).map((c) => ({ value: c._id, label: c.name }));
+  return companies.map((c) => ({
+    value: c._id,
+    label: c._id === homeCompanyId ? `${c.name} (công ty này)` : c.name,
+  }));
 }

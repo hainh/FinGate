@@ -54,6 +54,9 @@ export interface PartnerLean {
   account_number?: string | null;
   tax_code?: string | null;
   note?: string | null;
+  /** Chỉ đối tác loại `internal`: công ty + TK gốc mà đối tác trỏ tới (có thể là chính công ty của đối tác). */
+  internal_company_id?: unknown;
+  internal_account_id?: unknown;
   history?: { at: Date; actor?: { user_id?: unknown; name?: string | null } | null; changes?: Record<string, unknown> | null }[];
   created_by?: unknown;
   created_at?: Date;
@@ -785,6 +788,9 @@ export interface PartnerSummaryView {
   account_number: string | null;
   tax_code: string | null;
   status: 'active' | 'inactive';
+  /** Chỉ loại `internal`: công ty + TK nhận của chuyển nội bộ (cùng công ty hoặc khác công ty). */
+  internal_company_id: string | null;
+  internal_account_id: string | null;
   company_id: string;
   company_name: string | null;
   note: string | null;
@@ -825,6 +831,8 @@ function summaryOf(
     account_number: p.account_number ?? null,
     tax_code: p.tax_code ?? null,
     status: p.status,
+    internal_company_id: p.internal_company_id ? idOf(p.internal_company_id) : null,
+    internal_account_id: p.internal_account_id ? idOf(p.internal_account_id) : null,
     company_id: idOf(p.company_id),
     company_name: companyName,
     note: p.note ?? null,
@@ -968,6 +976,10 @@ export interface PartnerRefView {
   account_number: string | null;
   tax_code: string | null;
   status: 'active' | 'inactive';
+  /** Chỉ loại `internal`: công ty nhận của chuyển nội bộ (có thể là chính công ty của phiếu). */
+  internal_company_id: string | null;
+  /** Chỉ loại `internal`: TK nhận của chuyển nội bộ — form phiếu chi dùng để chặn TK nhận trùng TK nguồn. */
+  internal_account_id: string | null;
 }
 
 export function partnerRefOf(p: PartnerLean): PartnerRefView {
@@ -980,6 +992,8 @@ export function partnerRefOf(p: PartnerLean): PartnerRefView {
     account_number: p.account_number ?? null,
     tax_code: p.tax_code ?? null,
     status: p.status,
+    internal_company_id: p.internal_company_id ? idOf(p.internal_company_id) : null,
+    internal_account_id: p.internal_account_id ? idOf(p.internal_account_id) : null,
   };
 }
 

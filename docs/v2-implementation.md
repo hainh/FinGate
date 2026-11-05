@@ -731,9 +731,9 @@ Body: `items: [{debt_voucher_id, amount_minor}]` (KH/NCC) hoặc `loans: [{bank_
 
 ### 12.9 Đối tác công ty trong tập đoàn — chọn mọi công ty khi tạo
 
-- Người có `partner:write` tạo đối tác nội bộ tới **mọi công ty đang hoạt động** trong tập đoàn, không chỉ công ty được phân công. Công ty ghi (`company_id`) vẫn phải nằm trong phạm vi; `internalPartnerFieldsFor` chỉ kiểm TK thuộc công ty đã chọn, đang hoạt động, không phải TK nhóm, khác công ty đang tạo và chưa có đối tác cho TK đó.
+- Người có `partner:write` tạo đối tác nội bộ tới **mọi công ty đang hoạt động** trong tập đoàn (kể cả **chính công ty đang lập phiếu** — chuyển tiền giữa hai tài khoản cùng công ty, xem §30), không chỉ công ty được phân công. Công ty ghi (`company_id`) vẫn phải nằm trong phạm vi; `internalPartnerFieldsFor` chỉ kiểm TK thuộc công ty đã chọn, đang hoạt động, không phải TK nhóm và chưa có đối tác cho TK đó.
 - Hai endpoint đọc mới (mục 14.4) thay cho `me.companies` và `GET /bank-accounts?for_company` ở `PartnerFormModal`: endpoint sau bị `companyReachableByActor` chặn với công ty không được phân công.
-- Nguồn đối tác nội bộ là TK ngân hàng **hoặc** TK tiền mặt (`kind` `cash`) của công ty khác, đang hoạt động, không phải TK nhóm. Khác công ty ghi vẫn bắt buộc; TK tiền mặt đi qua cùng luồng chuyển nội bộ (R1 lấy quỹ theo `kind` của TK đích, `fundOfAccount`). Tên / NH (tên quỹ) / STK (mã quỹ) lấy từ TK gốc như TK ngân hàng.
+- Nguồn đối tác nội bộ là TK ngân hàng **hoặc** TK tiền mặt (`kind` `cash`) của công ty nhận, đang hoạt động, không phải TK nhóm. Công ty nhận được phép trùng công ty ghi; khác công ty vẫn là trường hợp thường. TK tiền mặt đi qua cùng luồng chuyển nội bộ (R1 lấy quỹ theo `kind` của TK đích, `fundOfAccount`). Tên / NH (tên quỹ) / STK (mã quỹ) lấy từ TK gốc như TK ngân hàng.
 - Đối tác nội bộ lưu STK đầy đủ của TK gốc (như trước), nên ai xem được đối tác của công ty ghi sẽ thấy STK đó. Quyết định sản phẩm: giữ nguyên, đối tác nội bộ lưu và hiện STK đầy đủ. Phiếu chi chọn đối tác nội bộ không kiểm phạm vi công ty nhận ở server (đích lấy từ đối tác, `resolveTransferTarget`); form «Chuyển nội bộ» vẫn yêu cầu công ty nhận được phân công (`routes/documents.ts`, §7.5/§11.6). Quyết định sản phẩm: giữ nguyên, phiếu chi qua đối tác nội bộ không kiểm phạm vi công ty nhận ở server, khác với form «Chuyển nội bộ».
 
 ### 12.10 Gộp đối tác (`POST /partners/:id/merge`)
@@ -860,7 +860,7 @@ Chưa làm / lưu ý:
 2. **Cờ v1 `create_bank_debt`** không còn sinh khoản vay (đường v1 đã bỏ). Phiếu đang dở cần chuyển sang `options.loan` (mode `new`) — quyết định của route/migration, không tự động.
 3. **Chuyển nội bộ v1 theo chuỗi** không còn tự sinh phiếu thu: cần đặt `transfer_target` khi lập phiếu chi (`finance.ts` / `documents.ts`).
 4. ~~Khoản vay chưa có trường số HĐ tín dụng và TSĐB: hai thông tin này được ghi vào `note` của khoản vay sinh tự động.~~ — ĐÃ XỬ LÝ: R2/R3 ghi `contract_no` / `collateral` (`termFields`); sửa phiếu trước duyệt đồng bộ hai trường này (`syncAutoLoan`, `changedFieldsOf`); ghi chú khoản vay tự sinh chỉ còn nguồn sinh và không bị ghi đè khi đồng bộ.
-5. R1 không tạo liên kết `generated` (ràng buộc `generated` là cùng công ty); chỉ có `internal_transfer`.
+5. R1 nối cặp phiếu: `internal_transfer` khi HAI CÔNG TY KHÁC NHAU, `generated` khi CÙNG công ty (chuyển tiền giữa hai tài khoản của một công ty — xem §30). `generated` là quan hệ cùng công ty nên chỉ dùng được cho trường hợp sau.
 6. R2 phụ thuộc route PATCH phát `voucher.updated` đúng (xem 1). Bỏ cờ vay khi phiếu còn chờ duyệt chưa tự huỷ khoản chờ giải ngân (quy tắc chỉ chạy khi `loan_kind=borrow`).
 7. Lượt R2 sinh một lượt cho mỗi lần sửa phiếu vay (có thể nhiều dòng trong panel; mặc định ẩn lượt "bỏ qua").
 8. R5 đổi hành vi so với v1: phiếu nháp định kỳ v1 truyền `created_by = null` (trường bắt buộc ⇒ không lưu được). v2 đứng tên KTT của công ty; nếu công ty chưa có KTT, lượt lỗi và có cảnh báo.
@@ -1562,6 +1562,77 @@ Chủ tịch (`chairman`) đổi lại bên nộp tiền (phiếu thu) hoặc b�
 ### 29.5 Kiểm thử
 
 - Đã cập nhật danh sách quy tắc trong `engine.test.ts` / `engine.keys.test.ts`. **Chưa có** test tích hợp DB / E2E cho luồng lưu → duyệt → thực thi → R8; cần kiểm trên app đang chạy.
+
+## 30. Chuyển tiền giữa hai tài khoản của CÙNG một công ty (từ phiếu chi)
+
+Trước đây chuyển tiền nội bộ chỉ đi qua được khi đích là công ty KHÁC (phiếu chi có đối tác "Công ty trong tập đoàn" →
+R1 sinh phiếu thu ở công ty nhận). Nay đích chuyển nội bộ được phép **trùng công ty của phiếu**: chuyển tiền giữa hai
+tài khoản tiền của chính công ty đó.
+
+### 30.1 Nghiệp vụ
+
+- Trên form **phiếu chi**, ô đối tác mở popup "+ Tạo đối tác" → loại "Công ty trong tập đoàn": danh sách công ty nay
+  gồm **cả công ty đang lập phiếu** (nhãn "… (công ty này)"). Chọn một tài khoản khác của công ty đó ⇒ đối tác nội bộ
+  trỏ tới TK nhận trong cùng công ty.
+- Phiếu chi lưu `transfer_target = { company_id: <công ty phiếu>, account_id: <TK nhận> }` (suy từ đối tác, không chọn
+  tay — như chuyển nội bộ khác công ty).
+- Khi phiếu chi **thực thi**, R1 tạo + thực thi ngay **phiếu thu tại TK nhận trong CHÍNH công ty đó** (đã duyệt, kế
+  thừa người duyệt, không đối tác ngoài, `origin.rule_code = R1`) — giống cặp chuyển nội bộ khác công ty nhưng hai phiếu
+  cùng công ty.
+- Liên kết giữa hai phiếu: **`generated`** (quan hệ cùng công ty) thay cho `internal_transfer` — `RELATION_SPECS` của
+  `internal_transfer` bắt buộc hai công ty khác nhau. Hai phiếu vẫn nhận ra nhau qua phiếu nguồn (`origin`).
+- Không tính vào doanh thu/chi phí: báo cáo loại cả phiếu chi nguồn lẫn phiếu thu R1 (xem 30.4).
+
+### 30.2 Dữ liệu
+
+- Đối tác loại `internal` (`domain/partner/internal.ts` → `internalPartnerFieldsFor`): `internal_company_id` được phép
+  TRÙNG `company_id` của đối tác; `internal_account_id` là TK (ngân hàng / tiền mặt) đang hoạt động, không phải TK nhóm
+  của công ty đó. Mỗi TK vẫn là một đối tác riêng (chống trùng theo `(company_id, internal_account_id)`).
+- `PartnerRef` (hợp đồng đọc dùng chung) thêm `internal_company_id`, `internal_account_id` (nullable, chỉ có với loại
+  `internal`) để form phiếu chi chặn TK nhận trùng TK nguồn ngay trên form và hiển thị thông tin chuyển nội bộ.
+- Không thêm trường mới trên phiếu: dùng lại `transfer_target` v2 + `target` v1.
+
+### 30.3 Kiểm tra
+
+- **Khi lưu phiếu chi / sửa phiếu** (`domain/vouchers/refs.ts` → `resolveTransferTarget`): đích hợp lệ theo
+  `assertTransferTargetFits` — cùng công ty được phép, nhưng **TK nhận phải khác TK nguồn**
+  (422 FG-VAL-001 `transfer_target.account_id` = "Tài khoản nhận phải khác tài khoản nguồn"). TK nhận vẫn phải đang hoạt
+  động và thuộc công ty nhận. `resolveTransferTarget` nhận thêm `sourceAccountId` (TK nguồn của bản gộp khi sửa).
+- **Nháp chưa chọn TK nguồn**: cho lưu (chưa biết TK nguồn nên chưa so được); kiểm lại ở bước gửi duyệt / duyệt / đưa vào
+  hàng / thực thi bằng TK nguồn **hiệu lực của lượt đó** (`workflow/index.ts` → `assertTransferTargetSubmittable`,
+  `assertTransferTargetAccountLive`). Cấp duyệt hoặc người thực thi đổi TK nguồn thành đúng TK nhận ⇒ chặn 422.
+- **R1** kiểm lại trước khi ghi phiếu thu: TK nhận trùng TK nguồn ⇒ bước lỗi (KTT chạy lại sau khi sửa).
+- Hợp đồng tạo phiếu (`documentCreateBody`, `packages/shared`): bỏ ràng buộc "công ty nhận phải khác công ty phiếu" của
+  phiếu chuyển nội bộ; khi biết chắc công ty (client gửi `company_id`) thì đòi TK nhận và khác TK nguồn.
+
+### 30.4 Báo cáo
+
+- `reports/refs.ts` → `loadInternalDocIds`: ngoài phiếu `kind = internal`, phiếu thu R1 và hai đầu liên kết
+  `internal_transfer`, bổ sung phiếu có `$expr: transfer_target.company_id == company_id` (cặp chuyển nội bộ CÙNG công
+  ty). Nhờ đó báo cáo thu-chi / theo đối tác / theo tag không cộng cặp chuyển tiền nội bộ vào doanh thu hay chi phí.
+- Dòng tiền / dự báo vẫn ghi hai chân ra-vào như cũ (phiếu chi = `internal_out`? không: phiếu chi là phiếu chi nên chân
+  ra là chi thường, phiếu thu R1 là chân vào — tiền của công ty không đổi, sổ cái đúng từng tài khoản).
+
+### 30.5 Giao diện
+
+- Popup đối tác (loại "Công ty trong tập đoàn"): chọn được công ty hiện tại; mô tả rõ "TK nhận phải khác TK nguồn".
+- Form phiếu chi: khi đối tác nội bộ trỏ TK của chính công ty ⇒ khối thông tin "Chuyển tiền nội bộ trong cùng công ty"
+  (TK nguồn → TK nhận, KHÔNG tính chi phí/doanh thu); chặn Lưu khi TK nhận trùng TK nguồn.
+- Hồ sơ chi tiết: banner + dòng thống kê "Tài khoản nhận" cho chuyển nội bộ cùng công ty; cảnh báo xoá nêu phiếu thu
+  đối ứng cùng công ty không tự xoá.
+
+### 30.6 Kiểm thử
+
+- `apps/api/src/domain/vouchers/rules.test.ts` — đích cùng công ty được phép; TK nhận trùng TK nguồn ⇒ FG-VAL-001 ở cả
+  lúc lưu lẫn lúc gửi duyệt; nháp chưa có TK nguồn vẫn lưu được.
+- `apps/api/src/domain/automation/rules/r1-internal-transfer.test.ts` — cặp khác công ty dùng `internal_transfer`, cặp
+  cùng công ty dùng `generated`; nội dung ghi chú phiếu thu (không có chuỗi "undefined" khi thiếu công ty nguồn).
+- `apps/web/src/components/partner-picker-options.test.ts`, `apps/web/src/app/v2/documents.test.ts` — danh sách công ty
+  của đối tác nội bộ có công ty hiện tại; nhận diện chuyển nội bộ cùng công ty + TK đích của đối tác nội bộ.
+- **Chưa có** test tích hợp DB / E2E cho luồng phiếu chi → thực thi → R1 sinh phiếu thu cùng công ty; cần kiểm trên app
+  đang chạy (không chạy `pnpm dev` trong phiên agent).
+- Endpoint v1 `POST /internal-transfers` (màn cũ, web không dùng) vẫn chỉ nhận hai công ty khác nhau; phiếu chuyển nội bộ
+  loại `internal` (mã CN) được phép cùng công ty ở mức domain nhưng màn BANK-08 chưa mở lựa chọn này.
 
 ## Quyết định thiết kế bổ sung (chờ duyệt đưa vào v2/v2.md)
 

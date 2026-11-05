@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
+import type { PartnerRef } from '@fingate/shared';
 import {
   AUTOMATION_FAST_POLL_MS,
   AUTOMATION_IDLE_POLL_MS,
@@ -13,6 +14,8 @@ import {
   debtDirectionForVoucher,
   defaultLoanDueDate,
   hasAutoLoanRun,
+  internalPartnerTargetAccountId,
+  isSameCompanyTransfer,
   loanOptionsBody,
   loanTermsBody,
   manualLinkRelationsFor,
@@ -21,6 +24,7 @@ import {
   rolloverLoanOptionLabel,
   transferTargetBody,
   type DocLink,
+  type DocTransferView,
   type LoanTermsValues,
 } from './documents.ts';
 import type { DocumentDetail } from '../types.ts';
@@ -195,6 +199,73 @@ describe('transferTargetBody', () => {
     expect(transferTargetBody(false, 'c1', 'a1')).toBeNull();
     expect(transferTargetBody(true, '', 'a1')).toBeNull();
     expect(transferTargetBody(true, 'c1', '')).toEqual({ company_id: 'c1', account_id: null });
+  });
+});
+
+describe('isSameCompanyTransfer — phiếu chi chuyển tiền giữa hai tài khoản cùng công ty', () => {
+  const transfer = (over: Partial<DocTransferView> = {}): DocTransferView => ({
+    company_id: 'c1',
+    company_name: 'Công ty A',
+    company_code: 'CTA',
+    account_id: 'a2',
+    account_label: 'BIDV · ****2222 · TK phụ',
+    ...over,
+  });
+
+  it('transfer_target cùng công ty lập phiếu ⇒ true (so sánh chuỗi)', () => {
+    expect(isSameCompanyTransfer({ company_id: 'c1', transfer_target: transfer() })).toBe(true);
+  });
+
+  it('khác công ty (chuyển liên công ty) ⇒ false', () => {
+    expect(isSameCompanyTransfer({ company_id: 'c1', transfer_target: transfer({ company_id: 'c2' }) })).toBe(false);
+  });
+
+  it('không có transfer_target / thiếu công ty ở một bên ⇒ false', () => {
+    expect(isSameCompanyTransfer({ company_id: 'c1', transfer_target: null })).toBe(false);
+    expect(isSameCompanyTransfer({ company_id: 'c1' })).toBe(false);
+    expect(isSameCompanyTransfer({ company_id: null, transfer_target: transfer() })).toBe(false);
+    expect(isSameCompanyTransfer({})).toBe(false);
+  });
+});
+
+describe('internalPartnerTargetAccountId — TK nhận khi đối tác nội bộ trỏ đúng công ty đang lập phiếu', () => {
+  const partner = (over: Partial<PartnerRef> = {}): PartnerRef =>
+    ({
+      _id: 'p1',
+      code: 'DT-0001',
+      type: 'internal',
+      name: 'Công ty A · TK phụ',
+      bank_name: 'BIDV',
+      account_number: '0123456789',
+      tax_code: null,
+      status: 'active',
+      internal_company_id: 'c1',
+      internal_account_id: 'a2',
+      ...over,
+    }) as PartnerRef;
+
+  it('đối tác nội bộ của CHÍNH công ty ⇒ trả TK nhận (chuyển tiền giữa hai TK cùng công ty)', () => {
+    expect(internalPartnerTargetAccountId(partner(), 'c1')).toBe('a2');
+  });
+
+  it('công ty trong tập đoàn KHÁC công ty đang lập phiếu ⇒ null (chuyển liên công ty, server tự suy)', () => {
+    expect(internalPartnerTargetAccountId(partner({ internal_company_id: 'c2' }), 'c1')).toBeNull();
+  });
+
+  it('thiếu TK nhận của đối tác ⇒ null', () => {
+    expect(internalPartnerTargetAccountId(partner({ internal_account_id: null }), 'c1')).toBeNull();
+    expect(internalPartnerTargetAccountId(partner({ internal_account_id: undefined }), 'c1')).toBeNull();
+  });
+
+  it('đối tác không phải loại nội bộ ⇒ null dù có trường nội bộ', () => {
+    expect(internalPartnerTargetAccountId(partner({ type: 'supplier' }), 'c1')).toBeNull();
+  });
+
+  it('chưa có đối tác / chưa biết công ty đang lập phiếu ⇒ null', () => {
+    expect(internalPartnerTargetAccountId(null, 'c1')).toBeNull();
+    expect(internalPartnerTargetAccountId(undefined, 'c1')).toBeNull();
+    expect(internalPartnerTargetAccountId(partner(), null)).toBeNull();
+    expect(internalPartnerTargetAccountId(partner(), undefined)).toBeNull();
   });
 });
 

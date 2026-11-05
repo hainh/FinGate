@@ -89,12 +89,16 @@ export async function loadTagRefs(ids: Iterable<string>): Promise<Map<string, Ta
 /**
  * Id các phiếu thuộc chuyển nội bộ (loại khỏi doanh thu/chi phí) — v2:
  *   · phiếu kind `internal`, và phiếu thu do R1 sinh (`origin.rule_code = R1`);
- *   · hai đầu của liên kết `internal_transfer` còn hiệu lực.
+ *   · hai đầu của liên kết `internal_transfer` còn hiệu lực (cặp KHÁC công ty);
+ *   · chuyển nội bộ CÙNG công ty (`transfer_target.company_id` = `company_id`): phiếu chi nguồn + phiếu thu R1 cùng
+ *     công ty — cặp này nối bằng `generated` chứ không phải `internal_transfer`, nên phải nhận diện theo đích chuyển.
  * Cờ v1 (`payee.is_internal`, `auto_source_document_id`) đã thay bằng các nguồn trên (migrate M-series).
  */
 export async function loadInternalDocIds(): Promise<Set<string>> {
   const [docs, links] = await Promise.all([
-    Models.Document.find({ $or: [{ kind: 'internal' }, { 'origin.rule_code': 'R1' }] } as never)
+    Models.Document.find({
+      $or: [{ kind: 'internal' }, { 'origin.rule_code': 'R1' }, { $expr: { $eq: ['$transfer_target.company_id', '$company_id'] } }],
+    } as never)
       .select({ _id: 1 })
       .lean<{ _id: unknown }[]>(),
     Models.BusinessLink.find({ relation: 'internal_transfer', status: 'active' } as never)
