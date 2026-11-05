@@ -6,7 +6,7 @@ services:
     region: singapore
     rootDir: .
     buildCommand: pnpm install --frozen-lockfile && pnpm -r build
-    preDeployCommand: pnpm db:migrate && pnpm db:indexes
+    preDeployCommand: pnpm db:migrate && pnpm db:indexes && pnpm db:repair-counters
     startCommand: node apps/api/dist/server.js
     healthCheckPath: /healthz
     autoDeploy: true

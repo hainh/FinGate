@@ -30,6 +30,7 @@
     "db:rebuild-ledger": "node db/rebuild-ledger.js",
     "db:cleanup-orphan-entries": "node db/cleanup-orphan-entries.js",
     "db:rebuild-audit": "node db/rebuild-audit.js",
+    "db:repair-counters": "node db/repair-counters.js",
     "db:archive": "node db/archive.js",
     "check:tie": "node db/check-tie.js",
     "mail:test": "node scripts/mail-test.js",

@@ -210,7 +210,13 @@ gunzip -c deploy/backups/fingate-<stamp>.archive.gz \
       --nsFrom='fingate.*' --nsTo='fingate_restore.*'
 ```
 
-Sau restore: `pnpm check:tie` + mở 5 hồ sơ ngẫu nhiên.
+Sau restore: `pnpm check:tie` + **`pnpm db:repair-counters`** + mở 5 hồ sơ ngẫu nhiên.
+
+> `db:repair-counters` là bắt buộc khi dữ liệu về từ bản dump **không kèm** collection `counters` (hoặc kèm bản cũ
+> hơn): bộ đếm mã nằm sau mã lớn nhất đang có ⇒ lần tạo đối tác / phiếu / khoản vay kế tiếp sinh mã trùng
+> (`E11000 duplicate key ... partners index: code_1`) và API trả 500 *"Hệ thống đang gặp sự cố. Vui lòng thử lại."*,
+> trong khi dữ liệu và nghiệp vụ vẫn bình thường. Script chỉ tiến bộ đếm (không lùi, không sửa mã đã có), chạy lại
+> không đổi gì; xem trước bằng `node db/repair-counters.js --dry-run`.
 
 ### 7.4 Sao lưu trong ứng dụng (mọi profile)
 
