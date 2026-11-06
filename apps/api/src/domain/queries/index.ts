@@ -177,9 +177,11 @@ export interface QueueQuery {
   qTagIds?: string[];
   /**
    * Cài đặt "Duyệt tiền mặt" (ADM-04): các công ty ĐANG BẬT "khoản tiền mặt phải qua KTT duyệt".
-   * Phiếu thu/chi quỹ tiền mặt của công ty KHÔNG có trong danh sách bị loại khỏi "Chờ tôi duyệt"
-   * của MỌI người (chuỗi của chúng không còn bước KTT). null/undefined = không công ty nào bật —
-   * xem `cashRequiresKttForMany`; tầng route nạp MỘT lần rồi truyền vào.
+   * Chỉ phiếu thu/chi quỹ tiền mặt của công ty KHÔNG có trong danh sách mà chuỗi CÒN SÓT bước Kế
+   * toán trưởng đang chờ (snapshot cũ — hồ sơ gửi trước khi tắt cài đặt / chạy lại lỗi) mới bị loại
+   * khỏi "Chờ tôi duyệt"; phiếu quỹ tiền mặt bình thường (chuỗi đã bỏ KTT) vào hàng chờ như phiếu
+   * thường. null/undefined = không công ty nào bật — xem `cashRequiresKttForMany`; tầng route nạp
+   * MỘT lần rồi truyền vào.
    */
   cashKttCompanyIds?: string[] | null;
   overdueOnly?: boolean;
@@ -273,13 +275,18 @@ function pendingStepsOf(input: unknown, alias: string): Record<string, unknown> 
 }
 
 /**
- * Phiếu thu/chi quỹ tiền mặt của công ty CHƯA bật "Duyệt tiền mặt" (ADM-04): công ty đó cho phiếu
- * đi thẳng tới cấp duyệt kế tiếp (không qua KTT) — nên phiếu còn bước KTT chờ sẵn KHÔNG thuộc
- * "Chờ tôi duyệt" của ai (bước KTT chỉ nằm trong chuỗi của hồ sơ gửi TRƯỚC khi tắt cài đặt, và
- * `rerunPendingApprovals` gán lại chuỗi ngay khi admin đổi cài đặt).
+ * Phiếu thu/chi quỹ tiền mặt của công ty CHƯA bật "Duyệt tiền mặt" (ADM-04) mà chuỗi CÒN SÓT bước
+ * Kế toán trưởng đang chờ — chỉ xảy ra với hồ sơ snapshot cũ: gửi TRƯỚC khi tắt cài đặt, hoặc lần
+ * chạy lại trước đây dựng lại chuỗi thiếu `source` (đã sửa ở `rerun.ts`). Phiếu đó không còn thuộc
+ * "Chờ tôi duyệt" của ai (bước KTT không còn hiệu lực theo cài đặt hiện hành) và sẽ được gán lại
+ * chuỗi ở lần `rerunPendingApprovals` kế tiếp.
+ *
+ * ĐIỀU KIỆN QUAN TRỌNG: chỉ loại khi chuỗi còn bước KTT chờ. Phiếu quỹ tiền mặt bình thường (chuỗi
+ * đã bỏ KTT theo cài đặt, đang ở bước PGĐ/GĐ/…) KHÔNG bị loại — trước đây loại theo mọi phiếu quỹ
+ * tiền mặt khiến phiếu đang chờ PGĐ/GĐ biến mất khỏi "Chờ tôi duyệt" của mọi người (bug PC-2026-00360).
  *
  * `cashKttCompanyIds` = các công ty ĐANG BẬT (đọc MỘT lần ở tầng route bằng `cashRequiresKttForMany`);
- * null/rỗng = không công ty nào bật ⇒ mọi phiếu quỹ tiền mặt bị loại khỏi nhóm này.
+ * null/rỗng = không công ty nào bật.
  */
 function cashNotRequiringKttFilter(cashKttCompanyIds: readonly string[] | null | undefined): Record<string, unknown> {
   const enabled = (cashKttCompanyIds ?? []).map(String).filter(Boolean);
@@ -287,6 +294,8 @@ function cashNotRequiringKttFilter(cashKttCompanyIds: readonly string[] | null |
     kind: { $in: ['spend', 'income'] },
     'source.fund': { $in: [...CASH_LIKE_ACCOUNT_KINDS] },
     company_id: { $nin: enabled },
+    // "sót bước KTT" = vẫn còn bước Kế toán trưởng ở trạng thái chờ (current/waiting) trong chuỗi snapshot.
+    'approval.steps': { $elemMatch: { role: 'chief_accountant', state: { $in: ['current', 'waiting'] } } },
   };
 }
 
@@ -335,13 +344,13 @@ function executionQueueFilter(): Record<string, unknown> {
  * (giữ nguyên hành vi cũ của hàng chờ và badge).
  *
  * Cài đặt "Duyệt tiền mặt": (1) phiếu quỹ tiền mặt vào nhóm này đúng như phiếu thường (chỉ cấp thấp
- * nhất còn chờ); (2) phiếu quỹ tiền mặt của công ty CHƯA bật bị loại hẳn (lưới an toàn — chuỗi của
- * chúng đã không còn bước KTT nhờ `resolveMatrix`).
+ * nhất còn chờ); (2) chỉ phiếu quỹ tiền mặt còn SÓT bước KTT chờ của công ty CHƯA bật mới bị loại
+ * (lưới an toàn cho snapshot cũ — không loại phiếu đã bỏ KTT đúng cài đặt).
  */
 function toApproveFilter(
   input: Pick<QueueQuery, 'userId' | 'role' | 'canPay' | 'awaiting' | 'cashKttCompanyIds'>,
 ): Record<string, unknown> {
-  // lưới an toàn: loại phiếu quỹ tiền mặt của công ty chưa bật "qua KTT duyệt" khỏi MỌI nhóm việc-duyệt
+  // lưới an toàn: loại phiếu quỹ tiền mặt còn sót bước KTT chờ của công ty chưa bật "qua KTT duyệt"
   const cash = { $nor: [cashNotRequiringKttFilter(input.cashKttCompanyIds)] };
   if (input.awaiting === 'later') {
     return { $and: [laterPendingOwnerFilter(input.userId, input.role), cash] };

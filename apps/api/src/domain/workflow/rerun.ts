@@ -54,6 +54,8 @@ export interface RerunInput {
   /** null/undefined = mọi công ty; mảng = chỉ các công ty này. */
   companyIds?: string[] | null;
   kinds?: DocKind[];
+  /** null/undefined = mọi hồ sơ đang chờ; mảng = chỉ các hồ sơ này (dùng khi sửa dữ liệu đích danh). */
+  documentIds?: string[] | null;
   requestId?: string | null;
   ip?: string | null;
 }
@@ -74,6 +76,27 @@ function signature(steps: StepRow[]): string {
 }
 
 /**
+ * Projection nạp hồ sơ đang chờ để chạy lại.
+ *
+ * `source` BẮT BUỘC: `fundOfDoc` đọc `source.fund`/`source.account_id` để `resolveMatrix` áp cài đặt
+ * "Duyệt tiền mặt". Thiếu nó, hồ sơ quỹ tiền mặt bị coi là phiếu ngân hàng → chạy lại dựng LẠI bước
+ * Kế toán trưởng vừa được bỏ (và hồ sơ sau đó bị lưới an toàn ẩn khỏi "Chờ tôi duyệt" của mọi người).
+ */
+export const RERUN_DOC_PROJECTION = {
+  code: 1,
+  kind: 1,
+  company_id: 1,
+  target: 1,
+  category_id: 1,
+  amount: 1,
+  status: 1,
+  version: 1,
+  created_by: 1,
+  source: 1,
+  approval: 1,
+} as const;
+
+/**
  * Chạy lại toàn bộ hồ sơ đang chờ (pending.*). Trả thống kê để route hiển thị cho admin.
  * Không bao giờ ném lỗi vì một hồ sơ lẻ — lỗi được log và tính là `skipped`.
  */
@@ -81,10 +104,9 @@ export async function rerunPendingApprovals(input: RerunInput): Promise<RerunRes
   const filter: Record<string, unknown> = { status: { $in: [...DECISION_STATUSES] } };
   if (input.companyIds && input.companyIds.length) filter.company_id = { $in: input.companyIds.map(String) };
   if (input.kinds && input.kinds.length) filter.kind = { $in: input.kinds };
+  if (input.documentIds && input.documentIds.length) filter._id = { $in: input.documentIds.map(String) };
 
-  const rows = await Models.Document.find(filter as never)
-    .select({ code: 1, kind: 1, company_id: 1, target: 1, category_id: 1, amount: 1, status: 1, version: 1, created_by: 1, approval: 1 })
-    .lean();
+  const rows = await Models.Document.find(filter as never).select(RERUN_DOC_PROJECTION as never).lean();
 
   const result: RerunResult = { scanned: rows.length, changed: 0, skipped: 0, documents: [] };
   for (const raw of rows) {

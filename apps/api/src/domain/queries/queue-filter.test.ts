@@ -9,12 +9,15 @@ function base(over: Partial<QueueQuery>): QueueQuery {
   return { scope, userId: 'u1', limit: 50, ...over };
 }
 
-/** `$nor` lưới an toàn: loại phiếu quỹ tiền mặt của công ty CHƯA bật "qua KTT duyệt". */
+/** `$nor` lưới an toàn: chỉ loại phiếu quỹ tiền mặt CÒN SÓT bước KTT chờ của công ty CHƯA bật "qua KTT duyệt". */
 function cashNorCond(f: Record<string, unknown>): Record<string, unknown> | undefined {
   const guard = (f.$and as Record<string, unknown>[] | undefined)?.findLast((c) => '$nor' in c);
   const nor = guard?.$nor as Record<string, unknown>[] | undefined;
   return nor?.[0];
 }
+
+/** Điều kiện "chuỗi còn bước Kế toán trưởng đang chờ" — dấu hiệu snapshot cũ cần lưới an toàn. */
+const STALE_KTT_STEP = { $elemMatch: { role: 'chief_accountant', state: { $in: ['current', 'waiting'] } } };
 
 describe('queueFilter — "chờ tôi duyệt" gồm cả việc thực thi cho kế toán', () => {
   it('không có payment:mark → chỉ hồ sơ tới lượt tôi duyệt', () => {
@@ -82,16 +85,26 @@ describe('queueFilter — "chờ tôi duyệt" gồm cả việc thực thi cho 
 
 /**
  * Cài đặt "Duyệt tiền mặt" (ADM-04): phiếu thu/chi quỹ tiền mặt vào "Chờ tôi duyệt" đúng như phiếu
- * thường; phiếu của công ty CHƯA tick bị loại hẳn (lưới an toàn — chuỗi đã không còn bước KTT).
+ * thường; lưới an toàn CHỈ loại hồ sơ snapshot cũ còn sót bước KTT chờ (không loại phiếu đã bỏ KTT).
  */
 describe('queueFilter — cài đặt "Duyệt tiền mặt" lọc phiếu quỹ tiền mặt', () => {
-  it('không truyền danh sách công ty đang bật → loại MỌI phiếu thu/chi quỹ tiền mặt (cash + quỹ phụ)', () => {
+  it('không truyền danh sách công ty đang bật → chỉ loại phiếu còn SÓT bước KTT chờ', () => {
     const f = queueFilter(base({ mine: 'to_approve', role: 'staff', canPay: false }));
     expect(cashNorCond(f)).toEqual({
       kind: { $in: ['spend', 'income'] },
       'source.fund': { $in: ['cash', 'fund'] },
       company_id: { $nin: [] },
+      'approval.steps': STALE_KTT_STEP,
     });
+  });
+
+  it('phiếu quỹ tiền mặt đã bỏ KTT (chuỗi không còn bước KTT chờ) vẫn vào "Chờ tôi duyệt"', () => {
+    // Bug PC-2026-00360: phiếu chi tiền mặt đang chờ PGĐ biến mất khỏi hàng chờ vì lưới an toàn loại
+    // MỌI phiếu quỹ tiền mặt. Lưới an toàn phải khớp thêm điều kiện "còn bước KTT chờ" — hồ sơ đã bỏ
+    // KTT theo cài đặt (chỉ còn PGĐ/GĐ/…) không khớp điều kiện đó nên không bị loại.
+    const cond = cashNorCond(queueFilter(base({ mine: 'to_approve', role: 'deputy_director' })));
+    expect(cond?.['approval.steps']).toEqual(STALE_KTT_STEP);
+    expect(cond?.kind).toEqual({ $in: ['spend', 'income'] });
   });
 
   it('công ty đang bật "qua KTT duyệt" vẫn giữ phiếu quỹ tiền mặt của công ty đó', () => {
