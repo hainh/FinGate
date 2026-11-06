@@ -339,6 +339,20 @@ export const APPROVER_ROLES: readonly Role[] = [
   'chairman',
 ] as const;
 
+/**
+ * Chức danh có BÀN THỰC THI: phiếu chi đã duyệt xong (`approved`/`processing`) chờ ghi thanh toán
+ * nằm trong "Chờ tôi duyệt" (APPR-01) CHỈ ở bàn Kế toán viên / Kế toán trưởng.
+ * Cấp duyệt (PGĐ/GĐ/TGĐ…) có thể có `payment:mark` để ghi thanh toán khi cần, nhưng phiếu đã duyệt
+ * xong KHÔNG phải việc chờ duyệt của họ — không hiện trong hàng chờ (blueprint §IV: hàng chờ chỉ
+ * gồm phiếu mà bước của mình là cấp thấp nhất còn chờ).
+ */
+export const EXECUTOR_ROLES: readonly Role[] = ['staff', 'chief_accountant'] as const;
+
+/** Chức danh có bàn thực thi (xem `EXECUTOR_ROLES`). */
+export function isExecutorRole(role?: string | null): boolean {
+  return !!role && (EXECUTOR_ROLES as readonly string[]).includes(role);
+}
+
 export function permissionsForRole(role: Role): Permission[] {
   return [...(ROLE_PERMISSIONS[role] ?? [])];
 }

@@ -130,19 +130,21 @@ async function viewerOf(page: Pg, co: string): Promise<Viewer> {
 
 /**
  * Hàng chờ "Chờ tôi duyệt" của một người xem, tính từ CSDL theo đúng luật máy chủ (queue / awaitingBadge):
- * bước của người đó là cấp thấp nhất còn chờ, hoặc (có quyền thực thi) phiếu chi đã duyệt / đang thanh toán.
+ * bước của người đó là cấp thấp nhất còn chờ, hoặc (chức danh bàn thực thi KTV/KTT có quyền thực thi)
+ * phiếu chi đã duyệt / đang thanh toán. Cấp duyệt khác (GĐ…) dù có `payment:mark` không thấy phiếu chờ chi.
  */
 function queueTruthInDb(co: string, v: Viewer): { n: number; sum: string } {
+  const execDesk = v.canPay && (v.role === 'staff' || v.role === 'chief_accountant');
   return mongoEval<{ n: number; sum: string }>(
-    `const co = ObjectId('${co}'); const uid = '${v.userId}'; const role = '${v.role}'; const canPay = ${v.canPay ? 'true' : 'false'};` +
-      ` const st = ['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'].concat(canPay ? ['approved', 'processing'] : []);` +
+    `const co = ObjectId('${co}'); const uid = '${v.userId}'; const role = '${v.role}'; const execDesk = ${execDesk ? 'true' : 'false'};` +
+      ` const st = ['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'].concat(execDesk ? ['approved', 'processing'] : []);` +
       ` let n = 0; let sum = 0n;` +
       ` db.documents.find({ company_id: co, status: { $in: st } }, { status: 1, kind: 1, 'amount.minor': 1, 'approval.steps': 1 }).forEach((d) => {` +
       ` const steps = (d.approval && d.approval.steps) || [];` +
       ` const pend = steps.filter((s) => s.state === 'current' || s.state === 'waiting');` +
       ` let mine = false;` +
       ` if (pend.length) { const min = Math.min(...pend.map((s) => s.order)); const s = pend.find((x) => x.order === min); mine = s.user_id != null ? String(s.user_id) === uid : s.role === role; }` +
-      ` const exec = canPay && d.kind === 'spend' && (d.status === 'approved' || d.status === 'processing');` +
+      ` const exec = execDesk && d.kind === 'spend' && (d.status === 'approved' || d.status === 'processing');` +
       ` if (mine || exec) { n++; sum += BigInt(String(d.amount.minor)); } });` +
       ` print(JSON.stringify({ n: n, sum: sum.toString() }));`,
   );

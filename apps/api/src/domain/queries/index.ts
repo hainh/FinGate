@@ -18,6 +18,7 @@ import {
   daysUntil,
   formatMoney,
   isCashLikeAccountKind,
+  isExecutorRole,
   maturity,
   maturityLabel,
   money,
@@ -153,6 +154,10 @@ export interface QueueQuery {
   /**
    * Người gọi có quyền ghi nhận thanh toán (`payment:mark`) → hàng chờ "việc của tôi"
    * gồm thêm phiếu chi đã duyệt xong đang chờ thực thi (bàn kế toán viên/trưởng).
+   * CHỈ có tác dụng với chức danh bàn thực thi (`EXECUTOR_ROLES` — KTV/KTT): cấp duyệt như
+   * GĐ dù có `payment:mark` vẫn không thấy phiếu đã duyệt trong "Chờ tôi duyệt" — đó là
+   * việc của kế toán, không phải việc chờ duyệt của họ (bug: phiếu "Đã duyệt" hiện trên
+   * hàng chờ của tài khoản GĐ).
    */
   canPay?: boolean;
   kind?: DocKind;
@@ -337,6 +342,18 @@ function executionQueueFilter(): Record<string, unknown> {
 }
 
 /**
+ * Hàng chờ của người gọi CÓ kèm phiếu chi đã duyệt chờ thực thi hay không:
+ * quyền `payment:mark` VÀ chức danh bàn thực thi (KTV/KTT — `EXECUTOR_ROLES` của @fingate/shared).
+ * GĐ mặc định có `payment:mark` để ghi thanh toán khi cần, nhưng phiếu "Đã duyệt" là việc của bàn
+ * kế toán, KHÔNG phải việc chờ duyệt của họ — trước đây chỉ xét quyền nên phiếu đã duyệt hiện cả
+ * trong "Chờ tôi duyệt" của tài khoản GĐ (trái blueprint §IV: hàng chờ chỉ gồm phiếu mà bước của
+ * mình là cấp thấp nhất còn chờ).
+ */
+function seesExecutionQueue(input: Pick<QueueQuery, 'role' | 'canPay'>): boolean {
+  return !!input.canPay && isExecutorRole(input.role);
+}
+
+/**
  * "Việc ở bàn tôi" = bước duyệt của tôi là cấp thấp nhất còn chờ, + (nếu được chi) phiếu chờ thực thi.
  *
  * `awaiting` (APPR-01 chia 2 tab): `turn` = đúng như trên; `later` = phiếu còn phải qua cấp dưới tôi
@@ -356,15 +373,15 @@ function toApproveFilter(
     return { $and: [laterPendingOwnerFilter(input.userId, input.role), cash] };
   }
   const parts: Record<string, unknown>[] = [lowestPendingOwnerFilter(input.userId, input.role)];
-  if (input.canPay) parts.push(executionQueueFilter());
+  if (seesExecutionQueue(input)) parts.push(executionQueueFilter());
   const union = parts.length > 1 ? { $or: parts } : parts[0]!;
   return { $and: [union, cash] };
 }
 
-function toApproveStatuses(input: Pick<QueueQuery, 'canPay' | 'awaiting'>): readonly string[] {
+function toApproveStatuses(input: Pick<QueueQuery, 'role' | 'canPay' | 'awaiting'>): readonly string[] {
   // `later` chưa tới lượt ai làm được nên không có phiếu chờ thực thi; `turn` / bỏ trống = "việc ở bàn tôi"
-  // (kế toán có `payment:mark` vẫn thấy phiếu chi chờ chi).
-  const exec = input.canPay && input.awaiting !== 'later' ? EXECUTION_STATUSES : [];
+  // (chỉ bàn KTV/KTT có `payment:mark` thấy phiếu chi chờ chi — cấp duyệt như GĐ không, xem `seesExecutionQueue`).
+  const exec = seesExecutionQueue(input) && input.awaiting !== 'later' ? EXECUTION_STATUSES : [];
   return [...DECISION_STATUSES, ...exec];
 }
 
@@ -623,7 +640,7 @@ export async function awaitingBadge(
   return cacheThrough(key, async () => {
     const f = withScope(scopeOf(scope), {
       ...toApproveFilter({ userId, role, canPay, awaiting, cashKttCompanyIds }),
-      status: { $in: toApproveStatuses({ canPay, awaiting }) },
+      status: { $in: toApproveStatuses({ role, canPay, awaiting }) },
       ...(tagIds.length ? { tag_ids: { $in: tagIds } } : {}),
     });
     const count = await Models.Document.countDocuments(f as never);
