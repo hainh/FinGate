@@ -299,10 +299,14 @@ export interface DocListConfig {
   approvalTabs?: boolean;
 }
 
-/** Thanh lọc của danh sách dùng chung (một hàng trên màn lớn, tự xuống dòng khi hẹp). */
+/**
+ * Thanh lọc của danh sách dùng chung (một hàng trên màn lớn, tự xuống dòng khi hẹp).
+ * Trên mobile (≤767px) các ô lọc xếp thành 2 cột đều nhau — xem `.fg-filterbar-2col`
+ * trong styles.css; ô nào cần chiếm trọn hàng thì gắn `fg-filterbar-span`.
+ */
 function FilterBar({ children }: { children: ReactNode }): ReactNode {
   return (
-    <div className="fg-filterbar" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+    <div className="fg-filterbar fg-filterbar-2col" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
       {children}
     </div>
   );
@@ -508,7 +512,7 @@ export function DocListScreen({
         ) : null}
         <FgSearchInput value={qText} onChange={setQText} />
         {anyFilter ? (
-          <FgButton size="small" variant="ghost" onClick={clearAll}>
+          <FgButton className="fg-filterbar-span" size="small" variant="ghost" onClick={clearAll}>
             Xóa lọc
           </FgButton>
         ) : null}
@@ -736,6 +740,7 @@ export function DocListScreen({
 function FgSearchInput({ value, onChange }: { value: string; onChange: (v: string) => void }): ReactNode {
   return (
     <input
+      className="fg-filterbar-span"
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder="Tìm mã, nội dung, đối tác, STK, MST, tag…"

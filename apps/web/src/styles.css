@@ -958,4 +958,24 @@ body {
   .fg-page-title {
     font-size: var(--fg-font-h2-size);
   }
+  /* Màn thu/chi (DocListScreen): các ô lọc xếp 2 cột đều nhau, bỏ chiều rộng cố định. */
+  .fg-filterbar-2col {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: center;
+  }
+  .fg-filterbar-2col > * {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    flex: none !important;
+  }
+  /* ô tìm kiếm / nút "Xóa lọc" chiếm trọn một hàng */
+  .fg-filterbar-2col > .fg-filterbar-span {
+    grid-column: 1 / -1;
+  }
+  .fg-filterbar-2col > .fg-filterbar-span:is(button, .ant-btn) {
+    width: auto !important;
+    justify-self: start;
+  }
 }
