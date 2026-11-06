@@ -340,8 +340,9 @@ export function DebtListScreen(): ReactNode {
           ) : null
         }
       />
-      <div className="fg-filterbar">
+      <div className="fg-filterbar fg-filterbar-2col">
         <FgSegmented
+          className="fg-filterbar-span"
           value={view}
           onChange={(v) => setParam('view', String(v) === 'aging' ? 'aging' : undefined)}
           options={[
@@ -391,12 +392,14 @@ export function DebtListScreen(): ReactNode {
           </>
         ) : null}
         {partnerId ? (
-          <FgToneChip tone="info">
-            Đối tác: {partner.data?.name ?? '…'}{' '}
-            <button type="button" aria-label="Bỏ lọc đối tác" onClick={() => setParam('partner_id')} style={{ border: 0, background: 'transparent', cursor: 'pointer', color: 'inherit' }}>
-              ×
-            </button>
-          </FgToneChip>
+          <span className="fg-filterbar-natural">
+            <FgToneChip tone="info">
+              Đối tác: {partner.data?.name ?? '…'}{' '}
+              <button type="button" aria-label="Bỏ lọc đối tác" onClick={() => setParam('partner_id')} style={{ border: 0, background: 'transparent', cursor: 'pointer', color: 'inherit' }}>
+                ×
+              </button>
+            </FgToneChip>
+          </span>
         ) : null}
       </div>
 

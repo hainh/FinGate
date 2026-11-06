@@ -149,7 +149,7 @@ export function BankAccountHistoryScreen(): ReactNode {
           </>
         }
       />
-      <div className="fg-filterbar" role="group" aria-label="Khoảng thời gian" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+      <div className="fg-filterbar fg-filterbar-2col" role="group" aria-label="Khoảng thời gian" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
         <FgButton size="medium" variant={isAll ? 'primary' : 'secondary'} onClick={() => setRange({ from: '', to: '' })}>
           Toàn bộ
         </FgButton>
@@ -166,7 +166,7 @@ export function BankAccountHistoryScreen(): ReactNode {
           onChange={(d) => setRange((r) => ({ ...r, from: d ? d.format(DAY) : '' }))}
           aria-label="Từ ngày"
         />
-        <span className="fg-muted">–</span>
+        <span className="fg-muted fg-hide-mobile">–</span>
         <DatePicker
           placeholder="Đến ngày"
           format="DD/MM/YYYY"
@@ -179,6 +179,7 @@ export function BankAccountHistoryScreen(): ReactNode {
         <Select
           allowClear
           showSearch
+          className="fg-filterbar-span"
           placeholder="Tìm theo đối tác"
           value={partner || undefined}
           onChange={(v) => setPartner(v ?? '')}

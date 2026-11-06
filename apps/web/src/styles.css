@@ -958,7 +958,8 @@ body {
   .fg-page-title {
     font-size: var(--fg-font-h2-size);
   }
-  /* Màn thu/chi (DocListScreen): các ô lọc xếp 2 cột đều nhau, bỏ chiều rộng cố định. */
+  /* Các màn danh sách (thu/chi, đối tác, lịch sử giao dịch, nợ ngân hàng, công nợ):
+     ô lọc xếp 2 cột đều nhau, bỏ chiều rộng cố định của antd. */
   .fg-filterbar-2col {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -970,10 +971,12 @@ body {
     max-width: none !important;
     flex: none !important;
   }
-  /* ô tìm kiếm / nút "Xóa lọc" chiếm trọn một hàng */
+  /* ô chiếm trọn một hàng: tìm kiếm, phân đoạn chế độ xem */
   .fg-filterbar-2col > .fg-filterbar-span {
     grid-column: 1 / -1;
   }
+  /* nút & chip không kéo giãn — giữ kích thước theo nội dung */
+  .fg-filterbar-2col > .fg-filterbar-natural,
   .fg-filterbar-2col > .fg-filterbar-span:is(button, .ant-btn) {
     width: auto !important;
     justify-self: start;

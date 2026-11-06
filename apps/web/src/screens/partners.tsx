@@ -383,7 +383,7 @@ export function PartnersScreen(): ReactNode {
         }
       />
 
-      <div className="fg-filterbar">
+      <div className="fg-filterbar fg-filterbar-2col">
         <FgInput
           value={qText}
           onChange={(e) => setQText(e.target.value)}

@@ -546,7 +546,11 @@ Công ty A · Nguyễn Văn A · 15/09/2026        [● Chờ Giám đốc duy�
 | 768–1023 | rail overlay, dashboard 2 cột, table → card list có 4 field |
 | <768 | chỉ còn: Tiền hiện có → Cần duyệt → Cảnh báo → Đáo hạn → Dòng tiền; bottom tab 4 mục |
 
-Mobile **không** là desktop thu nhỏ: không có filter bar đa cột, không có bảng > 3 cột.
+Mobile **không** là desktop thu nhỏ: không có bảng > 3 cột. Thanh lọc trên mobile không giữ flex một hàng co giãn — các màn danh sách (Thu/Chi, Đối tác, Lịch sử giao dịch, Nợ ngân hàng, Công nợ) gắn `fg-filterbar-2col` để xếp **2 cột đều nhau** (`repeat(2, minmax(0,1fr))`, override width cố định của antd):
+
+- `fg-filterbar-span` → ô chiếm trọn một hàng (tìm kiếm, `FgSegmented` đổi chế độ xem, ô đối tác ở Lịch sử giao dịch).
+- `fg-filterbar-natural` → giữ cỡ theo nội dung, không kéo giãn (chip "Đối tác: …"). Riêng nút thì `fg-filterbar-span` đã tự đủ cỡ thật.
+- Dấu "–" giữa hai ô ngày (`fg-hide-mobile`) ẩn trên mobile để "Từ ngày" và "Đến ngày" nằm cạnh nhau đúng 2 cột.
 
 ---
 

@@ -494,7 +494,7 @@ export function BankDebtListScreen(): ReactNode {
       />
       {importOpen ? <BankDebtImportModal open onClose={() => setImportOpen(false)} onImported={() => void query.refetch()} /> : null}
 
-      <div className="fg-filterbar">
+      <div className="fg-filterbar fg-filterbar-2col">
         <FgSelect ariaLabel="Trạng thái" placeholder="Mọi trạng thái" allowClear options={STATUS_OPTIONS} value={status} onChange={(v) => setStatus(v)} style={{ width: 200 }} />
         <FgInput
           allowClear
