@@ -111,6 +111,8 @@ pnpm db:reset-keep-users      # reset dữ liệu nghiệp vụ, giữ user + c�
 pnpm db:bootstrap             # tạo tài khoản quản trị đầu tiên nếu DB rỗng
 pnpm db:archive               # lưu trữ dữ liệu cũ
 pnpm check:tie                # kiểm tra cân đối
+pnpm db:repair-cash-chains    # xem trước hồ sơ quỹ tiền mặt còn sót bước KTT (bug trước bản fix 6a5d7ba)
+MONGODB_URI='<uri>' node apps/api/scripts/repair-cash-approval-chains.mjs --apply   # sửa thật (tự lưu backup JSON)
 pnpm mail:test                # thử gửi mail (SMTP_URL)
 pnpm api:types                # sinh types từ OpenAPI (⚠ xem §6)
 pnpm infra:up                 # bật MongoDB local
