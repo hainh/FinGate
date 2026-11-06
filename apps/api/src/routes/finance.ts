@@ -59,7 +59,6 @@ async function bankAccountDetail(id: string): Promise<Record<string, unknown>> {
     manager_user_id: acct.manager_user_id ? String(acct.manager_user_id) : null,
     limit_minor: acct.limit_minor == null ? null : String(acct.limit_minor),
     min_balance_minor: String(acct.min_balance_minor ?? '0'),
-    stored_minor: String(acct.stored_minor ?? '0'),
     show_on_dashboard: acct.show_on_dashboard !== false,
     status: String(acct.status ?? 'active'),
     note: acct.note ? String(acct.note) : null,
@@ -68,7 +67,7 @@ async function bankAccountDetail(id: string): Promise<Record<string, unknown>> {
 }
 
 /** Giá trị mặc định của trường chưa có trên tài khoản cũ — tránh ghi lịch sử "— → 0" ở lần sửa đầu. */
-const BANK_ACCOUNT_DEFAULTS: Record<string, unknown> = { min_balance_minor: 0n, stored_minor: 0n, show_on_dashboard: true, status: 'active' };
+const BANK_ACCOUNT_DEFAULTS: Record<string, unknown> = { min_balance_minor: 0n, show_on_dashboard: true, status: 'active' };
 
 /** Chuẩn hoá giá trị để so sánh / lưu vào lịch sử (BigInt, ObjectId → chuỗi). */
 function historyValue(v: unknown): string | boolean | null {
@@ -76,41 +75,21 @@ function historyValue(v: unknown): string | boolean | null {
   return typeof v === 'boolean' ? v : String(v);
 }
 
-/**
- * Tiền lưu trữ có hiệu lực TẠI một thời điểm, dựng từ lịch sử sửa (`changes.stored_minor`):
- * mỗi giao dịch gắn mức tiền lưu trữ lúc đó — sửa tiền lưu trữ không làm đổi số dư tổng của giao dịch cũ.
- * Trước lần đổi đầu tiên = giá trị `from` của lần đổi đó; chưa từng đổi = giá trị hiện tại.
- */
-export function storedTimeline(acct: { stored_minor?: unknown; history?: unknown }): (at: Date | null) => bigint {
-  const big = (v: unknown): bigint => (v === null || v === undefined || v === '' ? 0n : asBigInt(v));
-  const steps = ((acct.history ?? []) as { at: Date | string; changes?: Record<string, { from?: unknown; to?: unknown }> | null }[])
-    .filter((h) => h.changes && 'stored_minor' in h.changes)
-    .map((h) => ({ at: new Date(h.at).getTime(), from: big(h.changes!.stored_minor!.from), to: big(h.changes!.stored_minor!.to) }))
-    .sort((a, b) => a.at - b.at);
-  const current = big(acct.stored_minor);
-  const initial = steps.length ? steps[0]!.from : current;
-  return (at) => {
-    if (!at) return current;
-    const t = at.getTime();
-    let value = initial;
-    for (const s of steps) {
-      if (s.at > t) break;
-      value = s.to;
-    }
-    return value;
-  };
-}
-
 /** Lịch sử sửa tài khoản tiền (mới nhất trước). */
 function bankAccountHistory(acct: Record<string, unknown>): { at: string; actor: { user_id: string | null; name: string | null }; action: string; changes: Record<string, unknown> }[] {
   const rows = (acct.history ?? []) as { at: Date; actor?: { user_id?: unknown; name?: string | null } | null; action?: string; changes?: Record<string, unknown> | null }[];
   return rows
-    .map((h) => ({
-      at: new Date(h.at).toISOString(),
-      actor: { user_id: h.actor?.user_id ? String(h.actor.user_id) : null, name: h.actor?.name ?? null },
-      action: h.action ?? 'update',
-      changes: h.changes ?? {},
-    }))
+    .map((h) => {
+      const changes = { ...(h.changes ?? {}) };
+      // Tính năng "Tiền lưu trữ" đã gỡ: lịch sử cũ còn `stored_minor` không hiển thị nữa.
+      delete changes.stored_minor;
+      return {
+        at: new Date(h.at).toISOString(),
+        actor: { user_id: h.actor?.user_id ? String(h.actor.user_id) : null, name: h.actor?.name ?? null },
+        action: h.action ?? 'update',
+        changes,
+      };
+    })
     .reverse();
 }
 
@@ -134,14 +113,13 @@ async function withBankPartnerName<T extends { loan_id: string; bank_name: strin
 }
 
 /** BANK-05: khoá sắp xếp = `key` cột phía web. */
-const TX_SORT_FIELDS = ['at', 'dir', 'opening', 'amount', 'closing', 'total', 'content', 'cp', 'doc'] as const;
+const TX_SORT_FIELDS = ['at', 'dir', 'opening', 'amount', 'closing', 'content', 'cp', 'doc'] as const;
 interface TxSortItem {
   at: string | null;
   direction: string;
   opening: unknown;
   amount: unknown;
   closing: unknown;
-  total: unknown;
   content: string;
   counterparty: string;
   document: { code: string } | null;
@@ -152,7 +130,6 @@ const TX_SORT_GETTERS: Record<string, (r: TxSortItem) => SortKey> = {
   opening: (r) => minorKey(r.opening),
   amount: (r) => minorKey(r.amount),
   closing: (r) => minorKey(r.closing),
-  total: (r) => minorKey(r.total),
   content: (r) => r.content,
   cp: (r) => r.counterparty,
   doc: (r) => r.document?.code ?? null,
@@ -280,7 +257,6 @@ export function financeRoutes(app: FastifyInstance): void {
           manager_user_id: body.manager_user_id ?? null,
           limit_minor: body.limit_minor ? BigInt(body.limit_minor) : null,
           min_balance_minor: BigInt(body.min_balance_minor),
-          stored_minor: BigInt(body.stored_minor),
           show_on_dashboard: body.show_on_dashboard,
           status: body.status,
           note: body.note ?? null,
@@ -399,7 +375,6 @@ export function financeRoutes(app: FastifyInstance): void {
         if (body.manager_user_id !== undefined) assign('manager_user_id', body.manager_user_id ?? null);
         if (body.limit_minor !== undefined) assign('limit_minor', body.limit_minor ? BigInt(body.limit_minor) : null);
         if (body.min_balance_minor !== undefined) assign('min_balance_minor', BigInt(body.min_balance_minor));
-        if (body.stored_minor !== undefined) assign('stored_minor', BigInt(body.stored_minor));
         if (body.show_on_dashboard !== undefined) assign('show_on_dashboard', body.show_on_dashboard);
         if (body.status !== undefined) assign('status', body.status);
         if (body.note !== undefined) assign('note', body.note || null);
@@ -548,12 +523,9 @@ export function financeRoutes(app: FastifyInstance): void {
       handler: async (req, reply) => {
         const { id } = req.params as { id: string };
         const account = await Models.BankAccount.findById(id)
-          .select({ company_id: 1, is_group: 1, bank_name: 1, account_number: 1, account_name: 1, kind: 1, currency: 1, stored_minor: 1, history: 1 })
+          .select({ company_id: 1, is_group: 1, bank_name: 1, account_number: 1, account_name: 1, kind: 1, currency: 1 })
           .lean<Record<string, unknown> | null>();
         if (!account) throw new ApiError({ code: 'FG-WF-001', status: 404, detail: 'Không tìm thấy tài khoản tiền' });
-        // tiền lưu trữ (ngoài sổ cái) — số dư tổng mỗi dòng = số dư cuối + tiền lưu trữ TẠI thời điểm giao dịch
-        const stored = asBigInt(account.stored_minor ?? 0n);
-        const storedAt = storedTimeline(account);
         const isGroup = Boolean(account.is_group);
         if (!isGroup) assertCompanyScope(req, account.company_id ? String(account.company_id) : null);
 
@@ -651,7 +623,6 @@ export function financeRoutes(app: FastifyInstance): void {
             // ưu tiên mốc thực thi (nếu có giờ), còn lại dùng created_at (đủ giây).
             const at = exec?.paid_at && exec.paid_at.length > 10 ? exec.paid_at : createdAt;
             const kind = doc?.kind ? String(doc.kind) : '';
-            const storedThen = storedAt(at ? new Date(at) : null);
             return {
               _id: String(entry._id),
               at,
@@ -663,8 +634,6 @@ export function financeRoutes(app: FastifyInstance): void {
               opening: money(opening),
               amount: money(amount),
               closing: money(closing),
-              stored: money(storedThen),
-              total: money(closing + storedThen),
               currency: String(account.currency ?? 'VND'),
               content: doc ? String(doc.purpose ?? doc.title ?? '') : '',
               counterparty,
@@ -704,7 +673,6 @@ export function financeRoutes(app: FastifyInstance): void {
                 account_name: String(account.account_name ?? ''),
                 kind: String(account.kind ?? 'bank'),
                 currency: String(account.currency ?? 'VND'),
-                stored: money(stored),
               },
               period: { from, to },
               totals: { in: money(inTotal), out: money(outTotal) },

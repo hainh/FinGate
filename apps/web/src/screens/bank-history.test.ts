@@ -21,7 +21,6 @@ const acct = (patch: Partial<BankAccountDetail> = {}): BankAccountDetail => ({
   manager_user_id: null,
   limit_minor: null,
   min_balance_minor: '0',
-  stored_minor: '0',
   show_on_dashboard: true,
   status: 'active',
   note: null,

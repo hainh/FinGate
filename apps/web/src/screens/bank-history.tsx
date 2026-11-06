@@ -279,17 +279,6 @@ export function BankAccountHistoryScreen(): ReactNode {
                     align: 'right',
                     render: (_v, r) => <FgMoney value={r.closing} mode="full" missingLabel="—" />,
                   },
-                  // Số dư tổng (số dư cuối + tiền lưu trữ lúc giao dịch) — ẩn với tài khoản ngân hàng
-                  ...(data.account.kind === 'bank'
-                    ? []
-                    : [
-                        {
-                          title: 'Số dư tổng',
-                          key: 'total',
-                          align: 'right' as const,
-                          render: (_v: unknown, r: BankTransactionRow) => <FgMoney value={r.total} mode="full" missingLabel="—" emphasis />,
-                        },
-                      ]),
                   {
                     title: 'Nội dung',
                     key: 'content',
@@ -324,7 +313,7 @@ export function BankAccountHistoryScreen(): ReactNode {
                         <span className="fg-muted">—</span>
                       ),
                   },
-                ], ['at', 'dir', 'opening', 'amount', 'closing', 'total', 'content', 'cp', 'doc'], sort, '-at')}
+                ], ['at', 'dir', 'opening', 'amount', 'closing', 'content', 'cp', 'doc'], sort, '-at')}
               />
             </div>
           )

@@ -574,8 +574,6 @@ export interface BankAccountDetail {
   manager_user_id: string | null;
   limit_minor: string | null;
   min_balance_minor: string;
-  /** Tiền lưu trữ (ngoài sổ cái). */
-  stored_minor: string;
   show_on_dashboard: boolean;
   status: string;
   note: string | null;
@@ -604,10 +602,6 @@ export interface BankTransactionRow {
   opening: MoneyWire;
   amount: MoneyWire;
   closing: MoneyWire;
-  /** Tiền lưu trữ có hiệu lực tại thời điểm giao dịch. */
-  stored: MoneyWire;
-  /** Số dư tổng = số dư cuối + tiền lưu trữ tại thời điểm giao dịch. */
-  total: MoneyWire;
   currency: string;
   content: string;
   counterparty: string;
@@ -639,8 +633,6 @@ export interface BankAccountTransactions {
     account_name: string;
     kind: string;
     currency: string;
-    /** Tiền lưu trữ (ngoài sổ cái). */
-    stored: MoneyWire;
   };
   /** Kỳ đang lọc: `from` null = từ đầu; `to` đã kẹp ≤ hôm nay. */
   period: { from: string | null; to: string };

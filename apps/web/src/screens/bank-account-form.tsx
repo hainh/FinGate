@@ -43,7 +43,6 @@ const HISTORY_FIELD_LABEL: Record<string, string> = {
   manager_user_id: 'Người quản lý',
   limit_minor: 'Hạn mức',
   min_balance_minor: 'Ngưỡng tối thiểu',
-  stored_minor: 'Tiền lưu trữ',
   show_on_dashboard: 'Hiển thị trên dashboard',
   status: 'Trạng thái',
   note: 'Ghi chú',
@@ -142,7 +141,6 @@ export function BankAccountFormScreen(): ReactNode {
   const [branch, setBranch] = useState('');
   const [currency, setCurrency] = useState('VND');
   const [minBalance, setMinBalance] = useState<Money | null>(null);
-  const [stored, setStored] = useState<Money | null>(null);
   const [showOnDashboard, setShowOnDashboard] = useState(true);
   const [status, setStatus] = useState('active');
   const [note, setNote] = useState('');
@@ -162,7 +160,6 @@ export function BankAccountFormScreen(): ReactNode {
     setBranch(loaded.branch ?? '');
     setCurrency(loaded.currency);
     setMinBalance(money(BigInt(loaded.min_balance_minor || '0'), loaded.currency));
-    setStored(money(BigInt(loaded.stored_minor || '0'), loaded.currency));
     setShowOnDashboard(loaded.show_on_dashboard);
     setStatus(loaded.status);
     setNote(loaded.note ?? '');
@@ -191,7 +188,6 @@ export function BankAccountFormScreen(): ReactNode {
         currency,
         kind,
         min_balance_minor: moneyToWire(minBalance ?? money(0n, currency)).minor,
-        stored_minor: moneyToWire(stored ?? money(0n, currency)).minor,
         show_on_dashboard: showOnDashboard,
         status,
         note: note.trim() || undefined,
@@ -281,9 +277,6 @@ export function BankAccountFormScreen(): ReactNode {
             </FgField>
             <FgField label="Ngưỡng tối thiểu" help="Số dư sổ cái (hoặc dự kiến) dưới ngưỡng sẽ được cảnh báo">
               <FgMoneyInput value={minBalance} onChange={setMinBalance} ariaLabel="Ngưỡng tối thiểu" />
-            </FgField>
-            <FgField label="Tiền lưu trữ" help="Khoản tiền ngoài sổ cái — Số dư tổng = số dư hiện tại + tiền lưu trữ" error={fieldErrors.stored_minor ?? null}>
-              <FgMoneyInput value={stored} onChange={setStored} ariaLabel="Tiền lưu trữ" />
             </FgField>
             <FgField
               label="Trạng thái"

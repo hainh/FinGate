@@ -625,8 +625,6 @@ export const BankAccountSchema = new Schema(
     manager_user_id: { type: Schema.Types.ObjectId, default: null },
     limit_minor: { type: BigInt, default: null },
     min_balance_minor: { type: BigInt, default: 0n },
-    /** Tiền lưu trữ (nhập tay, ngoài sổ cái) — số dư tổng = số dư sổ cái + tiền lưu trữ. */
-    stored_minor: { type: BigInt, default: 0n },
     show_on_dashboard: { type: Boolean, default: true },
     status: { type: String, enum: ['active', 'closed', 'frozen'], default: 'active' },
     note: { type: String, default: null },
