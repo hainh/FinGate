@@ -53,6 +53,8 @@ export async function internalPartnerFieldsFor(input: {
   ownerCompanyId: string;
   internalCompanyId: string | null | undefined;
   internalAccountId: string | null | undefined;
+  /** Khi SỬA đối tác nội bộ chưa liên kết: bỏ qua chính đối tác này khi kiểm trùng tài khoản. */
+  excludePartnerId?: string | null;
 }): Promise<{ name: string; bank_name: string; account_number: string; internal_company_id: string; internal_account_id: string }> {
   if (!input.internalCompanyId || !input.internalAccountId) {
     throw new ApiError({
@@ -69,7 +71,12 @@ export async function internalPartnerFieldsFor(input: {
       errors: { internal_account_id: 'Tài khoản không thuộc công ty đã chọn, là tài khoản nhóm, hoặc đã đóng' },
     });
   }
-  const existed = await Models.Partner.exists({ company_id: input.ownerCompanyId, type: 'internal', internal_account_id: input.internalAccountId } as never);
+  const existed = await Models.Partner.exists({
+    company_id: input.ownerCompanyId,
+    type: 'internal',
+    internal_account_id: input.internalAccountId,
+    ...(input.excludePartnerId ? { _id: { $ne: input.excludePartnerId } } : {}),
+  } as never);
   if (existed) {
     throw new ApiError({
       code: 'FG-VAL-001',

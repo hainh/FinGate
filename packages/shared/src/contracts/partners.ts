@@ -51,9 +51,15 @@ export const partnerDuplicateCheckBody = z.object({
 });
 export type PartnerDuplicateCheckBody = z.infer<typeof partnerDuplicateCheckBody>;
 
-/** PATCH /partners/:id — sửa bất cứ lúc nào; đổi `type` có thể bị chặn (FG-PARTNER-003). */
+/**
+ * PATCH /partners/:id — sửa bất cứ lúc nào; đổi `type` có thể bị chặn (FG-PARTNER-003).
+ * `internal_company_id` / `internal_account_id`: chỉ dùng cho đối tác loại `internal` CHƯA được gắn công ty /
+ * tài khoản gốc — gửi cả hai để liên kết (tên / NH / STK lấy lại từ tài khoản gốc như khi tạo).
+ */
 export const partnerUpdateBody = partnerFields.partial().extend({
   status: partnerStatus.optional(),
+  internal_company_id: objectId.nullable().optional(),
+  internal_account_id: objectId.nullable().optional(),
   request_id: uuid.optional(),
 });
 export type PartnerUpdateBody = z.infer<typeof partnerUpdateBody>;

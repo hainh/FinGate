@@ -245,11 +245,53 @@ export async function updatePartner(input: {
   if (b.tax_code !== undefined) next.tax_code = cleanText(b.tax_code);
   if (b.note !== undefined) next.note = cleanText(b.note);
   if (b.status !== undefined) next.status = cleanText(b.status);
-  assertValidPartnerRecord(next);
 
-  // Đối tác nội bộ: thông tin lấy từ công ty / TK gốc nên không sửa tay (chỉ đổi trạng thái); không đổi sang loại này.
+  /*
+   * Gắn công ty / tài khoản gốc cho đối tác nội bộ CHƯA có liên kết (dữ liệu cũ thiếu
+   * `internal_company_id` / `internal_account_id`): tên / NH / STK lấy lại từ TK gốc như khi tạo.
+   * Đã liên kết rồi ⇒ không đổi liên kết qua PATCH (thông tin đồng bộ từ gốc).
+   */
+  const wantLink = b.internal_company_id !== undefined || b.internal_account_id !== undefined;
+  const alreadyLinked = Boolean(prev.internal_company_id && prev.internal_account_id);
+  if (wantLink && before.type !== 'internal') {
+    throw new ApiError({
+      code: 'FG-VAL-001',
+      detail: 'internal_company_id / internal_account_id chỉ áp dụng cho đối tác loại "Công ty trong tập đoàn"',
+      errors: { internal_account_id: 'Chỉ dùng cho đối tác công ty trong tập đoàn' },
+    });
+  }
+  let internalLink: Awaited<ReturnType<typeof internalPartnerFieldsFor>> | null = null;
+  if (wantLink && before.type === 'internal') {
+    if (alreadyLinked) {
+      const same = idOf(prev.internal_company_id) === String(b.internal_company_id ?? '') && idOf(prev.internal_account_id) === String(b.internal_account_id ?? '');
+      if (!same) {
+        throw new ApiError({
+          code: 'FG-VAL-001',
+          detail: 'Đối tác đã gắn công ty / tài khoản gốc — tạo đối tác mới để trỏ tài khoản khác',
+          errors: { internal_account_id: 'Đối tác đã gắn tài khoản gốc, không đổi liên kết' },
+        });
+      }
+    } else {
+      internalLink = await internalPartnerFieldsFor({
+        ownerCompanyId: companyId,
+        internalCompanyId: (b.internal_company_id as string | null | undefined) ?? undefined,
+        internalAccountId: (b.internal_account_id as string | null | undefined) ?? undefined,
+        excludePartnerId: input.id,
+      });
+      next.name = cleanText(internalLink.name);
+      next.bank_name = cleanText(internalLink.bank_name);
+      next.account_number = cleanText(internalLink.account_number);
+      next.tax_code = null;
+      next.note = null;
+    }
+  }
+  // như khi tạo: thông tin đối tác nội bộ lấy từ TK gốc ⇒ không bắt buộc theo mẫu đối tác thường
+  if (!internalLink) assertValidPartnerRecord(next);
+
+  // Đối tác nội bộ ĐÃ gắn công ty / TK gốc: thông tin lấy từ gốc nên không sửa tay (chỉ đổi trạng thái); không đổi sang loại này.
+  // Chưa gắn (internal_company_id / internal_account_id còn thiếu) ⇒ cho phép sửa thông tin hoặc gắn liên kết ở trên.
   const infoFields = ['type', 'name', 'bank_name', 'account_number', 'tax_code', 'note'] as const;
-  if (before.type === 'internal' && infoFields.some((f) => before[f] !== next[f])) {
+  if (before.type === 'internal' && !internalLink && alreadyLinked && infoFields.some((f) => before[f] !== next[f])) {
     throw new ApiError({
       code: 'FG-VAL-001',
       detail: 'Đối tác công ty trong tập đoàn không sửa thông tin — thông tin lấy từ công ty / tài khoản gốc',
@@ -270,25 +312,36 @@ export async function updatePartner(input: {
   }
 
   const changes = diffSnapshots(before, next);
-  if (Object.keys(changes).length === 0) return { partner: prev, warnings: [] };
+  if (Object.keys(changes).length === 0 && !internalLink) return { partner: prev, warnings: [] };
 
-  const warnings = await findDuplicatePartners({
-    companyId,
-    name: next.name ?? '',
-    bank_name: next.bank_name,
-    account_number: next.account_number,
-    exclude_id: input.id,
-  });
+  const warnings = internalLink
+    ? []
+    : await findDuplicatePartners({
+        companyId,
+        name: next.name ?? '',
+        bank_name: next.bank_name,
+        account_number: next.account_number,
+        exclude_id: input.id,
+      });
 
   const now = new Date();
   const set: Record<string, unknown> = { updated_at: now };
   for (const f of Object.keys(changes) as PartnerTrackedField[]) set[f] = next[f];
   if (changes.name) set.name_key = normalizeNameKey(next.name ?? '');
+  if (internalLink) {
+    set.internal_company_id = internalLink.internal_company_id;
+    set.internal_account_id = internalLink.internal_account_id;
+  }
+  const historyChanges: Record<string, unknown> = { ...changes };
+  if (internalLink) {
+    historyChanges.internal_company_id = { from: prev.internal_company_id ? idOf(prev.internal_company_id) : null, to: internalLink.internal_company_id };
+    historyChanges.internal_account_id = { from: prev.internal_account_id ? idOf(prev.internal_account_id) : null, to: internalLink.internal_account_id };
+  }
   const result = await Models.Partner.updateOne(
     { _id: input.id, updated_at: prev.updated_at } as never,
     {
       $set: set,
-      $push: { history: { at: now, actor: { user_id: input.actor.user_id, name: input.actor.name ?? null }, changes } },
+      $push: { history: { at: now, actor: { user_id: input.actor.user_id, name: input.actor.name ?? null }, changes: historyChanges } },
     } as never,
   ).exec();
   if (result.matchedCount === 0) throw new ApiError({ code: 'FG-WF-011' });
@@ -307,7 +360,7 @@ export async function updatePartner(input: {
     action: 'partner.update',
     subject: { type: 'partner', id: input.id, code: prev.code },
     company_id: companyId,
-    diff_fields: changes as Record<string, unknown>,
+    diff_fields: historyChanges,
     request_id: input.requestId ?? null,
     ip: input.ip ?? null,
   });

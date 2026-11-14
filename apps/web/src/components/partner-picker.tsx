@@ -84,6 +84,9 @@ export interface PartnerFormEditing {
   tax_code: string | null;
   note?: string | null;
   status: PartnerStatus;
+  /** Chỉ loại `internal`: liên kết công ty / TK gốc — thiếu ⇒ cho phép sửa hoặc gắn lại. */
+  internal_company_id?: string | null;
+  internal_account_id?: string | null;
 }
 
 export interface PartnerFormModalProps {
@@ -121,6 +124,11 @@ export function PartnerFormModal({
   const currentCompanyId = useCurrentCompanyId();
   // "Công ty trong tập đoàn": đối tác = một TK (ngân hàng hoặc tiền mặt) của công ty khác; tên / NH / STK lấy từ TK gốc
   const editingInternal = editing?.type === 'internal';
+  // đối tác nội bộ CHƯA gắn công ty / TK gốc (thiếu internal_company_id hoặc internal_account_id):
+  // cho phép sửa thông tin và chọn công ty / tài khoản để gắn — như khi tạo
+  const editingInternalUnlinked = editingInternal && !(editing?.internal_company_id && editing?.internal_account_id);
+  // đã gắn đầy đủ ⇒ chỉ đổi trạng thái (thông tin đồng bộ từ gốc)
+  const internalLocked = editingInternal && !editingInternalUnlinked;
   // loại nội bộ không đổi qua lại với loại khác: không hiện trong danh sách loại khi sửa đối tác thường
   const types: PartnerType[] = isEdit ? (editingInternal ? ['internal'] : ALL_TYPES.filter((t) => t !== 'internal')) : partnerTypesFor(allowedTypes);
   // loại điền sẵn: theo ngữ cảnh; không có → Khách hàng (nếu được phép), rồi loại đầu tiên
@@ -132,17 +140,18 @@ export function PartnerFormModal({
   const [taxCode, setTaxCode] = useState(editing?.tax_code ?? '');
   const [note, setNote] = useState(editing?.note ?? '');
   const [status, setStatus] = useState<PartnerStatus>(editing?.status ?? 'active');
-  const [internalCompanyId, setInternalCompanyId] = useState('');
-  const [internalAccountId, setInternalAccountId] = useState('');
+  const [internalCompanyId, setInternalCompanyId] = useState(editing?.internal_company_id ?? '');
+  const [internalAccountId, setInternalAccountId] = useState(editing?.internal_account_id ?? '');
   const isInternal = type === 'internal';
   const homeCompanyId = companyId ?? currentCompanyId;
   // Đối tác nội bộ: chọn MỌI công ty trong tập đoàn (không chỉ công ty được phân công, kể cả công ty đang lập phiếu
   // = chuyển tiền giữa hai TK cùng công ty) và TK (ngân hàng hoặc tiền mặt) của công ty đó
-  const creatingInternal = isInternal && !isEdit;
-  const internalCompanies = useInternalCompanies(creatingInternal);
+  // Hiện ô chọn khi TẠO hoặc khi SỬA đối tác nội bộ chưa gắn công ty / TK gốc
+  const internalPickerOpen = isInternal && (!isEdit || editingInternalUnlinked);
+  const internalCompanies = useInternalCompanies(internalPickerOpen);
   const internalCompanyOptions = internalCompanyOptionsFor(internalCompanies.data?.items ?? [], homeCompanyId);
   const internalCompanyName = internalCompanies.data?.items.find((c) => c._id === internalCompanyId)?.name ?? '';
-  const internalAccounts = useInternalAccounts(creatingInternal && internalCompanyId ? internalCompanyId : null);
+  const internalAccounts = useInternalAccounts(internalPickerOpen && internalCompanyId ? internalCompanyId : null);
   const internalAccountRows = internalAccounts.data?.items ?? [];
   const internalAccountOptions = internalAccountRows.map((a) => ({
     value: a._id,
@@ -168,7 +177,7 @@ export function PartnerFormModal({
   const dupTextDebounced = useDebounced(dupText, 500);
   const dupInput = useMemo<PartnerDuplicateCheckBody | null>(() => {
     const t = JSON.parse(dupTextDebounced) as { name: string; bank: string; account: string };
-    if (isInternal || (t.name.length < 2 && !(t.bank && t.account))) return null;
+    if ((isInternal && !editingInternalUnlinked) || (t.name.length < 2 && !(t.bank && t.account))) return null;
     return {
       company_id: companyId ?? undefined,
       name: t.name,
@@ -176,7 +185,7 @@ export function PartnerFormModal({
       account_number: t.account || null,
       exclude_id: editing?._id ?? null,
     };
-  }, [dupTextDebounced, companyId, editing?._id, isInternal]);
+  }, [dupTextDebounced, companyId, editing?._id, isInternal, editingInternalUnlinked]);
   const dupCheck = usePartnerDuplicateCheck(dupInput);
   // cảnh báo chỉ hiện khi đã kiểm ĐÚNG nội dung đang có: đang chờ debounce / đang kiểm tên mới ⇒ không hiện cảnh báo của chữ cũ
   const dupWarnings = dupText === dupTextDebounced ? (dupCheck.data?.warnings ?? []) : [];
@@ -184,25 +193,34 @@ export function PartnerFormModal({
   const submit = async (): Promise<void> => {
     const trimmedName = name.trim();
     const errs: Record<string, string> = {};
-    // đối tác nội bộ: chỉ chọn công ty + TK khi tạo; khi sửa chỉ đổi trạng thái
-    if (isInternal && !isEdit) {
-      if (!internalCompanyId) errs.internal_company_id = 'Chọn công ty trong tập đoàn';
-      if (!internalAccountId) errs.internal_account_id = 'Chọn tài khoản của công ty đó';
-    } else if (!editingInternal) {
+    const checkInfoFields = (): void => {
       if (trimmedName.length < 2) errs.name = 'Tên đối tác tối thiểu 2 ký tự';
       else if (trimmedName.length > 200) errs.name = 'Tên đối tác tối đa 200 ký tự';
       if (bankName.trim().length > 200) errs.bank_name = 'Tên ngân hàng tối đa 200 ký tự';
       if (accountNumber.trim().length > 40) errs.account_number = 'Số tài khoản tối đa 40 ký tự';
       if (taxCode.trim().length > 20) errs.tax_code = 'Mã số thuế tối đa 20 ký tự';
       if (note.length > 2000) errs.note = 'Ghi chú tối đa 2000 ký tự';
+    };
+    // đối tác nội bộ: tạo thì bắt buộc chọn công ty + TK; sửa khi ĐÃ gắn chỉ đổi trạng thái;
+    // sửa khi CHƯA gắn ⇒ chọn đủ cả hai để gắn, hoặc bỏ trống để sửa thông tin trực tiếp
+    if (isInternal && !isEdit) {
+      if (!internalCompanyId) errs.internal_company_id = 'Chọn công ty trong tập đoàn';
+      if (!internalAccountId) errs.internal_account_id = 'Chọn tài khoản của công ty đó';
+    } else if (editingInternalUnlinked) {
+      if (internalCompanyId && !internalAccountId) errs.internal_account_id = 'Chọn tài khoản của công ty đó';
+      if (internalAccountId && !internalCompanyId) errs.internal_company_id = 'Chọn công ty trong tập đoàn';
+      if (!internalCompanyId && !internalAccountId) checkInfoFields();
+    } else if (!editingInternal) {
+      checkInfoFields();
     }
     setErrors(errs);
     setFormError(null);
     if (Object.keys(errs).length) return;
 
-    const body: PartnerWriteBody = editingInternal
+    const linkChosen = Boolean(internalCompanyId && internalAccountId);
+    const body: PartnerWriteBody = internalLocked
       ? {}
-      : isInternal
+      : isInternal && linkChosen
         ? {
             type,
             // tên hiển thị do máy chủ lấy từ TK gốc; gửi kèm để qua kiểm tra độ dài
@@ -254,7 +272,7 @@ export function PartnerFormModal({
       <div style={{ display: 'grid', gap: 'var(--fg-space-4)' }}>
         {formError ? <FgAlert tone="danger" title={formError.title} description={formError.detail} /> : null}
 
-        {editingInternal ? (
+        {internalLocked ? (
           <FgAlert
             tone="info"
             title="Đối tác công ty trong tập đoàn"
@@ -262,7 +280,15 @@ export function PartnerFormModal({
           />
         ) : null}
 
-        {isInternal && !isEdit ? (
+        {editingInternalUnlinked ? (
+          <FgAlert
+            tone="attention"
+            title="Đối tác chưa gắn công ty / tài khoản gốc"
+            description="Chọn công ty và tài khoản trong tập đoàn để gắn (tên, ngân hàng và số tài khoản sẽ lấy từ tài khoản gốc), hoặc bỏ trống và sửa trực tiếp thông tin bên dưới."
+          />
+        ) : null}
+
+        {internalPickerOpen ? (
           <>
             <FgAlert
               tone="info"
@@ -333,7 +359,7 @@ export function PartnerFormModal({
           )}
         </FgField>
 
-        {!isInternal && !editingInternal ? (
+        {!isInternal || editingInternalUnlinked ? (
           <FgField
             label="Tên đối tác"
             required
@@ -351,7 +377,7 @@ export function PartnerFormModal({
         ) : null}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 'var(--fg-space-4)' }}>
-          {!isInternal && !editingInternal ? (
+          {!isInternal || editingInternalUnlinked ? (
             <>
               <FgField
                 label="Ngân hàng"
@@ -379,7 +405,7 @@ export function PartnerFormModal({
           ) : null}
         </div>
 
-        {!isInternal && !editingInternal ? (
+        {!isInternal || editingInternalUnlinked ? (
           <FgField label="Ghi chú" error={errors.note}>
             <FgTextarea value={note} onChange={(e) => setNote(e.target.value)} maxLength={2000} />
           </FgField>
