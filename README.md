@@ -31,6 +31,12 @@ pnpm start                      # chạy API từ apps/api/dist/server.js
 pnpm infra:down                 # tắt MongoDB local
 ```
 
+Kết nối DB remote:
+
+```
+ssh -N -L 37117:127.0.0.1:27117 dev
+````
+
 ## Cấu trúc
 
 ```text
