@@ -38,7 +38,7 @@ const NAV: NavItem[] = [
   { to: '/canh-bao', label: 'Cảnh báo', glyph: '⚠', mobile: true, perm: 'doc:read', match: ['/canh-bao'] },
   { to: '/chi', label: 'Chi', glyph: '↗', mobile: true, perm: 'doc:read', match: ['/chi', '/ho-so/chi'] },
   { to: '/thu', label: 'Thu', glyph: '↙', mobile: true, perm: 'doc:read', match: ['/thu', '/ho-so/thu'] },
-  { to: '/ngan-hang/taikhoan', label: 'Ngân hàng', glyph: '▤', mobile: true, perm: 'bank:read', match: ['/ngan-hang', '/ngan-hang/taikhoan', '/ngan-hang/chuyen-noi-bo', '/ho-so/noi-bo'] },
+  { to: '/ngan-hang/taikhoan', label: 'Tài khoản tiền', glyph: '▤', mobile: true, perm: 'bank:read', match: ['/ngan-hang', '/ngan-hang/taikhoan', '/ngan-hang/chuyen-noi-bo', '/ho-so/noi-bo'] },
   { to: '/ngan-hang/khoan-vay', label: 'Nợ ngân hàng', glyph: '⌂', mobile: true, perm: 'loan:read', match: ['/ngan-hang/khoan-vay'] },
   { to: '/ngan-hang/dao-han', label: 'Đáo hạn', glyph: '⧗', mobile: true, perm: 'loan:read', dev: true, match: ['/ngan-hang/dao-han', '/ho-so/dao-han'] },
   { to: '/cong-no', label: 'Công nợ', glyph: '≡', mobile: true, perm: 'debt:read', match: ['/cong-no'] },
