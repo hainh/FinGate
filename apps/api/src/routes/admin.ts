@@ -8,7 +8,6 @@
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import mongoose from 'mongoose';
-import ExcelJS from 'exceljs';
 import {
   ApiError,
   DEFAULT_AMOUNT_LIMIT_MINOR,
@@ -25,7 +24,7 @@ import {
 } from '@fingate/shared';
 import { Models } from '../db/models.ts';
 import { defineRoute, requestCtx, requireActor, requirePerm, requireScope, validate, revokeAllUserSessions } from '../lib/http.ts';
-import { ok, jsonSafe } from '../lib/serialize.ts';
+import { ok } from '../lib/serialize.ts';
 import {
   companyUpsertBody,
   delegationBody,
@@ -79,6 +78,7 @@ import { resolveCashRequiresKtt, type CashApprovalConfig } from '../domain/workf
 import { DECISION_STATUSES, asBigInt, wire } from '../domain/queries/index.ts';
 import { mailTemplates, sendMail } from '../mail/sender.ts';
 import { reportPreset } from '../domain/reports/index.ts';
+import { buildExportSheet, toCsv, writeXlsx } from '../domain/reports/export-sheet.ts';
 import { exportRequestBody } from '@fingate/shared';
 import { getEnv } from '../env.ts';
 import { assertVoucherPartner } from '../domain/vouchers/rules.ts';
@@ -2239,7 +2239,7 @@ export function adminRoutes(app: FastifyInstance): void {
 
   /* ============================== EXPORT EXCEL ============================== */
 
-  /** exceljs stream trực tiếp response (K-12) + watermark người xuất; quá trần → job. */
+  /** exceljs stream trực tiếp response (K-12) + watermark người xuất; quá trần → từ chối. */
   app.route(
     defineRoute({
       method: 'POST',
@@ -2273,14 +2273,17 @@ export function adminRoutes(app: FastifyInstance): void {
           });
         }
 
-        const wb = new ExcelJS.stream.xlsx.WorkbookWriter({ filename: 'export.xlsx', stream: reply.raw, useSharedStrings: true });
-        const ws = wb.addWorksheet(result.title);
-        ws.columns = result.columns.map((c) => ({ header: c.label, key: c.key, width: 22 }));
-        for (const row of result.rows) ws.addRow(jsonSafe(row) as Record<string, unknown>);
-        ws.addRow({});
-        ws.addRow({ [result.columns[0]?.key ?? 'note']: `Xuất bởi ${actor.name} · ${new Date().toLocaleString('vi-VN')} · ${result.scope_label}` });
-        ws.commit();
-        await wb.commit();
+        // TIỀN TRONG FILE LÀ SỐ, đơn vị ở cột riêng: SUM/PIVOT được, không còn JSON/BigInt trong ô.
+        const sheet = buildExportSheet(result.columns, result.rows);
+        const watermark = `Xuất bởi ${actor.name} · ${new Date().toLocaleString('vi-VN')} · ${result.scope_label}`;
+        const filename = `${preset}.${body.format === 'csv' ? 'csv' : 'xlsx'}`;
+        reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+        if (body.format === 'csv') {
+          reply.header('Content-Type', 'text/csv; charset=utf-8');
+          return reply.code(200).send(toCsv(sheet, watermark));
+        }
+        reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        await writeXlsx(sheet, reply.raw, { sheetName: result.title, watermark, filename });
         await mirrorAudit({
           at: new Date(),
           actor: { user_id: actor.user_id, name: actor.name, role: actor.role },

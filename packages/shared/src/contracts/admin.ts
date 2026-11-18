@@ -203,6 +203,11 @@ export const reportColumn = z.object({
   sortable: z.boolean().default(false),
   /** cột cần quyền riêng — ẩn kèm lý do (§19.5-4). */
   permission: z.string().optional(),
+  /**
+   * Đơn vị của giá trị khi XUẤT FILE (vd lãi suất lưu chuỗi "9,5" → unit "%/năm"):
+   * file ghi THÀNH SỐ + tách đơn vị ra cột riêng để SUM/tính tiếp được. UI bỏ qua field này.
+   */
+  unit: z.string().optional(),
 });
 
 export const reportResult = z.object({

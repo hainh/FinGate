@@ -1691,5 +1691,27 @@ Mục tiêu: giúp người dùng **sớm phát hiện phiếu trùng** khi lậ
 - **Web**: `SimilarDocumentsCard` (`apps/web/src/components/similar-documents.tsx`) + hook `useSimilarDocuments` (`app/v2/documents.ts`, `retry: false`, lỗi ⇒ ẩn card), debounce đối tác + số tiền 400 ms. Hiện ở **hai chỗ**: cột phải form lập/sửa phiếu **ngay dưới thẻ "Nộp"** (`create-form.tsx`) và **cuối tab "Tóm tắt"** của hồ sơ (`document-detail.tsx`, `hideWhenIncomplete` — phiếu cũ chưa có đối tác thì ẩn). Mỗi dòng: mã phiếu link tới `/ho-so/...` · chip trạng thái · số tiền · title — đối tác — hạn — người tạo · chip "Trùng số tiền" / "Lệch x,y%" (+ chip "khớp theo tên" cho phiếu cũ). Chưa đủ đối tác + số tiền ⇒ card hiện dòng gợi ý (form); tab Tóm tắt ⇒ ẩn.
 - **Kiểm thử**: `apps/api/src/domain/vouchers/similar.test.ts` (12 ca thuần: ngưỡng ±5% biên chặn, tiền tệ, matched_by hai đường, sắp xếp + limit, % làm tròn 1 chữ số); `formatPercentVN` trong `apps/web/src/app/v2/documents.test.ts`.
 
+## 32. Xuất Excel/CSV — tiền phải là SỐ, đơn vị ở cột riêng (RPT-14)
+
+**Lỗi**: `POST /exports` ghi ô bằng `ws.addRow(jsonSafe(row))`. `jsonSafe` chỉ đổi BigInt → chuỗi, còn `WireAmount` (`{minor, currency, decimals}`) vẫn là object → exceljs serialize thành **chuỗi JSON** trong ô. Kiểm chứng bằng cách đọc lại file cũ: ô "Thu" nhận `type=3 (String)`, giá trị `{"minor":"2500000000","currency":"VND","decimals":0}` ⇒ không SUM / PIVOT / lọc số được. Kèm theo: `format: 'csv'` khai báo trong hợp đồng nhưng route bỏ qua (tải về luôn là .xlsx), và mọi file thiếu numFmt nên số không có dấu phân cách.
+
+**Cách sửa** — module mới `apps/api/src/domain/reports/export-sheet.ts` (toàn bộ bố cục file nằm ở một chỗ, dùng cho 16 preset):
+
+- `buildExportSheet(columns, rows)` dựng bảng từ **khai báo cột** của preset (không phải từ khoá trong `rows`), mọi ô chỉ còn số / ngày / text:
+  - cột tiền (`type: 'money' | 'compact'`) → **số thật** ở đơn vị lớn (`scaleMinor` dùng chuỗi, không chia float ⇒ giữ chính xác tới chữ số cuối);
+  - **đơn vị tiền nằm ở CỘT KHÁC**: cả bảng một loại tiền (VND — gần như luôn đúng) → ĐÚNG MỘT cột "Đơn vị" ở cuối (báo cáo 6 cột tiền như *Theo đối tác* thành 7 cột, không phải 12); bảng lẫn nhiều loại tiền (vd *Số dư ngân hàng* có TK USD + VND) → cột "… — đơn vị" riêng ngay sau từng cột tiền, vì một ô đơn vị chung lúc đó mô tả sai cột này;
+  - `decimals` lấy theo **MÃ TIỀN** (`currencyDecimals`), không lấy trường `decimals` trên wire — `wire(minor, currency)` luôn ghi `0`, dùng trường đó thì USD/EUR bị xuất **to gấp 100 lần**;
+  - `number`/`days`/`percent` → số thật (percent format `0.0"%"` nhưng vẫn là số 0–100); `date` → **Date** trong Excel (dd/mm/yyyy) để sort/filter theo tháng đúng; `boolean` → "Có"/"Không"; object không rõ hình thái → text có nghĩa (name/label/title) chứ không bao giờ ra JSON;
+  - cột text thuần **không** bị ép thành số ⇒ "Số TK" `0011000566003` giữ nguyên số 0 đầu, không thành `1.05E+12`;
+  - **không có dòng TỔNG** (quyết định bàn giao): file chỉ gồm header + dữ liệu thô + watermark; người dùng tự Sum/chọn vùng trong Excel. Watermark nằm ngoài vùng `autoFilter` nên không lọt vào danh sách lọc.
+- `writeXlsx(sheet, stream, …)` stream trực tiếp `reply.raw` (K-12) và thêm: `useStyles: true` (**bắt buộc** — thiếu nó exceljs dùng `StylesXform.Mock` và âm thầm bỏ hết `numFmt`/font), freeze dòng 1, autoFilter đúng vùng dữ liệu, header đậm, độ rộng cột theo loại.
+- `toCsv(sheet, watermark)` dựng CSV thật cho `format: 'csv'`: phân cách `;`, số dùng **dấu phẩy** thập phân, có BOM (tiếng Việt không lỗi font, Excel vi-VN đọc ra SỐ).
+- Route `admin.ts › POST /exports`: gọi `buildExportSheet` + `writeXlsx`/`toCsv`, đặt `Content-Type` + `Content-Disposition` theo format; audit `report.export` giữ nguyên.
+- Chuỗi số có đơn vị: `ReportColumn.unit` (tuỳ chọn, `packages/shared/src/contracts/admin.ts`) chỉ dành cho FILE XUẤT — cột lãi suất lưu chuỗi `"9,5"` → số `9,5` + cột "Lãi suất — đơn vị" `%/năm`; UI bỏ qua field này nên màn báo cáo không đổi. Sửa thêm `interest_rate` hết ghi chuỗi `"null"`/`"undefined"` khi khoản vay chưa có lãi suất.
+
+- **Kiểm thử**: `apps/api/src/domain/reports/export-sheet.test.ts` (17 ca): bố cục cột theo số loại tiền, USD/EUR đúng 2 chữ số, `null` không bịa số 0, BigInt/Long/chuỗi minor, chữ số thuần (Số TK) không bị ép thành số, `unit` cho lãi suất, CSV dấu phẩy + BOM, và một ca **ghi file .xlsx thật rồi đọc lại** khẳng định ô tiền là `number` + `numFmt '#,##0'`, header đậm, freeze, `autoFilter` không gồm watermark. `pnpm -F @fingate/api test` 822 pass, `pnpm -r typecheck` + lint xanh.
+- **Chưa xử lý / lưu ý**: preset *Vay ngân hàng*, *Đáo hạn* và *Công nợ phải thu/phải trả* gọi `wire(minor)` mà **bỏ qua trường `currency`** của `bank_debts` / `debt_vouchers` ⇒ mọi ô tiền của ba báo cáo đó mang VND kể cả khi khoản vay/công nợ là USD. Chuẩn hoá phải làm ở tầng đọc của báo cáo (UI và Excel cùng một nguồn số — sửa một phía sẽ lệch số liệu giữa màn hình và file), và tổng cộng theo từng loại tiền thay vì cộng dồn lẫn lộn.
+
+
 
 

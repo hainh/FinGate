@@ -64,6 +64,11 @@ export interface ReportColumn {
   align: 'left' | 'right' | 'center';
   sortable?: boolean;
   permission?: string;
+  /**
+   * Chỉ dùng cho FILE XUẤT (Excel/CSV): cột có giá trị số nhưng lưu dạng chuỗi (vd lãi suất "9,5")
+   * → xuất ra THÀNH SỐ + tách đơn vị sang cột riêng để người dùng tính tiếp được. UI bỏ qua field này.
+   */
+  unit?: string;
 }
 
 export interface ReportResult {
@@ -407,7 +412,8 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
           limit_compact: compactOf(principal),
           outstanding: wire(outstanding),
           outstanding_compact: compactOf(outstanding),
-          interest_rate: String(l.interest_rate),
+          // chuỗi lãi suất thô ("9,5") — Excel đổi THÀNH SỐ qua `unit` (export-sheet); UI giữ nguyên text
+          interest_rate: l.interest_rate == null ? '' : String(l.interest_rate),
           maturity_date: String(l.maturity_date),
           days_to_due: daysUntil(String(l.maturity_date)),
           status: String(l.status),
@@ -416,7 +422,7 @@ export async function reportPreset(preset: string, input: ReportInput): Promise<
       const total = out.reduce((a, r) => a + asBigInt(r.outstanding.minor), 0n);
       return {
         ...base,
-        columns: [T('company_name', 'Công ty'), T('bank_name', 'Ngân hàng'), T('contract_code', 'Mã khoản'), C('limit', 'Số tiền vay'), C('outstanding', 'Dư nợ'), T('interest_rate', 'Lãi suất'), D('maturity_date', 'Hạn trả'), N('days_to_due', 'Còn lại')],
+        columns: [T('company_name', 'Công ty'), T('bank_name', 'Ngân hàng'), T('contract_code', 'Mã khoản'), C('limit', 'Số tiền vay'), C('outstanding', 'Dư nợ'), T('interest_rate', 'Lãi suất', { unit: '%/năm' }), D('maturity_date', 'Hạn trả'), N('days_to_due', 'Còn lại')],
         rows: out,
         totals: { outstanding: wire(total) },
         kpi: [{ label: 'Tổng dư nợ', value: formatMoney(money(total), { mode: 'kpi' }), note: `${out.length} khoản` }],
