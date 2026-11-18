@@ -39,6 +39,7 @@ import { FgEmptyState, FgModal, FgSkeletonParagraphs, FgSkeletonTable, FgTable, 
 import { AttachmentDeleteModal, AttachmentPreviewModal, AttachmentRow, AttachmentUploadModal, problemText } from '../components/attachments.tsx';
 import { FgApprovalTimeline, FgDecisionPack, OwnerLine, directionOf } from '../components/finance.tsx';
 import { AccountBorrowBanner, AutomationPanel, LinksTab, LoanBanner, OffsetBanner, PartnerCard, TagsCard } from '../components/voucher-v2.tsx';
+import { SimilarDocumentsCard } from '../components/similar-documents.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useToast } from '../components/pagekit.tsx';
 import { ApprovalConfirmModal, useTransitionRunner } from './approve-modal.tsx';
@@ -347,6 +348,10 @@ function SummaryTab({ doc }: { doc: DocumentDetail }): ReactNode {
       <FgQuery query={pack} skeleton={<FgSkeletonTable rows={5} cols={3} />}>
         {(p) => <FgDecisionPack pack={p} direction={directionOf(doc.kind)} />}
       </FgQuery>
+      {/* DOC-01/02: cảnh báo phiếu tương tự ở CUỐI tab Tóm tắt (loại trừ chính phiếu đang mở; phiếu cũ chưa có đối tác ⇒ ẩn). */}
+      <div style={{ marginTop: 'var(--fg-space-4)' }}>
+        <SimilarDocumentsCard kind={doc.kind} companyId={doc.company_id} partnerId={doc.partner_id} amountMinor={doc.amount.minor} currency={doc.amount.currency} excludeId={doc._id} hideWhenIncomplete />
+      </div>
     </>
   );
 }

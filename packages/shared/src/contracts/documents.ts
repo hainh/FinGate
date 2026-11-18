@@ -4,7 +4,7 @@
 
 import { z } from 'zod';
 import { DOC_KINDS, ROLES } from '../status/index.js';
-import { actionEnum, businessDate, businessDateTime, docKind, docVersion, evidenceType, minorNonNeg, moneyField, moneyWire, objectId, roleEnum, statusKey, uuid } from './common.js';
+import { actionEnum, businessDate, businessDateTime, currencyCode, docKind, docVersion, evidenceType, minorNonNeg, moneyField, moneyWire, objectId, roleEnum, statusKey, uuid } from './common.js';
 import { automationRuleCode, automationRunRow } from './automation.js';
 import { partnerRef } from './partners.js';
 import { linkObjectType, linkRow, linkSplit } from './links.js';
@@ -378,6 +378,54 @@ export const queueProcessedQuery = z.object({
 });
 
 export type QueueProcessedQuery = z.infer<typeof queueProcessedQuery>;
+
+/* ------------------------------------------------------------------ *
+ * Phát hiện phiếu tương tự (DOC-01/DOC-02) — CẢNH BÁO, KHÔNG chặn lưu.
+ * Cùng nguyên tắc với cảnh báo trùng đối tác (v2 §5.1): phiếu bị nghi trùng khi
+ * CÙNG loại (thu/chi) · CÙNG công ty · CÙNG đối tác · số tiền lệch trong ±5% (cùng tiền tệ).
+ * ------------------------------------------------------------------ */
+
+/** Ngưỡng "số tiền gần giống": ±5% so với số tiền đưa vào. */
+export const SIMILAR_AMOUNT_TOLERANCE_PERCENT = 5;
+
+/** GET /documents/similar — tham số kiểm tra phiếu tương tự khi tạo/sửa phiếu thu·chi. */
+export const similarDocumentsQuery = z.object({
+  /** Chỉ phiếu thu/chi — đảo hạn / chuyển nội bộ không có ô đối tác nghiệp vụ. */
+  kind: z.enum(['spend', 'income']),
+  company_id: objectId.optional().describe('Mặc định theo công ty đang làm việc'),
+  partner_id: objectId.describe('Đối tác trùng khớp (ID danh bạ công ty)'),
+  amount_minor: z.string().regex(/^[1-9]\d*$/, 'Số tiền phải là số nguyên lớn hơn 0'),
+  currency: currencyCode.optional().describe('Mặc định VND — chỉ so với phiếu cùng tiền tệ'),
+  /** Sửa phiếu: loại trừ chính phiếu đang mở. */
+  exclude_id: objectId.optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+});
+export type SimilarDocumentsQuery = z.infer<typeof similarDocumentsQuery>;
+
+/** Một phiếu bị nghi trùng — danh sách đã được server sắp theo mức nghi ngờ giảm dần. */
+export const similarDocumentRow = z.object({
+  _id: objectId,
+  code: z.string(),
+  kind: docKind,
+  kind_label: z.string(),
+  status: z.string(),
+  status_label: z.string(),
+  title: z.string(),
+  amount: moneyWire,
+  partner_id: objectId.nullable(),
+  partner_name: z.string().nullable().describe('Tên đối tác của phiếu (kể cả khớp theo tên tự do phiếu cũ)'),
+  created_by_name: z.string(),
+  created_at: z.string().nullable(),
+  planned_date: z.string(),
+  /** `payee_name` = phiếu cũ chưa có `partner_id`, khớp theo tên người thụ nộp tự do. */
+  matched_by: z.enum(['partner_id', 'payee_name']),
+  exact_amount: z.boolean().describe('Bằng đúng số tiền đưa vào'),
+  /** Số tiền phiếu ứng viên − số tiền đưa vào (minor units, chuỗi có dấu). */
+  amount_diff_minor: z.string(),
+  /** |lệch| theo % so với số tiền đưa vào, làm tròn 1 chữ số thập phân. */
+  amount_diff_percent: z.number(),
+});
+export type SimilarDocumentRow = z.infer<typeof similarDocumentRow>;
 
 /** POST /documents/{id}/transition (architecture §9.1). */
 export const transitionBody = z

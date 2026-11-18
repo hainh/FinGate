@@ -66,6 +66,7 @@ import { FgSegmented } from '../components/uitk.tsx';
 import { FgPageHeader } from '../components/shell.tsx';
 import { FgQuery, useToast } from '../components/pagekit.tsx';
 import { PartnerPicker, partnerTypesFor } from '../components/partner-picker.tsx';
+import { SimilarDocumentsCard } from '../components/similar-documents.tsx';
 import { TagInput } from '../components/tag-input.tsx';
 import { usePageTitle } from '../lib/page-title.ts';
 
@@ -1322,6 +1323,15 @@ export function DocumentFormScreen({ kind }: { kind: PageKind }): ReactNode {
               Cần đủ chứng từ bắt buộc trước khi gửi (FG-WF-003).
             </FgText>
           </FgCard>
+          {/* DOC-01/02: cảnh báo phiếu tương tự (cùng loại · cùng đối tác · tiền lệch ±5%) — ngay dưới thẻ "Nộp". */}
+          <SimilarDocumentsCard
+            kind={kind}
+            companyId={currentCompany}
+            partnerId={f.partnerId}
+            amountMinor={f.amount && f.amount.minor > 0n ? f.amount.minor.toString() : null}
+            currency={f.amount?.currency ?? null}
+            excludeId={id ?? null}
+          />
         </div>
       </div>
     </>

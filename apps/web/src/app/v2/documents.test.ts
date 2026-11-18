@@ -13,6 +13,7 @@ import {
   bankAccountOptionLabel,
   debtDirectionForVoucher,
   defaultLoanDueDate,
+  formatPercentVN,
   hasAutoLoanRun,
   internalPartnerTargetAccountId,
   isSameCompanyTransfer,
@@ -339,5 +340,25 @@ describe('refreshDocumentAfterSave', () => {
 
     expect(qc.getQueryData(['document', SCOPE, DOC])).toEqual(detail('existing'));
     expect(qc.getQueryState(['document', SCOPE, DOC])?.isInvalidated).toBe(true);
+  });
+});
+
+describe('formatPercentVN — % hiển thị kiểu VN (card cảnh báo phiếu tương tự)', () => {
+  it('dấu chấm thập phân → dấu phẩy; absolute value (server trả |lệch|)', () => {
+    expect(formatPercentVN(2.5)).toBe('2,5');
+    expect(formatPercentVN(0.3)).toBe('0,3');
+    expect(formatPercentVN(-4.8)).toBe('4,8');
+  });
+
+  it('số nguyên không thêm ",0"', () => {
+    expect(formatPercentVN(5)).toBe('5');
+    expect(formatPercentVN(0)).toBe('0');
+  });
+
+  it('giá trị hỏng ⇒ "—" (tính năng cảnh báo không in ra NaN)', () => {
+    expect(formatPercentVN(NaN)).toBe('—');
+    expect(formatPercentVN(Infinity)).toBe('—');
+    expect(formatPercentVN(null)).toBe('—');
+    expect(formatPercentVN(undefined)).toBe('—');
   });
 });

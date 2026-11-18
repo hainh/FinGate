@@ -15,8 +15,8 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
-import { bankDebtStatusLabel, ddmmyyyy, formatMoney, money, moneyFromWire, statusLabel, type PartnerRef } from '@fingate/shared';
-import { apiData } from '../api.ts';
+import { bankDebtStatusLabel, ddmmyyyy, formatMoney, money, moneyFromWire, statusLabel, type PartnerRef, type SimilarDocumentRow } from '@fingate/shared';
+import { apiCall, apiData } from '../api.ts';
 import { useAuth } from '../store.tsx';
 import type { BankAccountRow, DocumentDetail, MoneyWire } from '../types.ts';
 import { interestRateText, type LoanRow } from './debts.ts';
@@ -214,6 +214,15 @@ export function normalizeInterestRate(text: string): string | null {
   const t = text.trim();
   if (!t) return null;
   return /^\d+([.,]\d+)?$/.test(t) ? interestRateText(t) : t;
+}
+
+/**
+ * % hiển thị kiểu VN: phân cách thập phân là dấu phẩy (docs/02_design_system.md), không dùng dấu chấm.
+ * Server đã làm tròn 1 chữ số; giá trị không hợp lệ ⇒ `—` (tính năng cảnh báo không được in ra `NaN`).
+ */
+export function formatPercentVN(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
+  return String(Math.abs(n)).replace('.', ',');
 }
 
 /** Quan hệ gán thủ công hợp lệ theo loại phiếu và loại đối tác (đối chiếu `RELATION_SPECS` của server). */
@@ -459,6 +468,30 @@ export function useLoanDefaults(companyId: string | null | undefined) {
     enabled: !!companyId,
     staleTime: 5 * 60_000,
     queryFn: () => apiData<LoanDefaults>('/automation/loan-defaults', { query: { company_id: companyId ?? undefined } }),
+  });
+}
+
+/**
+ * Kiểm phiếu tương tự khi tạo/sửa phiếu thu·chi (DOC-01/DOC-02): cùng loại · cùng công ty ·
+ * cùng đối tác · số tiền lệch trong ±5% · cùng tiền tệ (`currency` — thiếu ⇒ server mặc định VND).
+ * CHỈ đọc — CẢNH BÁO, không chặn lưu (cùng nguyên tắc
+ * với `usePartnerDuplicateCheck`). `params` = null ⇒ không gọi (form chưa đủ đối tác / số tiền).
+ * Server đã sắp xếp theo mức nghi ngờ (đúng số tiền trước) — client không sort lại.
+ * Response là `{ items }`, KHÔNG bọc `data` → dùng `apiCall`.
+ */
+export function useSimilarDocuments(params: { kind: 'spend' | 'income'; companyId: string; partnerId: string; amountMinor: string; currency?: string | null; excludeId?: string } | null) {
+  const { scope } = useAuth();
+  // Thứ tự khoá trên wire khớp `similarDocumentsQuery` của shared; `scope` để apiCall suy header `x-company-scope`.
+  const query = params
+    ? { kind: params.kind, company_id: params.companyId, partner_id: params.partnerId, amount_minor: params.amountMinor, currency: params.currency ?? undefined, exclude_id: params.excludeId, scope: params.companyId }
+    : undefined;
+  return useQuery({
+    queryKey: ['similar-documents', scope, params],
+    enabled: params != null,
+    retry: false,
+    // Kết quả của nội dung CŨ không được giữ khi đang kiểm nội dung mới (card phải phản ánh số tiền / đối tác hiện tại).
+    placeholderData: undefined,
+    queryFn: () => apiCall<{ items: SimilarDocumentRow[] }>('/documents/similar', { query }),
   });
 }
 

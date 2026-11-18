@@ -54,6 +54,7 @@ import {
   scenarioBody,
   searchQuery,
   settingUpsertBody,
+  similarDocumentsQuery,
   statementImportBody,
   transitionBody,
   twoFactorBody,
@@ -83,6 +84,8 @@ export const changePasswordBodySchema = j(changePasswordBody);
 export const documentCreateBodySchema = j(documentCreateBody);
 export const documentUpdateBodySchema = j(documentUpdateBody);
 export const documentListQuerySchema = j(documentListQuery);
+/** GET /documents/similar — cảnh báo phiếu tương tự (±5%, v2 §5.1) — chỉ tài liệu OpenAPI, zod validate trong handler. */
+export const similarDocumentsQuerySchema = j(similarDocumentsQuery);
 export const transitionBodySchema = j(transitionBody);
 export const documentDeleteBodySchema = j(documentDeleteBody);
 export const opinionBodySchema = j(opinionBody);

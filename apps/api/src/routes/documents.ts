@@ -26,7 +26,7 @@ import {
 } from '@fingate/shared';
 import { Models } from '../db/models.ts';
 import { cas, alreadyProcessed } from '../db/cas.ts';
-import { defineRoute, requestCtx, requireActor, requireScope, validate } from '../lib/http.ts';
+import { defineRoute, requestCtx, requireActor, requireScope, assertCompanyScope, validate } from '../lib/http.ts';
 import { ok } from '../lib/serialize.ts';
 import {
   attachmentConfirmBodySchema,
@@ -38,6 +38,7 @@ import {
   documentUpdateBodySchema,
   opinionBodySchema,
   rolloverResultBodySchema,
+  similarDocumentsQuerySchema,
   transitionBodySchema,
 } from './schemas.ts';
 import {
@@ -45,6 +46,7 @@ import {
   documentDeleteBody,
   documentListQuery,
   queueProcessedQuery,
+  similarDocumentsQuery,
   documentUpdateBody,
   documentTagsBody,
   documentPartnerBody,
@@ -93,6 +95,7 @@ import {
   type VoucherKind,
 } from '../domain/vouchers/rules.ts';
 import { isOffsetRuleLink, releaseOffsetRuleLinks } from '../domain/vouchers/offset.ts';
+import { findSimilarDocuments } from '../domain/vouchers/similar.ts';
 import { planToAccountBorrowInput, planToStoredAccountBorrow, resolveAccountBorrow, storedAccountBorrowToPlan } from '../domain/vouchers/account-borrow.ts';
 import {
   mayChangeVoucherTags,
@@ -163,6 +166,37 @@ export function documentRoutes(app: FastifyInstance): void {
           page: q.page,
         });
         return ok(reply, { items, total, limit: q.limit, page: q.page }, { maxAge: 15 });
+      },
+    }),
+  );
+
+  /**
+   * DOC-02 — kiểm tra "phiếu tương tự" khi tạo/sửa phiếu thu·chi: cùng loại · cùng công ty ·
+   * cùng đối tác · số tiền ±5% · cùng tiền tệ. CẢNH BÁO, không chặn lưu (cùng nguyên tắc v2 §5.1
+   * với cảnh báo trùng đối tác). Đăng TRƯỚC route `/documents/:id` cho rõ thứ tự.
+   */
+  app.route(
+    defineRoute({
+      method: 'GET',
+      url: '/documents/similar',
+      config: { perms: ['doc:read'] as Permission[], screen: 'CHI-01', summary: 'Kiểm tra phiếu tương tự (cùng loại, cùng đối tác, số tiền ±5%) — cảnh báo, không chặn' },
+      schema: { tags: ['documents'], querystring: similarDocumentsQuerySchema },
+      handler: async (req, reply) => {
+        const actor = requireActor(req);
+        const q = validate(similarDocumentsQuery, req.query);
+        const companyId = q.company_id ?? actor.company_id;
+        if (!companyId) throw new ApiError({ code: 'FG-RBAC-002', detail: 'Chưa chọn công ty' });
+        assertCompanyScope(req, companyId);
+        const items = await findSimilarDocuments({
+          companyId,
+          kind: q.kind,
+          partnerId: q.partner_id,
+          amountMinor: BigInt(q.amount_minor),
+          currency: q.currency ?? 'VND',
+          excludeId: q.exclude_id,
+          limit: q.limit,
+        });
+        return ok(reply, { items });
       },
     }),
   );
