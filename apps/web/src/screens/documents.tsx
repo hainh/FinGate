@@ -8,7 +8,7 @@
  * Bulk bar hiển thị TỔNG TIỀN tính qua shared `sum()` (BigInt minor units, không Number()).
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Badge, Select, type TableColumnsType } from 'antd';
 import {
@@ -73,8 +73,18 @@ const DEFAULT_PAGE_SIZE = 50;
  */
 export const PENDING_APPROVAL_STATUSES: string[] = ['pending.ktt', 'pending.pgd', 'pending.gd', 'pending.ptg', 'pending.chairman'];
 
+/**
+ * Một khối swimlane: nhãn khối + các TRẠNG THÁI thuộc khối. Mỗi khối là một bảng độc lập
+ * (query `/documents?status=…` riêng → sort theo cột và phân trang riêng).
+ */
+export interface Swimlane {
+  key: string;
+  title: string;
+  statuses: string[];
+}
+
 /** CHI-01 — swimlane màn Chi: "đã duyệt chờ chi" lên đầu cho kế toán thực thi. */
-const SPEND_LANES = [
+const SPEND_LANES: Swimlane[] = [
   { key: 'cho-chi', title: 'Đã duyệt — chờ chi', statuses: ['approved', 'processing'] },
   { key: 'cho-duyet', title: 'Đang chờ duyệt', statuses: PENDING_APPROVAL_STATUSES },
   { key: 'nhap', title: 'Nháp / cần bổ sung / từ chối', statuses: ['draft', 'changes_requested', 'rejected'] },
@@ -289,8 +299,10 @@ export interface DocListConfig {
   /**
    * Chế độ swimlane: nhóm hồ sơ theo trạng thái thành các khối, khối đầu hiển thị trên
    * cùng (vd màn Chi: "Đã duyệt — chờ chi" lên đầu cho kế toán). Bỏ lọc trạng thái.
+   * MỖI KHỐI là một bảng ĐỘC LẬP — sắp xếp theo cột riêng, phân trang riêng (bằng hoặc
+   * dưới cỡ trang mặc định thì ẩn phân trang). Bộ lọc chung vẫn nằm trên URL.
    */
-  swimlanes?: { key: string; title: string; statuses: string[] }[];
+  swimlanes?: Swimlane[];
   /**
    * APPR-01 — chia hàng chờ thành 2 tab theo thứ tự cấp duyệt (docs/03_screens.md):
    * "Chờ tôi duyệt" (đến lượt tôi ngay, badge = số phiếu) và "Chờ đến lượt tôi duyệt"
@@ -309,6 +321,144 @@ function FilterBar({ children }: { children: ReactNode }): ReactNode {
     <div className="fg-filterbar fg-filterbar-2col" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
       {children}
     </div>
+  );
+}
+
+/**
+ * MỘT khối swimlane = một BẢNG ĐỘC LẬP: query riêng theo `statuses` của khối (`/documents?status=…`),
+ * sort theo cột RIÊNG và phân trang RIÊNG (state trong bộ nhớ — các khối không ảnh hưởng nhau).
+ * Ẩn phân trang khi số hồ sơ vừa trong một trang (mặc định 50 dòng).
+ */
+function SwimlaneBlock({
+  lane,
+  filters,
+  columns,
+  onStatus,
+}: {
+  lane: Swimlane;
+  filters: DocListFilters;
+  columns: TableColumnsType<QueueRow>;
+  onStatus: (key: string, st: { loading: boolean; total: number }) => void;
+}): ReactNode {
+  const navigate = useNavigate();
+  const [sort, setSort] = useState<string>(DEFAULT_SORT);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
+  const query = useDocuments({ ...filters, status: lane.statuses, sort, page, limit: pageSize });
+  const rows = query.data?.items ?? [];
+  const total = query.data?.total ?? 0;
+
+  // báo trạng thái cho bảng điều khiển (ẩn/hiện khối, empty state toàn màn) — không đếm lại query
+  useEffect(() => {
+    onStatus(lane.key, { loading: query.isPending, total });
+  }, [lane.key, query.isPending, total, onStatus]);
+
+  // đổi sort hoặc đổi bộ lọc chung ⇒ tập dữ liệu đổi, về trang 1 kẻo rơi vào trang trống
+  const filterSig = JSON.stringify([filters.q, filters.mine, filters.partner_id, filters.tag_ids, filters.awaiting, filters.overdue_only]);
+  useEffect(() => {
+    setPage(1);
+  }, [sort, filterSig]);
+  // dữ liệu mỏng đi (phiếu vừa được xử lý) mà đang đứng trang cuối ⇒ tự về trang 1
+  useEffect(() => {
+    if (page > 1 && query.data && rows.length === 0 && total > 0) setPage(1);
+  }, [query.data, rows.length, total, page]);
+
+  const cols = useMemo(() => withServerSort(columns, SORTABLE_COLUMNS, sort, DEFAULT_SORT), [columns, sort]);
+
+  if (query.isPending) {
+    return (
+      <section style={{ marginBottom: 'var(--fg-space-5)' }}>
+        <div style={{ marginBottom: 'var(--fg-space-2)' }}>
+          <FgText style="h4">{lane.title}</FgText>
+        </div>
+        <div className="fg-card" style={{ padding: 'var(--fg-space-5)' }}>
+          <FgSkeletonTable rows={4} cols={6} />
+        </div>
+      </section>
+    );
+  }
+  // khối trống → ẩn (giữ hành vi cũ: chỉ hiện khối có hồ sơ)
+  if (total === 0) return null;
+
+  const pageSum = formatMoney(sum(rows.map((r) => money(r.amount as { minor: unknown; currency?: string })), 'VND'), { mode: 'compact' });
+  return (
+    <section style={{ marginBottom: 'var(--fg-space-5)' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 'var(--fg-space-2)' }}>
+        <FgText style="h4">{lane.title}</FgText>
+        <FgText style="bodyS" color="muted">
+          {total} hồ sơ · <span className="fg-num">{pageSum}</span>
+        </FgText>
+      </div>
+      <div className="fg-card" style={{ padding: 0, overflow: 'hidden' }}>
+        <FgTable<QueueRow>
+          rowKey="_id"
+          columns={cols}
+          dataSource={rows}
+          onChange={onSortChange((v) => setSort(v || DEFAULT_SORT))}
+          onRow={(r) => ({
+            onClick: (e) => {
+              // ô tick vùng chạm lớn là <label>: bấm ô ≠ mở hồ sơ
+              if ((e.target as HTMLElement).closest('a,input,button,label')) return;
+              navigate(deepLink(r));
+            },
+            style: { cursor: 'pointer' },
+          })}
+        />
+        {total > Math.min(pageSize, DEFAULT_PAGE_SIZE) ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--fg-space-2)', padding: 'var(--fg-space-4) 0' }}>
+            <FgText style="caption" color="muted">
+              {`Hiển thị ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, total)} / ${total} hồ sơ`}
+            </FgText>
+            <FgPagination
+              size="small"
+              current={page}
+              pageSize={pageSize}
+              total={total}
+              showSizeChanger
+              pageSizeOptions={PAGE_SIZES.map(String)}
+              onChange={(p, s) => {
+                setPage(p);
+                setPageSize(PAGE_SIZES.includes(s) ? s : DEFAULT_PAGE_SIZE);
+              }}
+            />
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Màn danh sách chia swimlane: mỗi khối một `SwimlaneBlock` ĐỘC LẬP (sort + paging riêng).
+ * Khối trống tự ẩn; mọi khối đều trống → hiện empty state chung của cả màn.
+ */
+function SwimlaneBoard({
+  lanes,
+  filters,
+  columns,
+  emptyState,
+}: {
+  lanes: Swimlane[];
+  filters: DocListFilters;
+  columns: TableColumnsType<QueueRow>;
+  emptyState: ReactNode;
+}): ReactNode {
+  const [laneStatus, setLaneStatus] = useState<Record<string, { loading: boolean; total: number }>>({});
+  const onStatus = useCallback((key: string, st: { loading: boolean; total: number }) => {
+    setLaneStatus((prev) => {
+      const cur = prev[key];
+      return cur && cur.loading === st.loading && cur.total === st.total ? prev : { ...prev, [key]: st };
+    });
+  }, []);
+  const allReported = lanes.every((l) => laneStatus[l.key]);
+  const allEmpty = allReported && lanes.every((l) => !laneStatus[l.key]!.loading && laneStatus[l.key]!.total === 0);
+  return (
+    <>
+      {lanes.map((lane) => (
+        <SwimlaneBlock key={lane.key} lane={lane} filters={filters} columns={columns} onStatus={onStatus} />
+      ))}
+      {allEmpty ? emptyState : null}
+    </>
   );
 }
 
@@ -417,7 +567,8 @@ export function DocListScreen({
   const queue = useQueue(queueFilters, source === 'queue');
   // Badge tab "Chờ tôi duyệt" = số phiếu đến lượt tôi duyệt (cùng endpoint /queue, cùng bộ lọc phạm vi).
   const turnCount = useAwaitingTurnCount(approvalTabs);
-  const docs = useDocuments(filters, source === 'documents');
+  // Chế độ swimlane: MỖI KHỐI tự fetch (sort + paging riêng) → khỏi cần query chung.
+  const docs = useDocuments(filters, source === 'documents' && !swimlanes);
   const processed = useProcessed(pageSize, source === 'processed', qDebounced || undefined, page, get('sort') || PROCESSED_DEFAULT_SORT);
   const query = source === 'queue' ? queue : source === 'processed' ? processed : docs;
 
@@ -507,7 +658,8 @@ export function DocListScreen({
             size="middle"
           />
         ) : null}
-        {isCardView ? (
+        {/* swimlane: mỗi bảng tự sort trên tiêu đề cột của nó — ô chọn sort chung vô nghĩa */}
+        {isCardView && !swimlanes ? (
           <FgSelect ariaLabel="Sắp xếp" options={SORTS} value={get('sort') || defaultSort} onChange={(v) => setFilter('sort', v ?? '')} style={{ width: 180 }} />
         ) : null}
         <FgSearchInput value={qText} onChange={setQText} />
@@ -518,6 +670,35 @@ export function DocListScreen({
         ) : null}
       </FilterBar>
 
+      {/* Swimlane (mặc định của Phiếu thu/Phiếu chi): từng khối là bảng độc lập — sort cột riêng, phân trang riêng */}
+      {swimlanes ? (
+        <SwimlaneBoard
+          lanes={swimlanes}
+          filters={filters}
+          columns={baseColumns}
+          emptyState={
+            anyFilter ? (
+              <div className="fg-card">
+                <FgEmptyState
+                  glyph="⌕"
+                  title="Không có kết quả với bộ lọc hiện tại"
+                  description="Thử bỏ bớt bộ lọc hoặc tìm bằng mã hồ sơ (PC-2026-…)."
+                  action={<FgButton onClick={clearAll}>Xóa toàn bộ bộ lọc</FgButton>}
+                />
+              </div>
+            ) : (
+              <div className="fg-card">
+                <FgEmptyState
+                  glyph="✓"
+                  tone="success"
+                  title="Chưa có hồ sơ nào"
+                  action={createHref && canCreate ? <Link to={createHref}><FgButton variant="primary">{createLabel}</FgButton></Link> : undefined}
+                />
+              </div>
+            )
+          }
+        />
+      ) : (
       <FgQuery
         query={query}
         skeleton={
@@ -656,39 +837,7 @@ export function DocListScreen({
             </div>
           );
 
-          // Swimlane: nhóm theo trạng thái; khối đầu (đã duyệt chờ chi) nằm trên cùng.
-          if (swimlanes) {
-            const covered = new Set(swimlanes.flatMap((l) => l.statuses));
-            const groups: { key: string; title: string; items: QueueRow[] }[] = swimlanes.map((l) => ({
-              key: l.key,
-              title: l.title,
-              items: rows.filter((r) => l.statuses.includes(r.status)),
-            }));
-            const others = rows.filter((r) => !covered.has(r.status));
-            if (others.length) groups.push({ key: '__other__', title: 'Khác', items: others });
-            return (
-              <>
-                {groups
-                  .filter((g) => g.items.length)
-                  .map((g) => (
-                    <section key={g.key} style={{ marginBottom: 'var(--fg-space-5)' }}>
-                      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 'var(--fg-space-2)' }}>
-                        <FgText style="h4">{g.title}</FgText>
-                        <FgText style="bodyS" color="muted">
-                          {g.items.length} hồ sơ ·{' '}
-                          <span className="fg-num">
-                            {formatMoney(sum(g.items.map((r) => money(r.amount as { minor: unknown; currency?: string })), 'VND'), { mode: 'compact' })}
-                          </span>
-                        </FgText>
-                      </div>
-                      {renderTable(g.items)}
-                    </section>
-                  ))}
-                {pager}
-              </>
-            );
-          }
-
+          // Swimlane: MỖI KHỐI một bảng độc lập (sort + phân trang riêng) — xem SwimlaneBoard.
           return (
             <>
               {renderTable(
@@ -733,6 +882,7 @@ export function DocListScreen({
           );
         }}
       </FgQuery>
+      )}
     </>
   );
 }
