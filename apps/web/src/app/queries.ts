@@ -108,6 +108,8 @@ export interface DocListFilters {
   kind?: string;
   status?: string | string[];
   mine?: 'created' | 'to_approve' | 'approved_by_me';
+  /** APPR-01: chia hàng chờ "chờ tôi duyệt" — `turn` = đến lượt tôi, `later` = còn chờ cấp dưới (đi với `mine=to_approve`). */
+  awaiting?: 'turn' | 'later';
   q?: string;
   /** [v2] lọc theo đối tác (ID) và tag (phiếu có ÍT NHẤT MỘT tag trong danh sách). */
   partner_id?: string;
