@@ -254,7 +254,7 @@ export function DocumentDetailScreen(): ReactNode {
                 ) : null}
                 {d.can.approve ? (
                   <FgButton variant="primary" onClick={() => setConfirmAction('approve')}>
-                    Duyệt khoản {formatMoney(amount, { mode: 'compact' })}
+                    Sửa & Duyệt khoản {formatMoney(amount, { mode: 'compact' })}
                   </FgButton>
                 ) : null}
               </div>

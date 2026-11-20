@@ -430,7 +430,7 @@ export function ApprovalConfirmModal({
       {canChangeAccount && accountOptions.length ? (
         <div style={{ marginTop: 16 }}>
           <FgField
-            label={doc.kind === 'income' ? 'Tài khoản đích' : 'Tài khoản nguồn'}
+            label={doc.kind === 'income' ? 'Sửa Tài khoản đích' : 'Sửa Tài khoản nguồn'}
             help="Đổi ngay khi duyệt — chỉ trong phạm vi công ty của phiếu và tài khoản Tập đoàn"
           >
             <FgSelect
@@ -477,7 +477,7 @@ export function ApprovalConfirmModal({
       {canEditAmount ? (
         <div style={{ marginTop: 16 }}>
           <FgField
-            label="Số tiền duyệt"
+            label="Sửa Số tiền duyệt"
             error={amountErr}
             help={`Đề nghị ban đầu: ${formatMoney(amount, { mode: 'full' })}. Bỏ trống = giữ nguyên; tăng số tiền phải gõ lại số mới để xác nhận.`}
           >
