@@ -5,6 +5,8 @@
  *  2. phiếu thu vào A từ B — thực thi ⇒ A có tiền;
  * rồi phiếu gốc mới kiểm số dư A và chi. Hai phiếu nhận diện theo phiếu nguồn (`origin.source_document_id`, R8) nên
  * lần thực thi lại (lỗi giữa chừng) dùng lại, không sinh trùng. Liên kết do quy tắc R8 gán sau sự kiện `voucher.paid`.
+ * Mỗi phiếu phát sinh mang đối tác "Công ty trong tập đoàn" trỏ tài khoản nhận của nó (dùng đối tác đã có, thiếu thì
+ * tự tạo — `ensureInternalPartner`); không ghi `transfer_target` để R1 không sinh thêm phiếu thu trùng tiền.
  *
  * Tách khỏi `account-borrow.ts` vì phụ thuộc `automation/actions/voucher.ts` (vốn gọi `workflow.transition`):
  * workflow nạp module này động để không tạo vòng import.
@@ -12,6 +14,7 @@
 
 import { Models } from '../../db/models.ts';
 import { bankAccountLabelOf } from '../queries/index.ts';
+import { ensureInternalPartner } from '../partner/internal.ts';
 import { createAutoVoucher, executeAutoVoucher } from '../automation/actions/voucher.ts';
 import type { AutoActor } from '../automation/actions/common.ts';
 import type { StepLike } from '../automation/actions/lookup.ts';
@@ -68,12 +71,29 @@ export async function runAccountBorrowBeforePay(input: {
   if (amountMinor <= 0n) return;
   const sourceId = String(doc._id);
   const [toLabel, fromLabel] = await Promise.all([accountLabel(input.payAccountId), accountLabel(plan.account_id)]);
+  const companyId = String(doc.company_id);
+  const partnerActor = { user_id: input.actor.user_id ?? null, name: input.actor.name ?? null, role: input.actor.role ?? null };
+  // Đối tác của hai phiếu phát sinh = "Công ty trong tập đoàn" trỏ tài khoản NHẬN tiền của từng phiếu (cùng công ty).
+  // Dùng đối tác đã có của tài khoản đó; chưa có thì tự tạo. TK không dùng được ⇒ null như trước (không chặn việc chi).
+  const spendPartner = await ensureInternalPartner({
+    ownerCompanyId: companyId,
+    accountId: input.payAccountId,
+    actor: partnerActor,
+    requestId: `${input.requestId}#borrow-spend-partner`,
+    source: ACCOUNT_BORROW_RULE,
+  });
+  const receiptPartner = await ensureInternalPartner({
+    ownerCompanyId: companyId,
+    accountId: plan.account_id,
+    actor: partnerActor,
+    requestId: `${input.requestId}#borrow-receipt-partner`,
+    source: ACCOUNT_BORROW_RULE,
+  });
   const common = {
-    companyId: String(doc.company_id),
+    companyId,
     amountMinor,
     currency: doc.amount.currency ?? 'VND',
     decimals: doc.amount.decimals ?? 0,
-    partnerId: null,
     plannedDate: input.paidAt,
     businessDate: input.paidAt,
     approvalSteps: doc.approval?.steps,
@@ -96,6 +116,7 @@ export async function runAccountBorrowBeforePay(input: {
       note: `Tự động tạo khi thực thi phiếu chi ${doc.code} · chuyển sang ${toLabel}`,
       fund: await fundOfAccount(plan.account_id),
       accountId: plan.account_id,
+      partnerId: spendPartner.partner_id,
       requestId: `${input.requestId}#borrow-spend`,
     }));
   const receipt =
@@ -108,6 +129,7 @@ export async function runAccountBorrowBeforePay(input: {
       note: `Tự động tạo khi thực thi phiếu chi ${doc.code} · từ ${fromLabel}`,
       fund: await fundOfAccount(input.payAccountId),
       accountId: input.payAccountId,
+      partnerId: receiptPartner.partner_id,
       requestId: `${input.requestId}#borrow-receipt`,
     }));
 

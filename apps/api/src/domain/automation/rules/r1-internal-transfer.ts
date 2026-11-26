@@ -12,7 +12,8 @@
  *    `transfer_target.company_id === company_id`, xem `reports/refs.ts`).
  *
  * Bước:
- *  1. create_voucher  — phiếu thu ĐÃ DUYỆT ở công ty đích, kế thừa người duyệt của phiếu chi (nhãn Tự động);
+ *  1. create_voucher  — phiếu thu ĐÃ DUYỆT ở công ty đích, kế thừa người duyệt của phiếu chi (nhãn Tự động),
+ *     đối tác = "Công ty trong tập đoàn" trỏ tài khoản đã chuyển tiền đi (dùng đối tác đã có, chưa có thì tự tạo);
  *  2. execute_voucher — thực thi ngay (ngày thực thi = ngày thực thi phiếu chi): sổ cái công ty đích được cộng;
  *  3. link            — `internal_transfer` (khác công ty) / `generated` (cùng công ty) từ phiếu chi sang phiếu thu.
  * Phiếu chi không đích nội bộ ⇒ các bước bỏ qua (lượt hoàn tất, không có đối tượng sinh ra).
@@ -20,8 +21,9 @@
 
 import { registerRule, type StepContext, type StepOutput } from '../engine.ts';
 import { assertAccountAllowedForCompany } from '../../accounts.ts';
+import { ensureInternalPartner } from '../../partner/internal.ts';
 import { actorOfEvent, big } from '../actions/common.ts';
-import { companyView, fundOfAccount, loadVoucher } from '../actions/lookup.ts';
+import { companyView, fundOfAccount, loadVoucher, type VoucherRow } from '../actions/lookup.ts';
 import { createAutoVoucher, executeAutoVoucher, findAutoVoucher, todayVn } from '../actions/voucher.ts';
 import { ensureAutomationLink } from '../actions/link.ts';
 
@@ -64,6 +66,15 @@ async function receiptIdOf(ctx: StepContext): Promise<string | null> {
   return ctx.outputs.create_voucher?.output_id ?? (await findAutoVoucher(ctx.runId, RULE, 'income'))?.id ?? null;
 }
 
+/**
+ * Tài khoản thực chuyển tiền của phiếu chi nguồn: TK ngân hàng / quỹ của công ty, hoặc TK Tập đoàn
+ * khi phiếu cấp Tập đoàn chi qua quỹ Tập đoàn.
+ */
+function sourceAccountIdOf(src: VoucherRow): string | null {
+  const acct = src.source?.account_id ?? src.source?.group_account_id ?? null;
+  return acct ? String(acct) : null;
+}
+
 /** Nhãn nguồn trong ghi chú phiếu thu: khác công ty ghi tên công ty nguồn; cùng công ty ghi rõ chuyển giữa hai TK. */
 export function transferNoteOf(input: {
   sourceCode: string;
@@ -90,7 +101,7 @@ async function createVoucherStep(ctx: StepContext): Promise<StepOutput> {
 
   if (!t.targetAccountId) throw new Error('Chưa chọn tài khoản nhận của công ty đích');
   // chuyển CÙNG công ty: TK nhận phải khác TK nguồn — kiểm lại trước khi ghi phiếu thu (phòng TK nguồn đổi sau khi lưu)
-  const sourceAccountId = t.src.source?.account_id ? String(t.src.source.account_id) : null;
+  const sourceAccountId = sourceAccountIdOf(t.src);
   if (t.sameCompany && sourceAccountId && t.targetAccountId === sourceAccountId) {
     throw new Error('Tài khoản nhận trùng tài khoản nguồn — không chuyển được giữa hai tài khoản cùng công ty');
   }
@@ -100,19 +111,29 @@ async function createVoucherStep(ctx: StepContext): Promise<StepOutput> {
   const paidDate = src.execution?.paid_at ?? todayVn();
   const sourceCompany = await companyView(src.company_id);
   const actor = actorOfEvent(ctx.event);
+  // Đối tác của phiếu thu đối ứng = đối tác "Công ty trong tập đoàn" trỏ tài khoản đã chuyển tiền đi, quản lý ở công ty NHẬN.
+  // Dùng đối tác ĐÃ CÓ của tài khoản đó; chưa có thì tạo (rule không bắt kế toán tạo danh bạ trước). TK nguồn không
+  // dùng được (TK nhóm / đã đóng) ⇒ partner_id = null như trước, phiếu vẫn sinh.
+  const { partner_id: partnerId } = await ensureInternalPartner({
+    ownerCompanyId: t.targetCompanyId,
+    accountId: sourceAccountId,
+    actor: { user_id: actor.user_id ?? null, name: actor.name ?? null, role: actor.role ?? null },
+    requestId: ctx.stepKey,
+    source: RULE,
+  });
   const created = await createAutoVoucher({
     kind: 'income',
     companyId: t.targetCompanyId,
     title: t.sameCompany ? `Thu tự động chuyển khoản nội bộ từ phiếu chi ${src.code}` : `Thu tự động từ phiếu chi ${src.code}`,
     purpose: `${AUTO_INCOME_PREFIX}${src.purpose || src.title || ''}`.trim(),
-    // công ty chuyển đi là ngoại lệ "không đối tác": ghi nguồn trong ghi chú (không dùng payee.* v1)
+    // nguồn tiền ghi thêm trong ghi chú để đọc nhanh (không dùng `payee.*` v1); đối tác là internal trỏ TK nguồn
     note: transferNoteOf({ sourceCode: src.code, sameCompany: t.sameCompany, sourceCompany }),
     amountMinor: big(src.execution?.actual_amount_minor ?? src.amount.minor),
     currency: src.amount.currency ?? 'VND',
     decimals: src.amount.decimals ?? 0,
     fund: await fundOfAccount(t.targetAccountId),
     accountId: t.targetAccountId,
-    partnerId: null,
+    partnerId,
     plannedDate: paidDate,
     businessDate: paidDate,
     approvalSteps: src.approval?.steps,

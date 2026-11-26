@@ -8,8 +8,12 @@
 
 import { ApiError, normalizeNameKey } from '@fingate/shared';
 import { Models } from '../../db/models.ts';
+import { mirrorAudit } from '../audit/index.ts';
+import { nextPartnerCode } from '../numbering/index.ts';
 import { maskAccount } from '../queries/index.ts';
-import { diffSnapshots, snapshotOf, type PartnerSnapshot } from './rules.ts';
+import { creationChanges, diffSnapshots, snapshotOf, type PartnerSnapshot } from './rules.ts';
+
+const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
 
 /** Tên hiển thị: "Tên công ty · Tên tài khoản" — để phân biệt các TK cùng một công ty. */
 export function internalPartnerName(companyName: string, accountName: string): string {
@@ -91,6 +95,89 @@ export async function internalPartnerFieldsFor(input: {
     internal_company_id: src.company_id,
     internal_account_id: input.internalAccountId,
   };
+}
+
+/** Bộ lọc tra đối tác nội bộ của MỘT tài khoản trong một công ty — khoá chống trùng khi tạo. */
+export function internalPartnerLookupFilter(ownerCompanyId: string, accountId: string): Record<string, unknown> {
+  return { company_id: ownerCompanyId, type: 'internal', internal_account_id: accountId };
+}
+
+/**
+ * Bảo đảm danh bạ công ty `ownerCompanyId` có đối tác "Công ty trong tập đoàn" trỏ tới tài khoản `accountId`.
+ *
+ * **Thứ tự bắt buộc (yêu cầu nghiệp vụ):** tìm đối tác nội bộ ĐÃ CÓ của đúng tài khoản đó trong công ty rồi dùng lại —
+ * chỉ tạo mới khi danh bạ chưa có. Nhờ vậy nhiều phiếu phát sinh cùng một tài khoản đích chỉ dùng MỘT đối tác.
+ *
+ * Dùng cho phiếu phát sinh do quy tắc tự động (R1 phiếu thu đối ứng, R8 mượn tiền giữa hai tài khoản): rule cần có
+ * đối tác để gắn vào phiếu, không bắt kế toán tạo tay trước. Đối tác tạo ở đây đúng như tạo bằng form — tên / NH / STK
+ * lấy từ tài khoản gốc (`loadInternalSource`), loại `internal`, mã `DT-…` cùng bộ đếm, có `history` + audit.
+ *
+ * Không ném lỗi nghiệp vụ: tài khoản không dùng được (TK nhóm, đã đóng, không đọc được) hoặc ghi thất bại ⇒
+ * trả `partner_id = null` để rule vẫn sinh được phiếu như trước, kèm `skipped` cho log.
+ */
+export async function ensureInternalPartner(input: {
+  /** Công ty QUẢN LÝ đối tác = công ty của phiếu sắp gắn đối tác (không phải công ty gốc của tài khoản). */
+  ownerCompanyId: string;
+  accountId: string | null | undefined;
+  actor: { user_id?: string | null; name?: string | null; role?: string | null };
+  requestId?: string | null;
+  /** Nêu trong lịch sử / audit vì sao tự tạo (VD `R1`, `R8`). */
+  source?: string | null;
+}): Promise<{ partner_id: string | null; created: boolean; skipped: string | null }> {
+  const accountId = input.accountId ? String(input.accountId) : null;
+  if (!accountId || !OBJECT_ID_RE.test(accountId) || !OBJECT_ID_RE.test(input.ownerCompanyId)) {
+    return { partner_id: null, created: false, skipped: 'no-account' };
+  }
+  const existing = await Models.Partner.findOne(internalPartnerLookupFilter(input.ownerCompanyId, accountId) as never)
+    .select({ _id: 1 })
+    .lean<{ _id: unknown } | null>();
+  if (existing) return { partner_id: String(existing._id), created: false, skipped: null };
+
+  const src = await loadInternalSource(accountId);
+  if (!src || !src.usable) return { partner_id: null, created: false, skipped: 'account-unusable' };
+
+  try {
+    const code = await nextPartnerCode();
+    const now = new Date();
+    const snap = snapshotOf({ type: 'internal', name: src.name, bank_name: src.bank_name, account_number: src.account_number, tax_code: null, note: null, status: 'active' });
+    const created = await Models.Partner.create({
+      company_id: input.ownerCompanyId,
+      code,
+      type: 'internal',
+      internal_company_id: src.company_id,
+      internal_account_id: accountId,
+      status: 'active',
+      name: snap.name ?? '',
+      name_key: normalizeNameKey(snap.name ?? ''),
+      bank_name: snap.bank_name,
+      account_number: snap.account_number,
+      tax_code: null,
+      note: null,
+      history: [{ at: now, actor: { user_id: input.actor.user_id ?? null, name: input.actor.name ?? null }, changes: creationChanges(snap) }],
+      created_by: input.actor.user_id ?? null,
+      created_at: now,
+      updated_at: now,
+    } as never);
+    const id = String((created as unknown as { _id: unknown })._id);
+    await mirrorAudit({
+      at: now,
+      actor: { user_id: input.actor.user_id ?? null, name: input.actor.name ?? null, role: input.actor.role ?? null },
+      action: 'partner.create',
+      subject: { type: 'partner', id, code },
+      company_id: input.ownerCompanyId,
+      diff_fields: { type: 'internal', name: snap.name, status: 'active', auto: true, rule_code: input.source ?? null },
+      request_id: input.requestId ?? null,
+    });
+    return { partner_id: id, created: true, skipped: null };
+  } catch (err) {
+    // Hai phiếu cùng lúc có thể đua tạo: nếu bản ghi đã tồn tại (lần tạo kia thắng) thì dùng lại, không coi là lỗi.
+    const raced = await Models.Partner.findOne(internalPartnerLookupFilter(input.ownerCompanyId, accountId) as never)
+      .select({ _id: 1 })
+      .lean<{ _id: unknown } | null>();
+    if (raced) return { partner_id: String(raced._id), created: false, skipped: null };
+    console.warn(`[partner] không tự tạo đối tác nội bộ cho TK ${accountId}: ${(err as Error).message}`);
+    return { partner_id: null, created: false, skipped: 'create-failed' };
+  }
 }
 
 /** Ảnh chụp sau đồng bộ (thuần): tên / NH / STK theo nguồn; trạng thái chỉ bị hạ xuống, không tự bật lại. */

@@ -100,8 +100,10 @@ export async function resolveVoucherPartner(input: {
     loanKind: input.loanKind,
     requireActive: input.requireActive,
   });
-  // đối tác "Công ty trong tập đoàn" chỉ dùng cho phiếu chi (chuyển nội bộ, §11.6)
-  if (input.kind !== 'spend' && partner!.type === 'internal') {
+  // Đối tác "Công ty trong tập đoàn" KHÔNG chọn tay cho phiếu thu (ô chọn đối tác chỉ gợi ý bank/customer/supplier,
+  // §5.2) — nhưng PHIẾU THU DO QUY TẮC SINH (R1 phiếu thu đối ứng, R8 nhận tiền mượn) mang đối tác internal trỏ
+  // tài khoản đã chuyển tiền tới. Vì vậy chỉ chặn khi đây là LỰA CHỌN MỚI; phiếu đã lưu giữ nguyên đối tác của nó.
+  if (input.requireActive && input.kind !== 'spend' && partner!.type === 'internal') {
     throw new ApiError({
       code: 'FG-VAL-001',
       detail: 'Đối tác công ty trong tập đoàn chỉ dùng cho phiếu chi',

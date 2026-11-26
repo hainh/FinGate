@@ -15,11 +15,13 @@
  *  5. link            — `generated` phiếu gốc → hai phiếu sinh ra. KHÔNG nối `internal_transfer` phiếu chi B → phiếu thu A:
  *                        quan hệ đó chỉ dành cho hai công ty khác nhau (RELATION_SPECS); hai phiếu nhận ra nhau qua phiếu gốc.
  * Số tiền = số tiền mượn đã ghi trên phiếu (không vượt số thực chi), bỏ trống = toàn bộ số thực chi.
- * Hai phiếu sinh ra không có đối tác ngoài (chuyển giữa hai TK của chính công ty — như phiếu thu của R1).
+ * Mỗi phiếu phát sinh có đối tác "Công ty trong tập đoàn" trỏ tài khoản nhận của nó (cùng công ty — dùng đối tác đã có,
+ * thiếu thì tự tạo). Không ghi `transfer_target` để R1 không sinh thêm phiếu thu đối ứng trùng với phiếu thu ở bước 2.
  */
 
 import { registerRule, type StepContext, type StepOutput } from '../engine.ts';
 import { assertAccountAllowedForCompany } from '../../accounts.ts';
+import { ensureInternalPartner } from '../../partner/internal.ts';
 import { actorOfEvent, big } from '../actions/common.ts';
 import { fundOfAccount, loadVoucher, type VoucherRow } from '../actions/lookup.ts';
 import { createAutoVoucher, executeAutoVoucher, todayVn } from '../actions/voucher.ts';
@@ -83,7 +85,7 @@ async function receiptIdOf(ctx: StepContext): Promise<string | null> {
   return ctx.outputs.create_receipt?.output_id ?? (await findBorrowVoucher(String(ctx.event.subject_id), 'income'))?.id ?? null;
 }
 
-/** Phần chung của hai phiếu sinh ra. */
+/** Phần chung của hai phiếu sinh ra (đối tác gắn riêng theo từng phiếu — xem `createSpendStep`, `createReceiptStep`). */
 function commonSpec(ctx: StepContext, b: Borrow) {
   const actor = actorOfEvent(ctx.event);
   return {
@@ -91,7 +93,6 @@ function commonSpec(ctx: StepContext, b: Borrow) {
     amountMinor: b.amountMinor,
     currency: b.src.amount.currency ?? 'VND',
     decimals: b.src.amount.decimals ?? 0,
-    partnerId: null,
     plannedDate: b.paidDate,
     businessDate: b.paidDate,
     approvalSteps: b.src.approval?.steps,
@@ -104,6 +105,19 @@ function commonSpec(ctx: StepContext, b: Borrow) {
     actor,
     requestId: ctx.stepKey,
   };
+}
+
+/** Đối tác "Công ty trong tập đoàn" cho một phiếu phát sinh của R8 (dùng đối tác đã có, thiếu thì tự tạo). */
+async function partnerFor(ctx: StepContext, b: Borrow, receiveAccountId: string): Promise<string | null> {
+  const actor = actorOfEvent(ctx.event);
+  const { partner_id } = await ensureInternalPartner({
+    ownerCompanyId: String(b.src.company_id),
+    accountId: receiveAccountId,
+    actor: { user_id: actor.user_id ?? null, name: actor.name ?? null, role: actor.role ?? null },
+    requestId: ctx.stepKey,
+    source: RULE,
+  });
+  return partner_id;
 }
 
 async function createSpendStep(ctx: StepContext): Promise<StepOutput> {
@@ -121,6 +135,7 @@ async function createSpendStep(ctx: StepContext): Promise<StepOutput> {
     note: `Tự động tạo khi thực thi phiếu chi ${b.src.code} · chuyển sang ${toLabel}`,
     fund: await fundOfAccount(b.fromAccountId),
     accountId: b.fromAccountId,
+    partnerId: await partnerFor(ctx, b, b.toAccountId),
   });
   return { output_type: 'document', output_id: created.id };
 }
@@ -139,6 +154,7 @@ async function createReceiptStep(ctx: StepContext): Promise<StepOutput> {
     note: `Tự động tạo khi thực thi phiếu chi ${b.src.code} · từ ${fromLabel}`,
     fund: await fundOfAccount(b.toAccountId),
     accountId: b.toAccountId,
+    partnerId: await partnerFor(ctx, b, b.fromAccountId),
   });
   return { output_type: 'document', output_id: created.id };
 }

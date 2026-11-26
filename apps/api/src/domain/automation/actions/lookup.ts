@@ -83,7 +83,7 @@ export interface VoucherRow {
   purpose?: string | null;
   partner_id?: unknown;
   amount: { minor: unknown; currency?: string | null; decimals?: number | null };
-  source?: { fund?: string | null; account_id?: unknown } | null;
+  source?: { fund?: string | null; account_id?: unknown; group_account_id?: unknown } | null;
   planned_date: string;
   business_date: string;
   options?: {
