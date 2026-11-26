@@ -38,6 +38,8 @@ Mở icon → giữ danh sách chọn nhanh: **Chờ tôi duyệt**, **Tiền h�
 | `apps/web/public/icon-maskable-512.png` | Icon nền full-bleed để Android cắt tròn không lem viền |
 | `apps/web/public/sw.js` | Service worker: precache vỏ app, **không cache `/api/`**; handler `push` + `notificationclick` |
 | `apps/web/src/lib/pwa.ts` | Đăng ký SW, đăng ký/huỷ Web Push thiết bị |
+| `apps/web/src/lib/pwa-install.ts` | Nhận diện mobile / chế độ app, bắt `beforeinstallprompt`, chọn bước onboarding |
+| `apps/web/src/components/mobile-onboarding.tsx` | **Thanh ép** cài app + bật thông báo, chèn trên header (§7) |
 | `apps/web/src/app/push-notifications.ts` | Chọn đường thông báo (Web Push ↔ chuông dự phòng) |
 | `apps/web/index.html` | Thẻ `apple-mobile-web-app-*` |
 | `apps/web/src/screens/admin.tsx` | Nút **"Bật thông báo"** trong *Cá nhân & cài đặt → Hiển thị* |
@@ -139,3 +141,42 @@ Vẫn không phải viết lại UI. Hai vỏ native dùng đúng bundle web hi�
 - **iOS — Capacitor**: cần macOS + Xcode + tài khoản Apple Developer ($99/năm), vỏ `WKWebView` trỏ về
   địa chỉ HTTPS của FinGate. Gợi ý: chỉ làm nếu thực sự cần có mặt trên App Store — PWA đã đủ cho
   "mở như app" trên cả hai nền tảng.
+
+## 7. Thanh ép: cài app + bật thông báo (mobile)
+
+Phiếu chờ duyệt vô dụng nếu người duyệt không biết nó tồn tại. Vì vậy trên **điện thoại**, app chèn một
+thanh **không đóng được** ngay **trên header** (`components/mobile-onboarding.tsx`) và đòi làm hai việc
+theo đúng thứ tự:
+
+| Điều kiện (chỉ tính khi là thiết bị di động) | Thanh hiện | Nút |
+| --- | --- | --- |
+| Mở trong tab trình duyệt (`display-mode: browser`) | Cài FinGate thành ứng dụng | **Cài ứng dụng** — Chrome/Edge: `beforeinstallprompt` ⇒ hộp thoại cài tự động. iOS/không có API: bảng hướng dẫn (Safari → Chia sẻ → Thêm vào MH chính) |
+| Đã chạy ở chế độ app, quyền Notification ≠ `granted` | Bật thông báo | **Bật thông báo** → `Notification.requestPermission()` → đăng ký Web Push luôn (`enableApprovalNotifications`) |
+| `denied` | "Trình duyệt đang chặn…" + đường mở cài đặt hệ thống | **Kiểm tra lại** (đọc lại quyền) |
+| Đã cài app **và** đã bật thông báo | — ẩn hẳn — | |
+
+Vì sao theo thứ tự đó: iOS **không tồn tại** API Notification ngoài app đã cài, và trên mọi nền tảng,
+trang mở trong tab thì thông báo chết theo tab. Chưa cài app mà đòi bật thông báo trước là vô nghĩa.
+
+Chi tiết kỹ thuật:
+
+- **Nhận diện mobile** theo UA (`Android|iPhone|iPad|iPod`), iPadOS 13+ phân biệt bằng `maxTouchPoints`
+  vì Safari giả UA thành `Macintosh`. Cửa sổ desktop thu hẹp **không** bị tính → màn hình làm việc không
+  bao giờ bị chiếm chỗ.
+- **Chế độ app** = `matchMedia('(display-mode: standalone|fullscreen|minimal-ui|window-controls-overlay)')`
+  hoặc `navigator.standalone` (iOS). Nghe `change` nên xoay/đổi chế độ là cập nhật ngay.
+- **`beforeinstallprompt`** phải được nghe *trước khi* React mount (`main.tsx` gọi `startInstallCapture()`),
+  sự kiện có thể bắn ngay lúc SW sẵn sàng; trễ là nút chỉ còn hướng dẫn thủ công.
+- **Layout**: thanh sticky `top: 0`, cao bao nhiêu thì tự ghi vào biến CSS `--fg-onboard-h` (ResizeObserver)
+  để `.fg-header` và `.fg-filterbar` sticky dịch xuống đúng bằng, không đè nhau. Ẩn khi in.
+- **Logic chọn bước là hàm thuần** (`onboardingStep`, `isMobileDevice`, `isAppMode`) ⇒ có unit test
+  trong `lib/pwa-install.test.ts`, không cần DOM.
+
+> ⚠️ **Không có đường vòng**: thanh không có nút bỏ qua — đó là chủ ý. Nếu sau này cần cho phép hoãn,
+> thêm cờ `localStorage` (ví dụ `fg.pwa.defer`) rồi cho `onboardingStep` trả `null` — đừng xoá thanh.
+
+> **Chạy thử**: `beforeinstallprompt` chỉ bắn khi trang **HTTPS** + có service worker. `pwa.ts` cố ý KHÔNG
+> đăng ký SW ở chế độ dev (Vite HMR + SW cache-Stale-While-Revalidate modules `/src/**` ⇒ code cũ). Muốn
+> test thật: `pnpm -F @fingate/web build` rồi để API serve `apps/web/dist` (K-1), hoặc tunnel HTTPS.
+> Ở dev trên điện thoại, thanh vẫn hiện với **hướng dẫn thủ công** — đúng như iOS.
+

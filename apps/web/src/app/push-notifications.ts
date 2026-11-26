@@ -93,6 +93,11 @@ export function usePushPermission(): PushPermission {
   return value;
 }
 
+/** Đọc lại quyền từ trình duyệt — nút "Kiểm tra lại" khi người dùng vừa đổi quyền ở Cài đặt hệ thống. */
+export function refreshPushPermission(): void {
+  refreshPermission();
+}
+
 /**
  * Bật thông báo: xin quyền → (nếu server có VAPID) đăng ký thiết bị → báo server lưu endpoint.
  * @returns 'push' nếu Web Push hoạt động (báo cả khi app đóng), 'local' nếu chỉ có chuông poll.

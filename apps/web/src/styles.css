@@ -206,7 +206,8 @@ body {
 
 .fg-header {
   position: sticky;
-  top: 0;
+  /* dịch xuống đúng chiều cao thanh onboarding PWA (mobile) — xem components/mobile-onboarding.tsx */
+  top: var(--fg-onboard-h, 0px);
   height: var(--fg-header-h);
   background: var(--fg-bg-surface);
   border-bottom: var(--fg-border-w-1) solid var(--fg-border-subtle);
@@ -215,6 +216,75 @@ body {
   gap: var(--fg-space-4);
   padding-inline: var(--fg-space-6);
   z-index: var(--fg-z-header);
+}
+
+/* ---------------- thanh ép cài app / bật thông báo (PWA mobile) ---------------- */
+
+.fg-onboard {
+  position: sticky;
+  top: 0;
+  /* trên header: header ghim ngay dưới thanh này */
+  z-index: calc(var(--fg-z-header) + 1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--fg-space-2);
+  padding: var(--fg-space-3) var(--fg-space-4);
+  padding-top: calc(var(--fg-space-3) + env(safe-area-inset-top, 0px));
+  font-size: var(--fg-font-caption-size);
+  line-height: var(--fg-font-caption-line);
+  border-bottom: var(--fg-border-w-1) solid var(--fg-status-info-border);
+  background: var(--fg-status-info-bg);
+  color: var(--fg-status-info-text);
+}
+
+.fg-onboard[data-step='notifications'] {
+  border-bottom-color: var(--fg-status-attention-border);
+  background: var(--fg-status-attention-bg);
+  color: var(--fg-status-attention-text);
+}
+
+.fg-onboard-row {
+  display: flex;
+  align-items: center;
+  gap: var(--fg-space-3);
+}
+
+.fg-onboard-icon {
+  flex: none;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.fg-onboard-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fg-onboard-action {
+  flex: none;
+}
+
+.fg-onboard-note {
+  font-weight: var(--fg-weight-semibold);
+}
+
+.fg-onboard-steps {
+  border-radius: var(--fg-radius-md);
+  background: var(--fg-bg-surface);
+  border: var(--fg-border-w-1) solid var(--fg-border-default);
+  padding: var(--fg-space-3) var(--fg-space-4);
+  color: var(--fg-text-secondary);
+}
+
+.fg-onboard-steps ol {
+  margin: 0;
+  padding-inline-start: var(--fg-space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--fg-space-1);
 }
 
 .fg-content {
@@ -774,7 +844,7 @@ body {
   align-items: center;
   padding: var(--fg-space-3) 0;
   position: sticky;
-  top: var(--fg-header-h);
+  top: calc(var(--fg-header-h) + var(--fg-onboard-h, 0px));
   z-index: var(--fg-z-header);
   background: var(--fg-bg-page);
 }
@@ -887,7 +957,7 @@ body {
 /* toast container tránh đè action bar */
 .fg-toast-wrap {
   position: fixed;
-  inset-block-start: calc(var(--fg-header-h) + var(--fg-space-4));
+  inset-block-start: calc(var(--fg-header-h) + var(--fg-onboard-h, 0px) + var(--fg-space-4));
   inset-inline-end: var(--fg-space-6);
   z-index: var(--fg-z-toast);
   display: flex;
@@ -899,6 +969,7 @@ body {
 @media print {
   .fg-rail,
   .fg-header,
+  .fg-onboard,
   .fg-filterbar,
   .fg-action-bar,
   .fg-bulkbar,

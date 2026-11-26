@@ -16,6 +16,7 @@ import { apiData, openDownload } from '../app/api.ts';
 import { FgButton, FgText } from './primitives.tsx';
 import { useToast } from './pagekit.tsx';
 import { usePageTitle } from '../lib/page-title.ts';
+import { FgMobileOnboardingBar } from './mobile-onboarding.tsx';
 
 interface NavItem {
   to: string;
@@ -268,6 +269,8 @@ export function FgAppShell({ children }: { children: ReactNode }): ReactNode {
       </aside>
 
       <div className="fg-main-wrap" data-collapsed={collapsed && !isOverlay ? 'true' : 'false'}>
+        {/* PWA trên điện thoại: bắt buộc cài thành app + bật thông báo — nằm TRÊN cả header (docs/07 §7). */}
+        <FgMobileOnboardingBar />
         <header className="fg-header" data-fg="header">
           <FgButton
             variant="ghost"
